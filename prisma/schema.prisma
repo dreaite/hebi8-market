@@ -3,9 +3,33 @@
 
 generator client {
   provider = "prisma-client"
-  output   = "../src/generated/prisma"
 }
 
 datasource db {
   provider = "sqlite"
+}
+
+model DataSource {
+  id          String   @id @default(uuid())
+  name        String
+  type        String   // "LOCAL_DB", "EXTERNAL_URL", "API_SUBSCRIPTION"
+  config      String   // JSON string storing URL, API keys, etc.
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  isActive    Boolean  @default(true)
+}
+
+// For "LOCAL_DB" type sources
+model MarketData {
+  id          Int      @id @default(autoincrement())
+  symbol      String
+  timestamp   Int      // Unix timestamp
+  open        Float
+  high        Float
+  low         Float
+  close       Float
+  volume      Float?
+  sourceId    String? // Optional link to source
+  
+  @@index([symbol, timestamp])
 }
