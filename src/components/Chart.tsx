@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData } from "lightweight-charts";
+import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, CandlestickSeries } from "lightweight-charts";
 import { Candle } from "@/lib/adapters";
 
 interface ChartProps {
@@ -49,7 +49,8 @@ export const Chart = ({ data, colors = {} }: ChartProps) => {
 
     chart.timeScale().fitContent();
 
-    const candlestickSeries = chart.addCandlestickSeries({
+    // Use addSeries instead of addCandlestickSeries (API change in v4/v5)
+    const candlestickSeries = chart.addSeries(CandlestickSeries, {
       upColor: '#26a69a', 
       downColor: '#ef5350', 
       borderVisible: false, 

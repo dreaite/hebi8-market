@@ -8,7 +8,14 @@ export class LocalDbAdapter implements DataAdapter {
       orderBy: { timestamp: "asc" },
     });
 
-    return data.map((item) => ({
+    return data.map((item: {
+        timestamp: number;
+        open: number;
+        high: number;
+        low: number;
+        close: number;
+        volume: number | null;
+    }) => ({
       time: item.timestamp,
       open: item.open,
       high: item.high,
