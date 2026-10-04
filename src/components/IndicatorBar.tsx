@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { INDICATORS, type IndicatorDef } from "@/indicators/catalog";
+import { formulaIndicatorName, type FormulaDef } from "@/indicators/formula-indicators";
+import { FormulaEditor } from "./FormulaEditor";
 
 interface IndicatorBarProps {
   enabled: string[];
@@ -9,10 +11,19 @@ interface IndicatorBarProps {
   params: Record<string, number[]>;
   overridden: Set<string>;
   hasBenchmark: boolean;
+  formulas: FormulaDef[];
   onToggle: (name: string) => void;
   /** null resets to the default for this timeframe */
   onParams: (name: string, params: number[] | null) => void;
+  /** Without an id the formula is new */
+  onSaveFormula: (def: Omit<FormulaDef, "id"> & { id?: string }) => void;
+  onDeleteFormula: (id: string) => void;
 }
+
+const chipClass = (on: boolean) =>
+  `flex h-7 items-center rounded-full border text-xs transition-colors ${
+    on ? "border-fg/40 bg-card text-fg" : "border-line text-muted"
+  }`;
 
 function parseParams(text: string): number[] | null {
   const parts = text.split(/[\s,，]+/).filter(Boolean).map(Number);
@@ -75,8 +86,19 @@ function ParamEditor({
   );
 }
 
-export function IndicatorBar({ enabled, params, overridden, hasBenchmark, onToggle, onParams }: IndicatorBarProps) {
+export function IndicatorBar({
+  enabled,
+  params,
+  overridden,
+  hasBenchmark,
+  formulas,
+  onToggle,
+  onParams,
+  onSaveFormula,
+  onDeleteFormula,
+}: IndicatorBarProps) {
   const [editing, setEditing] = useState<string | null>(null);
+  const [formulaEditing, setFormulaEditing] = useState<FormulaDef | "new" | null>(null);
   const editingDef = INDICATORS.find((d) => d.name === editing);
 
   return (
@@ -89,9 +111,7 @@ export function IndicatorBar({ enabled, params, overridden, hasBenchmark, onTogg
           return (
             <div
               key={def.name}
-              className={`flex h-7 items-center rounded-full border text-xs transition-colors ${
-                on && !unavailable ? "border-fg/40 bg-card text-fg" : "border-line text-muted"
-              } ${unavailable ? "opacity-40" : ""}`}
+              className={`${chipClass(on && !unavailable)} ${unavailable ? "opacity-40" : ""}`}
               title={unavailable ? "需要在添加时设置对比基准" : def.hint}
             >
               <button
@@ -115,7 +135,52 @@ export function IndicatorBar({ enabled, params, overridden, hasBenchmark, onTogg
             </div>
           );
         })}
+        <span className="mx-1 h-4 w-px bg-line" />
+        {formulas.map((f) => {
+          const name = formulaIndicatorName(f.id);
+          return (
+            <div key={f.id} className={chipClass(enabled.includes(name))} title={f.source}>
+              <button onClick={() => onToggle(name)} className="h-full pr-1 pl-3">
+                <span className="mr-1 font-mono text-muted italic">ƒ</span>
+                {f.label}
+              </button>
+              <button
+                onClick={() => setFormulaEditing(formulaEditing === f ? null : f)}
+                className="h-full pr-3 pl-1 text-[11px] text-muted hover:text-accent"
+                title="编辑公式"
+              >
+                ✎
+              </button>
+            </div>
+          );
+        })}
+        <button
+          onClick={() => setFormulaEditing(formulaEditing === "new" ? null : "new")}
+          className="h-7 rounded-full border border-dashed border-line px-3 text-xs text-muted hover:border-muted hover:text-fg"
+          title="用公式定义自己的指标"
+        >
+          + 公式指标
+        </button>
       </div>
+      {formulaEditing && (
+        <FormulaEditor
+          key={formulaEditing === "new" ? "new" : formulaEditing.id}
+          initial={formulaEditing === "new" ? null : formulaEditing}
+          onSave={(def) => {
+            onSaveFormula(formulaEditing === "new" ? def : { ...def, id: formulaEditing.id });
+            setFormulaEditing(null);
+          }}
+          onDelete={
+            formulaEditing === "new"
+              ? undefined
+              : () => {
+                  onDeleteFormula(formulaEditing.id);
+                  setFormulaEditing(null);
+                }
+          }
+          onClose={() => setFormulaEditing(null)}
+        />
+      )}
       {editingDef && (
         <ParamEditor
           key={editingDef.name}

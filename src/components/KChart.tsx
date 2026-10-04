@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { dispose, init, registerIndicator, type Chart, type DeepPartial, type KLineData, type Styles } from "klinecharts";
 import { customIndicators } from "@/indicators/custom";
+import { formulaTemplate, isFormulaIndicator, type FormulaDef } from "@/indicators/formula-indicators";
 import type { ChartBar } from "@/lib/api-types";
 import { UPDOWN_EVENT } from "@/lib/prefs";
 import type { Timeframe } from "@/lib/symbols";
@@ -13,13 +14,18 @@ export interface IndicatorSpec {
   calcParams: number[];
 }
 
+export type ChartStyle = "candle_solid" | "candle_up_stroke" | "ohlc" | "area";
+
 interface KChartProps {
   symbolKey: string;
   tf: Timeframe;
   bars: ChartBar[] | null;
   pricePrecision: number;
   log: boolean;
+  chartStyle: ChartStyle;
   indicators: IndicatorSpec[];
+  /** Templates for the formula indicators referenced by `indicators` */
+  formulas: FormulaDef[];
 }
 
 const PERIODS = {
@@ -55,16 +61,26 @@ function withAlpha(hex: string, alpha: number): string {
   return `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, ${alpha})`;
 }
 
-function applyTheme(chart: Chart) {
+function applyTheme(chart: Chart, style: ChartStyle) {
   const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   const up = cssVar("--up");
   const down = cssVar("--down");
   const muted = cssVar("--muted");
   const line = cssVar("--line");
+  const accent = cssVar("--accent");
   const axis = { axisLine: { color: line }, tickLine: { color: line }, tickText: { color: muted } };
   const overrides: DeepPartial<Styles> = {
     grid: { horizontal: { color: cssVar("--chart-grid") }, vertical: { show: false } },
     candle: {
+      type: style,
+      area: {
+        lineColor: accent,
+        lineSize: 1.5,
+        backgroundColor: [
+          { offset: 0, color: withAlpha(accent, 0.01) },
+          { offset: 1, color: withAlpha(accent, 0.16) },
+        ],
+      },
       bar: {
         upColor: up,
         downColor: down,
@@ -91,10 +107,11 @@ function applyTheme(chart: Chart) {
   chart.setStyles(overrides);
 }
 
-export function KChart({ symbolKey, tf, bars, pricePrecision, log, indicators }: KChartProps) {
+export function KChart({ symbolKey, tf, bars, pricePrecision, log, chartStyle, indicators, formulas }: KChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const barsRef = useRef<ChartBar[]>([]);
+  const styleRef = useRef(chartStyle);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -103,13 +120,13 @@ export function KChart({ symbolKey, tf, bars, pricePrecision, log, indicators }:
     const chart = init(el, { locale: "zh-CN", timezone: "UTC" });
     if (!chart) return;
     chartRef.current = chart;
-    applyTheme(chart);
+    applyTheme(chart, styleRef.current);
     // The full history arrives in one response, so there is never more to load.
     chart.setDataLoader({
       getBars: ({ type, callback }) => callback(type === "init" ? (barsRef.current as KLineData[]) : [], false),
     });
 
-    const retheme = () => applyTheme(chart);
+    const retheme = () => applyTheme(chart, styleRef.current);
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     media.addEventListener("change", retheme);
     window.addEventListener(UPDOWN_EVENT, retheme);
@@ -135,12 +152,27 @@ export function KChart({ symbolKey, tf, bars, pricePrecision, log, indicators }:
     chart.setPeriod(PERIODS[tf]);
   }, [bars, symbolKey, tf, pricePrecision]);
 
-  const indicatorKey = JSON.stringify(indicators);
+  useEffect(() => {
+    styleRef.current = chartStyle;
+    if (chartRef.current) applyTheme(chartRef.current, chartStyle);
+  }, [chartStyle]);
+
+  const indicatorKey = JSON.stringify({ indicators, formulas });
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
+    const current = JSON.parse(indicatorKey) as { indicators: IndicatorSpec[]; formulas: FormulaDef[] };
+    // Re-registering under the same name swaps in the edited formula.
+    const available = new Set<string>();
+    for (const def of current.formulas) {
+      const template = formulaTemplate(def);
+      if (!template) continue;
+      registerIndicator(template as Parameters<typeof registerIndicator>[0]);
+      available.add(template.name);
+    }
     chart.removeIndicator();
-    for (const spec of JSON.parse(indicatorKey) as IndicatorSpec[]) {
+    for (const spec of current.indicators) {
+      if (isFormulaIndicator(spec.name) && !available.has(spec.name)) continue;
       if (spec.pane === "main") {
         chart.createIndicator({ name: spec.name, calcParams: spec.calcParams, paneId: CANDLE_PANE }, true);
       } else {

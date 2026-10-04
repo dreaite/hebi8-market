@@ -4,17 +4,24 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_ENABLED, INDICATORS } from "@/indicators/catalog";
+import { formulaIndicatorName, newFormulaId, type FormulaDef } from "@/indicators/formula-indicators";
 import type { BarsResponse } from "@/lib/api-types";
 import { changeColor, fmtAgo, fmtPct, fmtPrice } from "@/lib/format";
 import { usePref } from "@/lib/prefs";
 import { SOURCE_LABELS, TIMEFRAMES, type Timeframe } from "@/lib/symbols";
 import { IndicatorBar } from "./IndicatorBar";
-import type { IndicatorSpec } from "./KChart";
+import type { ChartStyle, IndicatorSpec } from "./KChart";
 
 const KChart = dynamic(() => import("./KChart").then((m) => m.KChart), { ssr: false });
 
 const TF_LABELS: Record<Timeframe, string> = { D: "日", W: "周", M: "月" };
 const PERIOD_CHANGE_LABELS: Record<Timeframe, string> = { D: "今日", W: "本周", M: "本月" };
+const STYLE_LABELS: Record<ChartStyle, string> = {
+  candle_solid: "实心 K 线",
+  candle_up_stroke: "空心阳线",
+  ohlc: "美国线",
+  area: "面积",
+};
 
 type ParamOverrides = Record<Timeframe, Record<string, number[]>>;
 const NO_OVERRIDES: ParamOverrides = { D: {}, W: {}, M: {} };
@@ -24,6 +31,8 @@ export function ChartView({ symbolKey }: { symbolKey: string }) {
   const [log, setLog] = usePref("log", true);
   const [enabled, setEnabled] = usePref<string[]>("indicators", DEFAULT_ENABLED);
   const [overrides, setOverrides] = usePref<ParamOverrides>("params", NO_OVERRIDES);
+  const [formulas, setFormulas] = usePref<FormulaDef[]>("formulas", []);
+  const [chartStyle, setChartStyle] = usePref<ChartStyle>("chartStyle", "candle_solid");
 
   const [data, setData] = useState<BarsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -62,13 +71,17 @@ export function ChartView({ symbolKey }: { symbolKey: string }) {
   );
   const hasBenchmark = Boolean(data?.benchmark);
   const specs: IndicatorSpec[] = useMemo(
-    () =>
-      INDICATORS.filter((d) => enabled.includes(d.name) && (!d.needsBenchmark || hasBenchmark)).map((d) => ({
+    () => [
+      ...INDICATORS.filter((d) => enabled.includes(d.name) && (!d.needsBenchmark || hasBenchmark)).map((d) => ({
         name: d.name,
         pane: d.pane,
         calcParams: params[d.name],
       })),
-    [enabled, hasBenchmark, params],
+      ...formulas
+        .filter((f) => enabled.includes(formulaIndicatorName(f.id)))
+        .map((f) => ({ name: formulaIndicatorName(f.id), pane: f.pane, calcParams: [] })),
+    ],
+    [enabled, hasBenchmark, params, formulas],
   );
 
   const toggle = (name: string) =>
@@ -78,6 +91,19 @@ export function ChartView({ symbolKey }: { symbolKey: string }) {
     if (value) next[name] = value;
     else delete next[name];
     setOverrides({ ...overrides, [tf]: next });
+  };
+  const saveFormula = ({ id, ...def }: Omit<FormulaDef, "id"> & { id?: string }) => {
+    if (id) {
+      setFormulas(formulas.map((f) => (f.id === id ? { id, ...def } : f)));
+      return;
+    }
+    const created = { id: newFormulaId(), ...def };
+    setFormulas([...formulas, created]);
+    setEnabled([...enabled, formulaIndicatorName(created.id)]);
+  };
+  const deleteFormula = (id: string) => {
+    setFormulas(formulas.filter((f) => f.id !== id));
+    setEnabled(enabled.filter((n) => n !== formulaIndicatorName(id)));
   };
 
   const bars = data?.bars;
@@ -121,6 +147,18 @@ export function ChartView({ symbolKey }: { symbolKey: string }) {
               </button>
             ))}
           </div>
+          <select
+            value={chartStyle}
+            onChange={(e) => setChartStyle(e.target.value as ChartStyle)}
+            className="h-6 rounded border border-line bg-bg px-1 text-muted outline-none hover:text-fg"
+            title="K 线样式"
+          >
+            {(Object.keys(STYLE_LABELS) as ChartStyle[]).map((s) => (
+              <option key={s} value={s}>
+                {STYLE_LABELS[s]}
+              </option>
+            ))}
+          </select>
           <label className="flex cursor-pointer items-center gap-1.5 text-muted">
             <input type="checkbox" checked={log} onChange={(e) => setLog(e.target.checked)} className="accent-current" />
             对数坐标
@@ -145,8 +183,11 @@ export function ChartView({ symbolKey }: { symbolKey: string }) {
           params={params}
           overridden={new Set(Object.keys(tfOverrides))}
           hasBenchmark={hasBenchmark}
+          formulas={formulas}
           onToggle={toggle}
           onParams={setParams}
+          onSaveFormula={saveFormula}
+          onDeleteFormula={deleteFormula}
         />
       </div>
 
@@ -164,7 +205,9 @@ export function ChartView({ symbolKey }: { symbolKey: string }) {
             bars={bars ?? null}
             pricePrecision={data?.pricePrecision ?? 2}
             log={log}
+            chartStyle={chartStyle}
             indicators={specs}
+            formulas={formulas}
           />
         </div>
       </div>
