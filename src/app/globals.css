@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #f7f7f5;
+  --card: #ffffff;
+  --fg: #1c1b19;
+  --muted: #7a7670;
+  --line: #e6e4df;
+  --accent: #2f6fde;
+  --green: #18a058;
+  --red: #d9363e;
+  --chart-grid: #efeeea;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d0d0e;
+    --card: #151517;
+    --fg: #e8e6e1;
+    --muted: #8b877f;
+    --line: #26262a;
+    --accent: #6ea2ff;
+    --green: #2fbf71;
+    --red: #f0545c;
+    --chart-grid: #1b1b1e;
+  }
+}
+
+/* Up/down colors follow the user's convention: green-up (default) or red-up (A-share style). */
+:root {
+  --up: var(--green);
+  --down: var(--red);
+}
+:root[data-updown="red-up"] {
+  --up: var(--red);
+  --down: var(--green);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-card: var(--card);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-up: var(--up);
+  --color-down: var(--down);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
