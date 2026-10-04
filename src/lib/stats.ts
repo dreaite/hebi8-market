@@ -1,12 +1,12 @@
+import { CHANGE_PERIODS, type ChangePeriod } from "./periods";
 import { aggregate, closeAtOrBefore, type Bar } from "./series";
 import { DAY } from "./time";
 
 export interface OverviewStats {
   last: number;
   lastTime: number;
-  chg1w: number | null;
-  chg1m: number | null;
-  chg1y: number | null;
+  /** Change versus the close at the start of each period; null when history is too short */
+  changes: Record<ChangePeriod, number | null>;
   /** Distance from the all-time high close, <= 0 */
   ddAth: number;
   /** Position of the last close inside the trailing 52-week low/high range, 0..1 */
@@ -22,8 +22,8 @@ function change(last: number, prev: number | undefined): number | null {
 export function overviewStats(daily: Bar[]): OverviewStats | null {
   const lastBar = daily.at(-1);
   if (!lastBar) return null;
-  const first = daily[0];
   const { c: last, t } = lastBar;
+  const yearStart = Date.UTC(new Date(t * 1000).getUTCFullYear(), 0, 1) / 1000;
 
   let ath = -Infinity;
   for (const bar of daily) ath = Math.max(ath, bar.c);
@@ -34,14 +34,19 @@ export function overviewStats(daily: Bar[]): OverviewStats | null {
     hi = Math.max(hi, daily[i].h);
     lo = Math.min(lo, daily[i].l);
   }
-  const hasYear = first.t <= t - 365 * DAY;
+
+  // closeAtOrBefore is undefined before the first bar, so short histories yield null
+  const changes = Object.fromEntries(
+    CHANGE_PERIODS.map(({ key, days }) => [
+      key,
+      change(last, closeAtOrBefore(daily, days === null ? yearStart - 1 : t - days * DAY)),
+    ]),
+  ) as Record<ChangePeriod, number | null>;
 
   return {
     last,
     lastTime: t,
-    chg1w: change(last, closeAtOrBefore(daily, t - 7 * DAY)),
-    chg1m: change(last, closeAtOrBefore(daily, t - 30 * DAY)),
-    chg1y: hasYear ? change(last, closeAtOrBefore(daily, t - 365 * DAY)) : null,
+    changes,
     ddAth: last / ath - 1,
     pos52: hi > lo ? (last - lo) / (hi - lo) : null,
     spark: aggregate(daily.slice(-800), "W").slice(-104).map((bar) => bar.c),

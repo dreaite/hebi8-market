@@ -21,8 +21,18 @@ describe("overviewStats", () => {
 
   it("reports the last close and calendar-based changes", () => {
     expect(stats.last).toBeCloseTo(173);
-    expect(stats.chg1w).toBeCloseTo(173 / 172.3 - 1);
-    expect(stats.chg1y).toBeCloseTo(173 / 400 - 1); // a year ago was the spike
+    expect(stats.changes["1W"]).toBeCloseTo(173 / 172.3 - 1);
+    expect(stats.changes["1Y"]).toBeCloseTo(173 / 400 - 1); // a year ago was the spike
+  });
+
+  it("measures YTD from the last close of the previous year", () => {
+    // last bar is 2025-12-31 (day 730), so the reference is 2024-12-31 (day 365, the spike)
+    expect(stats.changes.YTD).toBeCloseTo(173 / 400 - 1);
+  });
+
+  it("returns null for periods longer than the history", () => {
+    expect(stats.changes["3Y"]).toBeNull();
+    expect(stats.changes["5Y"]).toBeNull();
   });
 
   it("measures drawdown from the all-time-high close", () => {
@@ -41,7 +51,7 @@ describe("overviewStats", () => {
 
   it("handles short and empty histories", () => {
     expect(overviewStats([])).toBeNull();
-    expect(overviewStats(series().slice(0, 10))!.chg1y).toBeNull();
+    expect(overviewStats(series().slice(0, 10))!.changes["1Y"]).toBeNull();
   });
 });
 

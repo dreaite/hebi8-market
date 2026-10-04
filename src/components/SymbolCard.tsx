@@ -1,11 +1,13 @@
 import Link from "next/link";
 import type { OverviewItem } from "@/lib/api-types";
 import { changeColor, fmtPct, fmtPrice } from "@/lib/format";
+import { CHANGE_PERIODS, type ChangePeriod } from "@/lib/periods";
 import { SOURCE_LABELS } from "@/lib/symbols";
 import { Sparkline } from "./Sparkline";
 
 interface SymbolCardProps {
   item: OverviewItem;
+  periods: ChangePeriod[];
   onRemove: (key: string) => void;
 }
 
@@ -18,7 +20,7 @@ function Change({ label, value }: { label: string; value: number | null }) {
   );
 }
 
-export function SymbolCard({ item, onRemove }: SymbolCardProps) {
+export function SymbolCard({ item, periods, onRemove }: SymbolCardProps) {
   const { stats } = item;
   return (
     <div className="group relative rounded-lg border border-line bg-card transition-colors hover:border-muted/50">
@@ -54,9 +56,9 @@ export function SymbolCard({ item, onRemove }: SymbolCardProps) {
                 )}
               </div>
               <div className="flex gap-3">
-                <Change label="1周" value={stats.chg1w} />
-                <Change label="1月" value={stats.chg1m} />
-                <Change label="1年" value={stats.chg1y} />
+                {CHANGE_PERIODS.filter((p) => periods.includes(p.key)).map((p) => (
+                  <Change key={p.key} label={p.label} value={stats.changes[p.key]} />
+                ))}
               </div>
             </div>
           </>

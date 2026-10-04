@@ -3,14 +3,45 @@
 import { useCallback, useEffect, useState } from "react";
 import type { OverviewItem } from "@/lib/api-types";
 import { fmtAgo } from "@/lib/format";
+import { CHANGE_PERIODS, DEFAULT_PERIODS, MAX_PERIODS, type ChangePeriod } from "@/lib/periods";
+import { usePref } from "@/lib/prefs";
 import { AddSymbolForm } from "./AddSymbolForm";
 import { SymbolCard } from "./SymbolCard";
+
+function PeriodPicker({ value, onChange }: { value: ChangePeriod[]; onChange: (next: ChangePeriod[]) => void }) {
+  const toggle = (key: ChangePeriod) => {
+    if (value.includes(key)) {
+      if (value.length > 1) onChange(value.filter((k) => k !== key));
+    } else if (value.length < MAX_PERIODS) {
+      onChange([...value, key]);
+    }
+  };
+  return (
+    <div className="mb-5 flex flex-wrap items-center gap-1.5 text-xs">
+      <span className="mr-1 text-muted">卡片显示的涨跌周期（最多 {MAX_PERIODS} 个）</span>
+      {CHANGE_PERIODS.map(({ key, label }) => {
+        const on = value.includes(key);
+        return (
+          <button
+            key={key}
+            onClick={() => toggle(key)}
+            className={`h-7 rounded-full border px-3 ${on ? "border-fg/40 bg-card text-fg" : "border-line text-muted hover:text-fg"}`}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 export function Overview() {
   const [items, setItems] = useState<OverviewItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [choosingPeriods, setChoosingPeriods] = useState(false);
+  const [periods, setPeriods] = usePref<ChangePeriod[]>("periods", DEFAULT_PERIODS);
 
   const load = useCallback(async (force = false) => {
     setRefreshing(true);
@@ -46,6 +77,9 @@ export function Overview() {
           {items && <span className="text-xs text-muted">{fmtAgo(lastSync ?? null)}</span>}
         </div>
         <div className="flex items-center gap-4 text-xs">
+          <button onClick={() => setChoosingPeriods((v) => !v)} className="text-muted hover:text-fg">
+            周期
+          </button>
           <button onClick={() => load(true)} disabled={refreshing} className="text-muted hover:text-fg disabled:opacity-50">
             {refreshing ? "同步中…" : "刷新数据"}
           </button>
@@ -54,6 +88,8 @@ export function Overview() {
           </button>
         </div>
       </div>
+
+      {choosingPeriods && <PeriodPicker value={periods} onChange={setPeriods} />}
 
       {adding && (
         <AddSymbolForm
@@ -74,7 +110,7 @@ export function Overview() {
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(270px,1fr))] gap-4">
           {items.map((item) => (
-            <SymbolCard key={item.key} item={item} onRemove={remove} />
+            <SymbolCard key={item.key} item={item} periods={periods} onRemove={remove} />
           ))}
         </div>
       )}
