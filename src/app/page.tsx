@@ -1,7 +1,9 @@
+import path from "node:path";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
 import { Overview, type OverviewData, type OverviewRow } from "@/components/Overview";
+import { benchLabel, nameOf } from "@/lib/names";
 import { hasBars, listSymbols, maxSyncedAt, readAllStats } from "@/lib/store";
-import { isSynthetic, parseKey } from "@/lib/symbols";
+import { isSynthetic, parseKey, tickerOf } from "@/lib/symbols";
 import { syncAll } from "@/lib/sync";
 import { ensureVault, listJournals, readConfigSafe, vaultDir } from "@/lib/vault";
 
@@ -23,15 +25,15 @@ export default async function Home() {
     name: g.name,
     rows: g.symbols.map((item): OverviewRow => {
       const row = symbols[item.key];
-      const synthetic = isSynthetic(item.key);
-      const ticker = synthetic ? item.key.slice(1) : parseKey(item.key).ticker;
       return {
         key: item.key,
-        name: item.name ?? row?.name ?? ticker,
-        ticker,
-        source: synthetic ? "expr" : parseKey(item.key).source,
+        name: nameOf(config, item.key, row?.name),
+        yamlName: item.name,
+        ticker: tickerOf(item.key),
+        source: isSynthetic(item.key) ? "expr" : parseKey(item.key).source,
         currency: row?.currency ?? stats[item.key]?.currency ?? null,
         bench: item.bench,
+        benchLabel: item.bench ? benchLabel(config, item.bench, symbols[item.bench]?.name) : null,
         stats: stats[item.key] ?? null,
         syncError: row?.syncError ?? null,
       };
@@ -47,7 +49,7 @@ export default async function Home() {
     lastReviewDays: journal ? daysAgo(journal.mtimeMs) : null,
     lastSync: maxSyncedAt(),
     firstRun,
-    vaultPath: vaultDir(),
+    vaultPath: path.relative(process.cwd(), vaultDir()) || ".",
   };
   return <Overview data={data} />;
 }
