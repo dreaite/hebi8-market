@@ -2,7 +2,7 @@
 import { compile } from "@/indicators/formula";
 import { CHANGE_PERIODS, DEFAULT_PERIODS, MAX_PERIODS, type ChangePeriod } from "./periods";
 import type { Prices } from "./series";
-import { isSynthetic, isTimeframe, isValidKey, type Timeframe } from "./symbols";
+import { hash6, isSynthetic, isTimeframe, isValidKey, type Timeframe } from "./symbols";
 import { parseSynth } from "./synth";
 
 export type UpDown = "green-up" | "red-up";
@@ -39,6 +39,18 @@ export interface ConditionDef {
   label: string;
   formula: string;
   tf: Timeframe;
+  /** Push a message after a sync when this condition newly holds for a watched symbol */
+  notify: boolean;
+}
+
+/** A rule on one symbol, pushed after a sync when it newly holds. */
+export interface AlertDef {
+  /** `alert:<id>` when given in the yaml, else a hash of key, formula and timeframe */
+  id: string;
+  key: string;
+  label: string;
+  when: string;
+  tf: Timeframe;
 }
 
 export type ParamOverrides = Partial<Record<Timeframe, Record<string, number[]>>>;
@@ -61,6 +73,7 @@ export interface Config {
   groups: Group[];
   indicators: FormulaDef[];
   conditions: ConditionDef[];
+  alerts: AlertDef[];
   chart: ChartPrefs;
 }
 
@@ -176,8 +189,27 @@ export function normalizeConfig(raw: unknown): Config {
     const id = text(d.id);
     const formula = text(d.formula);
     if (!id || !formula) throw new ConfigError(`conditions[${i}]：需要 id 和 formula`);
-    return [{ id, label: text(d.label) ?? id, formula, tf: isTimeframe(d.tf) ? d.tf : ("W" as const) }];
+    return [{ id, label: text(d.label) ?? id, formula, tf: isTimeframe(d.tf) ? d.tf : ("W" as const), notify: d.notify === true }];
   });
+
+  const alerts = list(root.alerts).map((raw, i): AlertDef => {
+    const d = obj(raw);
+    const where = `alerts[${i}]`;
+    const ref = text(d.key);
+    const when = text(d.when);
+    if (!ref || !when) throw new ConfigError(`${where}：需要 key 和 when`);
+    const key = resolveKey(ref, aliases);
+    checkKey(key, aliases, `${where}.key`);
+    const tf = isTimeframe(d.tf) ? d.tf : ("D" as const);
+    const own = text(d.id);
+    if (own && !/^[A-Za-z0-9_-]+$/.test(own)) throw new ConfigError(`${where}：id「${own}」只能用字母、数字、下划线、横线`);
+    return { id: `alert:${own ?? hash6(`${key}|${when}|${tf}`)}`, key, label: text(d.label) ?? when, when, tf };
+  });
+  const ids = new Set<string>();
+  for (const a of alerts) {
+    if (ids.has(a.id)) throw new ConfigError(`alerts：重复的规则「${a.id.slice(6)}」，同一标的同一公式只写一次，或给每条写不同的 id`);
+    ids.add(a.id);
+  }
 
   const chart = obj(root.chart);
   const style = chart.style ?? DEFAULT_CHART.style;
@@ -192,6 +224,7 @@ export function normalizeConfig(raw: unknown): Config {
     groups: parseGroups(root.groups, aliases),
     indicators,
     conditions,
+    alerts,
     chart: {
       tf: isTimeframe(chart.tf) ? chart.tf : DEFAULT_CHART.tf,
       log: typeof chart.log === "boolean" ? chart.log : DEFAULT_CHART.log,
@@ -229,12 +262,17 @@ export function syncKeys(cfg: Config, extra: string[] = []): string[] {
     add(item.key);
     if (item.bench) add(item.bench);
   }
-  for (const def of [...cfg.indicators, ...cfg.conditions]) {
+  for (const formula of [...cfg.indicators, ...cfg.conditions].map((d) => d.formula).concat(cfg.alerts.map((a) => a.when))) {
     try {
-      compile(def.formula, { aliases: cfg.aliases }).refs.forEach(add);
+      compile(formula, { aliases: cfg.aliases }).refs.forEach(add);
     } catch {
       // bad formulas are shown where they are used
     }
+  }
+  for (const alert of cfg.alerts) {
+    add(alert.key);
+    const bench = findItem(cfg, alert.key)?.bench;
+    if (bench) add(bench);
   }
   extra.forEach(add);
   return [...keys];

@@ -40,6 +40,18 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
         json        TEXT NOT NULL
       );
     `),
+  (db) =>
+    db.exec(`
+      -- What each notify rule looked like at the last sync; see src/lib/alerts.ts.
+      CREATE TABLE alert_state (
+        rule      TEXT    NOT NULL,
+        key       TEXT    NOT NULL,
+        state     INTEGER,
+        fired_bar INTEGER,
+        fired_at  INTEGER,
+        PRIMARY KEY (rule, key)
+      ) WITHOUT ROWID;
+    `),
 ];
 
 function open(): Database.Database {

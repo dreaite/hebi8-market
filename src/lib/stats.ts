@@ -6,6 +6,8 @@ export interface ConditionResult {
   /** Last weekly bar (the unfinished current week) and the one before it; null when undefined */
   now: boolean | null;
   prev: boolean | null;
+  /** Time of the last bar the result is about; absent when the formula failed */
+  t?: number;
   error?: string;
 }
 

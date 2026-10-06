@@ -45,12 +45,16 @@ indicators:                    # 公式指标，图表页可开关
   - { id: dev40, label: 均线乖离, pane: sub, formula: "(close / sma(close, 40) - 1) * 100" }
   - { id: vs_bench, label: 对基准比价, pane: sub, formula: "close / close(bench)" }
 
-conditions:                    # 总览条件徽标；同步时按周线计算，布尔结果
+conditions:                    # 总览条件徽标；同步时按周线计算，布尔结果；加 notify: true 则新成立时推送
   - { id: trend, label: 趋势, formula: "close > sma(close, 40) and sma(close, 10) > sma(close, 40)" }
   - { id: near_high, label: 近高点, formula: "close >= highest(high, 52) * 0.9" }
   - { id: new_high, label: 新高, formula: "close >= highest(close, 52)" }
   - { id: rs_high, label: RS新高, formula: "rs = close / close(bench); rs >= highest(rs, 26)" }
   - { id: below_200w, label: 破200周, formula: "close < sma(close, 200)" }
+
+alerts: []                     # 单个标的的价位规则，同步后新成立就推送；tf 默认 D；通道在 ~/.config/hebi8/notify.json
+#  - { key: BTC, label: BTC 站上 13 万, when: "close > 130000" }
+#  - { key: NVDA, when: "close < sma(close, 200)", tf: W }
 
 chart:                         # 全局图表偏好（UI 改动会写回这里）
   tf: W                        # D | W | M | Q

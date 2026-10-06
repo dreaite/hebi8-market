@@ -1,8 +1,9 @@
+import { runAlerts } from "./alerts";
 import { loadDaily } from "./bars";
 import { evalConditions } from "./conditions";
 import { allItems, syncKeys, type Config } from "./config";
 import { adapters } from "./sources";
-import { computeStats } from "./stats";
+import { computeStats, type ConditionResult } from "./stats";
 import { ensureSymbol, getSymbol, latestBarTime, listSymbols, markSyncError, markSynced, writeBars, writeStats } from "./store";
 import { parseKey } from "./symbols";
 import { compareKeys, readConfig, readConfigSafe } from "./vault";
@@ -66,9 +67,13 @@ async function syncMany(keys: string[], force: boolean, concurrency = 4): Promis
   return results;
 }
 
-/** Stats for every watched symbol (synthetic ones included) and benchmark, from the cache only. */
-export function recomputeStats(cfg: Config | null): void {
-  if (!cfg) return;
+/**
+ * Stats for every watched symbol (synthetic ones included) and benchmark, from the cache only.
+ * Returns the condition results by key so the alerts pass does not evaluate them twice.
+ */
+export function recomputeStats(cfg: Config | null): Map<string, Record<string, ConditionResult>> {
+  const results = new Map<string, Record<string, ConditionResult>>();
+  if (!cfg) return results;
   const symbols = listSymbols();
   const items = allItems(cfg);
   const keys = new Set([...items.map((i) => i.key), ...items.flatMap((i) => (i.bench ? [i.bench] : []))]);
@@ -76,11 +81,13 @@ export function recomputeStats(cfg: Config | null): void {
     try {
       const daily = loadDaily(key, cfg.prices, cfg);
       const conditions = daily.length ? evalConditions(key, cfg) : {};
+      results.set(key, conditions);
       writeStats(key, computeStats(daily, { currency: symbols[key]?.currency ?? null, conditions }));
     } catch (err) {
       console.warn(`[hebi8] stats for ${key} failed: ${message(err)}`);
     }
   }
+  return results;
 }
 
 /** Sync one key and refresh stats; used when adding a symbol (the fetch doubles as validation). */
@@ -90,19 +97,20 @@ export async function syncOne(key: string, force = false): Promise<SyncOutcome> 
   return outcome;
 }
 
-/** Everything the vault references, 4 at a time; concurrent callers share the run. */
+/** Everything the vault references, 4 at a time, then stats and alerts; concurrent callers share the run. */
 export function syncAll(force = false): Promise<SyncOutcome[]> {
   if (allInFlight) return allInFlight;
   allInFlight = (async () => {
     const cfg = readConfig();
     const started = Date.now();
     const results = await syncMany(syncKeys(cfg, compareKeys()), force);
-    recomputeStats(cfg);
+    const conditions = recomputeStats(cfg);
     const failed = results.filter((r) => !r.ok);
     console.log(
       `[hebi8] synced ${results.length} symbols in ${((Date.now() - started) / 1000).toFixed(1)}s` +
         (failed.length ? `, failed: ${failed.map((r) => `${r.key} (${r.error})`).join(", ")}` : ""),
     );
+    await runAlerts(cfg, conditions);
     return results;
   })().finally(() => {
     allInFlight = null;

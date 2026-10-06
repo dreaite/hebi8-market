@@ -1,7 +1,8 @@
 /**
- * GitHub login sessions (the only secrets this app keeps) live outside the repo, the vault and
- * the data dir: `sessions.json` in `HEBI8_SECRETS` or `~/.config/hebi8` (mode 700), written
- * atomically with mode 600. Nothing in here is ever logged or sent to the browser.
+ * Secrets live outside the repo, the vault and the data dir, in `HEBI8_SECRETS` or
+ * `~/.config/hebi8` (mode 700): GitHub login sessions in `sessions.json`, written atomically with
+ * mode 600, and notification channels in `notify.json`, written by hand. Nothing in here is ever
+ * logged or sent to the browser.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";

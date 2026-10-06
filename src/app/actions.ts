@@ -279,11 +279,14 @@ export async function deleteIndicator(id: string): Promise<ActionResult> {
   return attempt(() => deleteById("indicators", str(id)));
 }
 
-export async function saveCondition(def: ConditionDef): Promise<ActionResult> {
+export async function saveCondition(def: Omit<ConditionDef, "notify"> & { notify?: boolean }): Promise<ActionResult> {
   return attempt(() => {
     const { id, label, formula } = checkFormula(def);
     const entry: Record<string, unknown> = { id, label, formula };
     if (isTimeframe(def.tf) && def.tf !== "W") entry.tf = def.tf;
+    // an editor that does not know about notify keeps whatever the yaml says
+    const notify = typeof def.notify === "boolean" ? def.notify : readConfig().conditions.find((c) => c.id === id)?.notify;
+    if (notify) entry.notify = true;
     upsertById("conditions", entry);
     recomputeStats(readConfig());
   });

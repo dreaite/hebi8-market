@@ -18,8 +18,9 @@
 - **笔记与复盘**：每个标的一篇 markdown 笔记（thesis）；每周一篇复盘日志。都是自动保存：停止输入 1 秒后写盘，`Ctrl/Cmd+S` 立即保存，浏览器里留一份草稿兜底。复盘页列出本周所有条件变化和有笔记的标的。
 - **帮助与反馈**：页头最右的「?」（或按 `?`）打开帮助抽屉：项目信息、版本、同步状态、快捷键；「反馈」页签把问题直接提交成 GitHub issue，自动附带当前页面、图表状态和最近的前端错误。
 - **合成标的**：`=BTC/GOLD` 这样的表达式当作标的看图、算统计、算条件，逐字段计算，和 TradingView 的 spread 一样。
+- **同步后通知**：标了 `notify` 的条件和 `alerts` 里的价位规则，在某次同步后**新成立**时推一条摘要到 Telegram 或 webhook（ntfy、Discord 等）。只看日线，不做盘中实时。
 
-约束：单用户、无登录、只在内网用；只存日线，周 / 月 / 季线读时合成；读取永远不碰网络。
+约束：单用户、无登录、只在内网用；只存日线，周 / 月 / 季线读时合成；读取永远不碰网络；通知只往外发，不开任何入口。
 
 ### 应用内反馈
 
@@ -70,7 +71,7 @@ npm run dev        # http://localhost:3000
 | `HEBI8_VAULT` | `./vault` | 用户内容目录 |
 | `HEBI8_DB` | `./data/hebi8.db` | SQLite 缓存，删了会自动重建 |
 | `BINANCE_API_URL` | `https://api.binance.com` | 换成 `https://data-api.binance.vision` 等镜像 |
-| `HEBI8_SECRETS` | `~/.config/hebi8` | 反馈用的 GitHub 登录会话 `sessions.json`，权限 700 / 600 |
+| `HEBI8_SECRETS` | `~/.config/hebi8` | 反馈用的 GitHub 登录会话 `sessions.json` 和通知通道 `notify.json`，权限 700 / 600 |
 | `HEBI8_GITHUB_CLIENT_ID` | `app-info.ts` 的 `GITHUB_APP_CLIENT_ID` | 反馈登录用的 GitHub App client id（fork 用自己的 App 时设）；设为 `off` 关闭应用内登录，反馈只走 GitHub 网页 |
 | `HEBI8_FEEDBACK_REPO` | `dreaite/hebi8-market` | 反馈 issue 开在哪个仓库（`owner/name`） |
 | `HEBI8_GITHUB_APP_SLUG` | `hebi8-market` | App 的 slug，只用于链接 |
@@ -94,6 +95,43 @@ vault/
 - `bench` 是相对强弱和 `close(bench)` 的默认基准。
 - `conditions` 在每次同步后按周线计算，`prev != now` 就是本周的变化。
 - `fileKey`：`tv:TVC:US10Y → tv_TVC_US10Y`，`=BTC/GOLD → expr_BTC_GOLD`。
+
+## 通知
+
+每次定时同步或点「刷新」之后，hebi8 检查两种规则，**从不成立变成成立**的那一刻推一条摘要。加标的时的单个同步不推。
+
+```yaml
+conditions:
+  - { id: below_200w, label: 破200周, formula: "close < sma(close, 200)", notify: true }   # 对每个自选标的检查
+
+alerts:                                                    # 只对一个标的检查，tf 默认 D
+  - { key: BTC, label: BTC 站上 13 万, when: "close > 130000" }
+  - { key: NVDA, when: "close < sma(close, 200)", tf: W }
+```
+
+- 规则第一次出现（新加的规则、新加的标的、删过缓存库）只记下当前状态，不推送，所以不会一上来把所有已成立的条件推一遍。
+- 同一根 K 线只推一次。周线条件在本周内来回真假，也只响一次。
+- 所有通道都发送失败时不记账，下次同步再试；没配通道时只写日志。
+
+通道写在 `~/.config/hebi8/notify.json`（不在 vault 里，权限设成 600），两种可以同时开：
+
+```json
+{
+  "telegram": { "token": "123456:ABC...", "chat": "123456789" },
+  "webhook": "https://ntfy.sh/your-secret-topic",
+  "link": "http://100.92.194.31:8808"
+}
+```
+
+- `telegram`：找 @BotFather 建一个 bot 拿 token，给 bot 发一句话后从 `https://api.telegram.org/bot<token>/getUpdates` 里读 `chat.id`。用自建 Bot API 服务时加 `"api": "http://..."`。
+- `webhook`：字符串，或 `{ "url": ..., "format": "json" }`。默认 `text` 把摘要当正文 POST，带 `Title: hebi8` 头，ntfy 直接能用；`json` 发 `{ title, text, events }`。
+- `link`：可选，有的话每条后面带图表页链接。
+
+配好后用这条命令往每个通道发一条测试消息：
+
+```bash
+npm run notify:test
+```
 
 ## 公式
 
@@ -160,10 +198,11 @@ src/
     ├── feedback.ts           反馈 issue 的正文、hebi8-context 格式与 GitHub 网页预填链接
     ├── sources/              yahoo / binance / tradingview 适配器
     ├── vault.ts config.ts    vault 的读写层、hebi8.yaml 的类型与校验
-    ├── db.ts store.ts        SQLite 缓存（symbols、bars、stats）
-    ├── sync.ts scheduler.ts  同步、同步后算 stats、每日定时
+    ├── db.ts store.ts        SQLite 缓存（symbols、bars、stats、alert_state）
+    ├── sync.ts scheduler.ts  同步、同步后算 stats 和通知、每日定时
     ├── series.ts synth.ts    周/月/季线合成、对齐、合成标的
     ├── stats.ts conditions.ts 总览统计与条件
+    ├── alerts.ts notify.ts   同步后通知：规则判定与状态、Telegram / webhook 投递
     └── time.ts tz.ts week.ts 交易日换算、时区、ISO 周
 vault.example/hebi8.yaml      首次运行的起点
 tests/                        vitest

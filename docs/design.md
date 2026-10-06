@@ -12,6 +12,8 @@ hebi8 是一个**周度复盘工具**，不是 TradingView 的替代品。每天
 
 约束：单用户、无登录、只在 Tailscale 内网；只存日线，周/月/季线读时合成；**读取永远不碰网络**。
 
+第八天之外只有一种打扰：每次同步后，自己标了 `notify` 的条件和 `alerts` 价位规则**新成立**时推一条摘要到 Telegram 或 webhook（§2.5）。不做日内、不做实时。
+
 本文是 v2 的实施规范。v1 的代码可以参考（`tradingDay`、公式引擎、指标目录、统计定义都保留），但不需要兼容：目录、schema、接口都按本文重做。
 
 ---
@@ -21,7 +23,8 @@ hebi8 是一个**周度复盘工具**，不是 TradingView 的替代品。每天
 **一句话心智模型：`vault/` 是我的，`data/hebi8.db` 是缓存，删了会自动重建。**
 
 ```
-data/hebi8.db                 SQLite 缓存：bars、symbols 元数据与同步状态、stats
+data/hebi8.db                 SQLite 缓存：bars、symbols 元数据与同步状态、stats、告警状态
+data/datasets/<name>/         自定义数据集仓库的浅克隆（§2.4），删了下次同步重新克隆
 vault/                        用户内容，gitignore；HEBI8_VAULT 环境变量可改位置
   hebi8.yaml                  自选分组、别名、公式指标、条件、同步时间表、图表偏好
   notes/<fileKey>.md          每个标的的笔记（thesis）
@@ -47,6 +50,7 @@ aliases:                       # 公式、条件、对比、合成标的里可�
   CSI300: tv:SSE:000300
   BTC: binance:BTCUSDT
   GOLD: tv:TVC:GOLD
+  GPU4090: data:gpu/4090-xianyu
 
 groups:
   - name: 加密
@@ -75,9 +79,17 @@ indicators:                    # 公式指标，图表页可开关；语法见 �
 conditions:                    # 总览条件徽标；同步时按周线计算，布尔结果
   - { id: trend, label: 趋势, formula: "close > sma(close, 40) and sma(close, 10) > sma(close, 40)" }
   - { id: near_high, label: 近高点, formula: "close >= highest(high, 52) * 0.9" }
-  - { id: new_high, label: 新高, formula: "close >= highest(close, 52)" }
+  - { id: new_high, label: 新高, formula: "close >= highest(close, 52)", notify: true }   # notify：新成立时推送（§2.5）
   - { id: rs_high, label: RS新高, formula: "rs = close / close(bench); rs >= highest(rs, 26)" }
-  - { id: below_200w, label: 破200周, formula: "close < sma(close, 200)" }
+  - { id: below_200w, label: 破200周, formula: "close < sma(close, 200)", notify: true }
+
+alerts:                        # 单个标的的价位规则；同步后新成立就推送（§2.5）。tf 默认 D
+  - { key: BTC, label: BTC 站上 13 万, when: "close > 130000" }
+  - { key: NVDA, when: "close < sma(close, 200)" }
+  - { key: GPU4090, label: 4090 咸鱼跌破 1.1 万, when: "close < 11000" }
+
+datasets:                      # 自定义数据集（§2.4）：名字 → git 地址或本机目录
+  gpu: https://github.com/dreaife/gpu-prices
 
 chart:                         # 全局图表偏好（UI 改动会写回这里）
   tf: W                        # D | W | M | Q
@@ -91,7 +103,7 @@ chart:                         # 全局图表偏好（UI 改动会写回这里�
 规则：
 
 - 标的引用（groups、bench、公式里的 `close(X)`、合成表达式、对比列表）一律先查 `aliases`，查不到就当完整 key `source:ticker`。
-- `key` 格式：`yahoo:AAPL`、`yahoo:0700.HK`、`yahoo:^GSPC`、`binance:BTCUSDT`、`tv:TVC:US10Y`、`tv:FX_IDC:USDCNH`，或 `=表达式`。
+- `key` 格式：`yahoo:AAPL`、`yahoo:0700.HK`、`yahoo:^GSPC`、`binance:BTCUSDT`、`tv:TVC:US10Y`、`tv:FX_IDC:USDCNH`、`data:gpu/4090-xianyu`，或 `=表达式`。`data:` 的 key 区分大小写，在合成表达式和 `close(...)` 里要用别名或带引号。
 - 一个标的只出现在一个组里。显示名：`name` > 内置字典（`src/lib/wellknown.ts`）的中文名 > 数据源返回的名字。
 - yaml 由 UI 写回时必须保留注释和顺序：用 `yaml` 包的 `parseDocument` 修改后 `toString()`，原子写入（写临时文件再 rename）。
 - yaml 解析失败时页面显示错误（含行号），服务不崩。
@@ -143,9 +155,20 @@ CREATE TABLE stats (
   key TEXT PRIMARY KEY,                     -- 含合成标的
   computed_at INTEGER NOT NULL, json TEXT NOT NULL
 );
+CREATE TABLE alert_state (                  -- §2.5；删库后第一次同步只记录、不推送
+  rule TEXT NOT NULL, key TEXT NOT NULL,    -- rule：cond:<id> 或 alert:<hash>
+  state INTEGER,                            -- 上次同步看到的结果 0/1
+  fired_bar INTEGER,                        -- 上次推送时那根 K 线的 t，同一根只推一次
+  fired_at INTEGER,
+  PRIMARY KEY (rule, key)
+) WITHOUT ROWID;
 ```
 
 `symbols` 里只有缓存和元数据，**没有任何用户字段**（名字、分组、基准、排序都在 yaml）。
+
+### 1.5 用户配置目录（`HEBI8_SECRETS`，默认 `~/.config/hebi8`，目录 700、文件 600）
+
+不在 vault、不在 data、不进 git：`sessions.json`（GitHub 登录，§5.8）与 `notify.json`（通知通道，§2.5）。
 
 ---
 
@@ -169,6 +192,7 @@ interface SourceAdapter {
 | `yahoo` | `chart()` 的 open/high/low/close 本身是拆股复权，**原样存** | `adjclose / close` | 全量 replace | `new YahooFinance().search(q)` | 直接请求 Yahoo 会 429，必须走 yahoo-finance2 |
 | `tv` | `setMarket(ticker, { timeframe: "D", range: 6000, adjustment: "splits" })` | 1 | 全量 replace | `TradingView.searchMarketV3(q)` | 一次同步共用一个 `Client`，顺序开 chart；30s 超时；逆向接口可能失效，错误只记在该标的上 |
 | `binance` | `/api/v3/klines` 1d | 1 | 增量 merge（回拉 3 天覆盖未收盘的那根） | 静态：`/^[A-Z0-9]{2,12}USDT$/` 命中即给候选 | 00:00 UTC 开盘，无需时区换算 |
+| `data` | 数据集仓库里的 CSV（§2.4） | 1 | 全量 replace | 列出 yaml 里各数据集清单中的序列 | 日期直接是 UTC 零点，不经 `tradingDay` |
 
 - 时间戳 → 交易日的映射沿用 v1 的 `tradingDay(tsSec, timeZone)`（+12h 后取交易所时区的日期）和 `tests/time.test.ts`，原样保留。各源的约定：美股记在开盘 13:30 UTC，亚洲记在 01:30 UTC，FX/TVC 记在前一晚的开盘。
 - 已知数据事实：现库 12 个标的 73,543 根日线；`tv:TVC:US10Y` 2013 年以前没有周一的数据（源本身缺），周线合成能正常处理。
@@ -188,6 +212,59 @@ interface SourceAdapter {
 - 读取路径（页面、API）**只读库**。首次运行库为空时，总览显示「首次拉取中…」并每 3s 刷新一次，同时后台触发 `syncAll`。
 - 「刷新」按钮是 Server Action：`await syncAll(true)` 后 `revalidatePath`，按钮期间显示 pending（手动动作，阻塞 3–30s 可以接受）。
 - 新增标的时立即 `syncOne(key, true)`，失败则不写入 yaml 并报错（首次拉取兼做校验）。
+- `syncAll` 算完 stats 后跑一次通知（§2.5）；`syncOne` 不通知。
+
+### 2.4 自定义数据集（`data` 源）
+
+任何按约定放日线 CSV 的 git 仓库或本机目录都是一个数据源，比如爬虫每天推送的显卡二手价。**hebi8 只读，不爬。** 仓库就是两边的契约。
+
+```yaml
+# 仓库根目录 hebi8-dataset.yaml
+name: 显卡二手与零售价
+series:
+  - { id: 4090-xianyu, name: RTX 4090 咸鱼, currency: CNY, file: series/4090-xianyu.csv }
+  - { id: 4090-jd,     name: RTX 4090 京东, currency: CNY, file: series/4090-jd.csv }
+```
+
+```csv
+date,open,high,low,close,volume
+2026-10-05,,15800,11200,12900,184
+2026-10-06,,15500,11000,12650,171
+```
+
+- key：`data:<数据集>/<序列 id>`。数据集名在 yaml 的 `datasets` 里映射到地址，key 里不写地址，仓库搬家不影响图表和笔记。数据集名和序列 id 只能用 `[A-Za-z0-9._-]`。
+- 地址是 `https://`、`git@`、`ssh://` 时浅克隆到 `data/datasets/<name>/`，之后每次同步 `git fetch --depth 1` 再 `reset --hard`；私有仓库直接用机器上的 SSH key。以 `/`、`~`、`./` 开头时当本机目录直接读。同一次同步里一个数据集只拉一次。
+- CSV：表头必须有 `date` 和 `close`，其余列可选、可留空。`open` 空时用 `close`；`high`/`low` 空时取 `open`/`close` 的较大/较小值；`volume` 空为 null。`date` 是 `YYYY-MM-DD`，映射到当天 UTC 零点。同一天出现两次取后一行；空行和 `#` 开头的行跳过。格式错误报行号，只记在这个标的上。
+- 元数据：`name`、`currency` 来自清单，`exchange` 是清单的 `name`，`kind` 是 `dataset`。
+- 比价数据的用法建议：`close` 放当天中位价，`high`/`low` 放区间，`volume` 放有效挂单数。
+
+### 2.5 同步后通知
+
+只在 `syncAll` 收尾、stats 写完之后跑。**规则**有两种：
+
+- `conditions` 里带 `notify: true` 的条件，对每个自选标的（含合成）求值，tf 同条件。
+- `alerts` 里的价位规则：`{ key, when, label?, tf? }`，只对这一个标的求值，tf 默认 D。`when` 就是条件公式，能用别名、`close(X)`、`bench`。
+
+**判定**：每条规则、每个标的在 `alert_state` 里记上次同步看到的布尔值。
+
+1. 第一次见到（新规则、新标的、删过库）：只记录，不推送。
+2. 这次为真、上次不为真、且最后一根 K 线的 `t` 不等于 `fired_bar`：推送，`fired_bar` 记成这根的 `t`。周线条件在本周反复真假时只推一次。
+3. 结果为 null（数据不够、公式出错）：不改状态。
+
+**投递**：一次同步的所有事件合成一条纯文本摘要，同时发到 `notify.json` 里配置的每个通道；有一个通道成功就提交状态，全部失败则不提交，下次同步再试。没有配置通道时只打日志、照常提交。
+
+```json
+{
+  "telegram": { "token": "123:abc", "chat": "123456789", "api": "https://api.telegram.org" },
+  "webhook": { "url": "https://ntfy.sh/hebi8-xxxx", "format": "text" },
+  "link": "http://100.92.194.31:8808"
+}
+```
+
+- `telegram.api` 可省，指向自建 Bot API 服务时改它。
+- `webhook.format`：`text`（默认，正文就是摘要，带 `Title` 头，适合 ntfy）或 `json`（`{ title, text, events }`）。
+- `link` 可省；有的话每条事件后面带图表页链接。
+- `npm run notify:test` 往所有通道发一条测试消息。
 
 ---
 
@@ -215,7 +292,7 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
   ddAth,                                  // 距历史最高收盘的回撤，<= 0
   pos52,                                  // 52 周高低区间位置 0..1
   spark: number[],                        // 近 104 周的周收盘
-  conditions: { [id]: { now: boolean | null, prev: boolean | null } }  // 最后一根周线、上一根周线
+  conditions: { [id]: { now: boolean | null, prev: boolean | null, t?: number } }  // 最后一根周线、上一根周线；t 是最后一根的时间
 }
 ```
 
@@ -339,7 +416,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 ### 5.5 设置
 
-不做单独页面。周期选择、涨跌色、图表偏好由各处 UI 写回 yaml；分组、名称、基准由总览行菜单写回；其余（同步时间、别名、条件）直接改 yaml，页面上给出 vault 相对路径提示。反馈用的 GitHub App 只有一个 client id，写在源码里（§5.8），不需要设置页。
+不做单独页面。周期选择、涨跌色、图表偏好由各处 UI 写回 yaml；分组、名称、基准由总览行菜单写回；其余（同步时间、别名、条件、告警、数据集）直接改 yaml，页面上给出 vault 相对路径提示。通知通道写在 `~/.config/hebi8/notify.json`（§2.5）。反馈用的 GitHub App 只有一个 client id，写在源码里（§5.8），不需要设置页。
 
 ### 5.6 自动保存（笔记与复盘日志）
 
@@ -503,4 +580,4 @@ schema v2 + 迁移；`adj` 因子与 `prices` 模式；适配器 meta；应用�
 
 ## 9. 不做的事
 
-登录鉴权（Tailscale 内网；GitHub 登录只用于提交反馈，不保护任何页面）；日内数据；推送告警（第八天打开就是提醒）；多用户；Pine Script 兼容；拖拽排序（改 yaml）。
+登录鉴权（Tailscale 内网；GitHub 登录只用于提交反馈，不保护任何页面）；日内数据；实时或盘中告警（只在同步后推送日线规则的新触发，§2.5）；入站 webhook；数据集爬虫（hebi8 只读仓库）；多用户；Pine Script 兼容；拖拽排序（改 yaml）。
