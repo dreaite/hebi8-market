@@ -1,0 +1,33 @@
+# Labels issues filed from inside hebi8 market (the app itself cannot: GitHub drops labels set by
+# non-collaborators). The logic lives in .github/scripts/feedback-labels.js; the issue body is
+# only parsed as JSON data, never executed. auto-fix-ok is gated by the author's association.
+name: App feedback labels
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: app-feedback-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  label:
+    if: ${{ !github.event.issue.pull_request && contains(github.event.issue.body, 'hebi8-context') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # the default branch's copy of the script (issue events never check out untrusted code)
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const { run } = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/feedback-labels.js`);
+            await run({ github, context, core });
