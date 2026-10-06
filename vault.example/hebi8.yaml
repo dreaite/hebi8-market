@@ -5,30 +5,38 @@ prices: split                  # split = 拆股复权（默认，和 TradingView
 periods: [1W, 1M, 1Y]          # 总览显示的涨跌周期，最多 4 个：1W 1M 3M YTD 1Y 3Y 5Y
 updown: green-up               # green-up | red-up
 
-aliases:                       # 公式、条件、对比、合成标的里可用的短名
+aliases:                       # 公式、条件、对比、合成标的、搜索里可用的短名；搜索添加时的中文词也会记在这里
   SPY: yahoo:SPY
   QQQ: yahoo:QQQ
+  NVDA: yahoo:NVDA
   HSI: yahoo:^HSI
+  HSTECH: tv:HSI:HSTECH
   CSI300: tv:SSE:000300
   BTC: binance:BTCUSDT
+  ETH: binance:ETHUSDT
   GOLD: tv:TVC:GOLD
+  US10Y: tv:TVC:US10Y
+  DXY: tv:TVC:DXY
 
-groups:
+groups:                        # name 可省略：先用内置字典的中文名，再用数据源的名字
   - name: 加密
     symbols:
-      - BTC                                      # 字符串：别名或完整 key
-      - { key: binance:ETHUSDT, bench: BTC }     # bench：相对强弱、close(bench) 的默认基准
+      - { key: BTC, name: 比特币 }                 # key：别名或完整 key；也可以只写一个字符串
+      - { key: ETH, name: 以太坊, bench: BTC }     # bench：相对强弱、close(bench) 的默认基准
   - name: 美股
     symbols:
-      - SPY
-      - { key: QQQ, bench: SPY }
-      - { key: yahoo:NVDA, name: 英伟达, bench: QQQ }
+      - { key: SPY, name: 标普 500 }
+      - { key: QQQ, name: 纳指 100, bench: SPY }
+      - { key: NVDA, name: 英伟达, bench: QQQ }
   - name: 港 A
     symbols:
       - { key: yahoo:0700.HK, name: 腾讯控股, bench: HSI }
       - { key: yahoo:600519.SS, name: 贵州茅台, bench: CSI300 }
   - name: 宏观
-    symbols: [GOLD, tv:TVC:US10Y, tv:TVC:DXY]
+    symbols:
+      - { key: GOLD, name: 黄金 }
+      - { key: US10Y, name: 美债 10 年 }
+      - { key: DXY, name: 美元指数 }
   - name: 比价
     symbols:
       - { key: "=BTC/GOLD", name: 比特币/黄金 }   # 以 = 开头的是合成标的
