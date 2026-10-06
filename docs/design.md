@@ -10,7 +10,7 @@ hebi8 是一个**周度复盘工具**，不是 TradingView 的替代品。每天
 | 深看 | `/chart/[key]` 图表：K 线、指标、对比、画线、笔记 | 值得细看的几个，结构是什么样？和别的比呢？ |
 | 记录 | `/review` 复盘：本周日志、上周日志、本周变化汇总 | 上周怎么想的，这周怎么想？ |
 
-约束：单用户、无登录、只在 Tailscale 内网；只存日线，周/月/季线读时合成；**读取永远不碰网络**。
+约束：只在 Tailscale 内网；只存日线，周/月/季线读时合成；**读取永远不碰网络**。默认单用户、无登录；在 yaml 里设了 `owner` 之后，局域网里的几个人可以共用一台实例，每人用 GitHub 登录后看到自己的自选、画线、笔记和通知（§1.6）。
 
 第八天之外只有一种打扰：每次同步后，自己标了 `notify` 的条件和 `alerts` 价位规则**新成立**时推一条摘要到 Telegram 或 webhook（§2.5）。不做日内、不做实时。
 
@@ -26,16 +26,18 @@ hebi8 是一个**周度复盘工具**，不是 TradingView 的替代品。每天
 data/hebi8.db                 SQLite 缓存：bars、symbols 元数据与同步状态、stats、告警状态
 data/datasets/<name>/         自定义数据集仓库的浅克隆（§2.4），删了下次同步重新克隆
 vault/                        用户内容，gitignore；HEBI8_VAULT 环境变量可改位置
-  hebi8.yaml                  自选分组、别名、公式指标、条件、同步时间表、图表偏好
+  hebi8.yaml                  自选分组、别名、公式指标、条件、同步时间表、图表偏好；owner 的
   notes/<fileKey>.md          每个标的的笔记（thesis）
   journal/<YYYY>-W<ww>.md     每周复盘（ISO 周）
   charts/<fileKey>.json       每个标的的图表状态：对比列表、画线
+  users/<login>/              共用实例里其他人的 vault（§1.6），结构同上，没有实例级设置
 vault.example/hebi8.yaml      首次运行时若 vault/ 不存在，复制为 vault/hebi8.yaml
 ```
 
 ### 1.1 `hebi8.yaml`
 
 ```yaml
+owner: dreaife                 # 可省；写了就是共用实例，这个 GitHub 账号是根 vault 的主人（§1.6）
 sync:
   at: ["07:30", "17:30"]       # 本地时间，按 tz 解释；美股收盘后、亚洲收盘后各一次
   tz: Asia/Tokyo
@@ -152,23 +154,49 @@ CREATE TABLE bars (
   PRIMARY KEY (key, t)
 ) WITHOUT ROWID;
 CREATE TABLE stats (
-  key TEXT PRIMARY KEY,                     -- 含合成标的
-  computed_at INTEGER NOT NULL, json TEXT NOT NULL
+  vault TEXT NOT NULL,                      -- §1.6：'' 是根 vault，其他是 GitHub login（小写）
+  key TEXT NOT NULL,                        -- 含合成标的
+  computed_at INTEGER NOT NULL, json TEXT NOT NULL,
+  PRIMARY KEY (vault, key)                  -- 按 vault 存：条件、prices 模式都是各人的
 );
 CREATE TABLE alert_state (                  -- §2.5；删库后第一次同步只记录、不推送
+  vault TEXT NOT NULL,
   rule TEXT NOT NULL, key TEXT NOT NULL,    -- rule：cond:<id> 或 alert:<hash>
   state INTEGER,                            -- 上次同步看到的结果 0/1
   fired_bar INTEGER,                        -- 上次推送时那根 K 线的 t，同一根只推一次
   fired_at INTEGER,
-  PRIMARY KEY (rule, key)
+  PRIMARY KEY (vault, rule, key)
 ) WITHOUT ROWID;
 ```
 
-`symbols` 里只有缓存和元数据，**没有任何用户字段**（名字、分组、基准、排序都在 yaml）。
+`symbols` 和 `bars` 里只有缓存和元数据，**没有任何用户字段**（名字、分组、基准、排序都在 yaml），所有人共用；`stats` 和 `alert_state` 按 vault 分开。两表加 `vault` 列的迁移直接删表重建，下次同步重算。
 
 ### 1.5 用户配置目录（`HEBI8_SECRETS`，默认 `~/.config/hebi8`，目录 700、文件 600）
 
-不在 vault、不在 data、不进 git：`sessions.json`（GitHub 登录，§5.8）与 `notify.json`（通知通道，§2.5）。
+不在 vault、不在 data、不进 git：`sessions.json`（GitHub 登录，§5.8）、`notify.json`（实例的通知设置，§2.5）、`notify-users.json`（每个人绑定的通道，§2.5）。
+
+### 1.6 多人共用一台实例
+
+局域网里几个人共用一台 hebi8：K 线缓存、同步、数据集是共享的；**自选、别名、公式指标、条件、告警、图表偏好、笔记、复盘、画线和通知都是各人的**。
+
+**开关**：根 vault 的 `hebi8.yaml` 写 `owner: <GitHub login>`。没写就是单用户模式，行为和现在完全一样（不用登录，谁都能改根 vault）。
+
+**谁看哪个 vault**（每个请求从 `hebi8_session` cookie 解析出 viewer，`src/lib/viewer.ts`）：
+
+| 访问者 | 看到 | 能改 |
+|---|---|---|
+| 单用户模式，任何人 | 根 vault | 根 vault |
+| owner 登录 | 根 vault | 根 vault，含实例设置 |
+| 其他人登录 | `vault/users/<login>/` | 自己的 vault |
+| 未登录 | 根 vault 的总览和图表（含画线） | 不能改；笔记、复盘页提示「登录后看自己的」 |
+
+- login 一律转小写作为目录名和 `vault` 列的值（GitHub login 只有字母数字和 `-`，大小写不敏感）。根 vault 的 `vault` 值是 `''`。
+- **实例级设置只认根 vault**：`owner`、`sync`、`datasets`。用户 yaml 里写了也忽略（页面上提示一次）。
+- **第一次登录**的非 owner：复制根 vault 的 `hebi8.yaml` 作为起点，去掉 `owner`、`sync`、`datasets`、`alerts`；notes / journal / charts 为空。之后两边互不影响。
+- **所有写操作**（Server Actions、写文件的 Route Handler）都先取 viewer，`canWrite` 为假就返回「请先登录」；写入路径只来自 viewer 的 vault 目录，不接受客户端传来的目录或 login。读操作同样只读 viewer 的 vault。
+- **同步**：要同步的 key 是所有 vault 的并集（各自的 groups、bench、公式引用、告警、charts 对比列表）。同步后对每个 vault 算一遍 stats 和告警。
+- **页头**：右侧显示当前身份。未登录是「登录」按钮（打开帮助抽屉里同一套 device flow）；登录后是头像 + login，菜单里有「通知设置」和「退出」。owner 模式下未登录时，总览顶部一行 muted 文字「正在看 <owner> 的列表 · 登录后用自己的」。
+- 登录会话和反馈共用（§5.8），30 天有效；退出只删会话，不动 vault。
 
 ---
 
@@ -206,7 +234,7 @@ interface SourceAdapter {
 
 ### 2.3 `syncAll(force?)` / `syncOne(key, force?)`
 
-- 要同步的 key 集合 = groups 里的 + 所有 `bench` + 公式/条件/合成表达式/各 `charts/*.json` 对比列表引用到的。别名本身不触发同步。
+- 要同步的 key 集合 = groups 里的 + 所有 `bench` + 公式/条件/告警/合成表达式/各 `charts/*.json` 对比列表引用到的；共用实例时取所有 vault 的并集（§1.6）。别名本身不触发同步。
 - 并发 4，同 key 去重，单个失败不影响其他；失败写 `sync_error`，页面上显示。
 - 同步完成后立刻对**每个标的（含合成）**计算 `stats` 并写表（§3.4）。
 - 读取路径（页面、API）**只读库**。首次运行库为空时，总览显示「首次拉取中…」并每 3s 刷新一次，同时后台触发 `syncAll`。
@@ -251,7 +279,9 @@ date,open,high,low,close,volume
 2. 这次为真、上次不为真、且最后一根 K 线的 `t` 不等于 `fired_bar`：推送，`fired_bar` 记成这根的 `t`。周线条件在本周反复真假时只推一次。
 3. 结果为 null（数据不够、公式出错）：不改状态。
 
-**投递**：一次同步的所有事件合成一条纯文本摘要，同时发到 `notify.json` 里配置的每个通道；有一个通道成功就提交状态，全部失败则不提交，下次同步再试。没有配置通道时只打日志、照常提交。
+**按人**：每个 vault 各自判定、各自投递，状态表按 `vault` 分开。
+
+**投递**：一个 vault 一次同步的所有事件合成一条纯文本摘要，同时发到这个人的每个通道；有一个通道成功就提交状态，全部失败则不提交，下次同步再试。没有配置通道时只打日志、照常提交。
 
 ```json
 {
@@ -261,10 +291,20 @@ date,open,high,low,close,volume
 }
 ```
 
+- `notify.json` 是**实例**的设置，由部署的人手写：bot 的 `token`、`api`，以及 `link`。其中 `telegram.chat` 和 `webhook` 是根 vault（单用户模式或 owner）的通道，和以前兼容。
+- 其他人的通道在 `notify-users.json`：`{ "<login>": { "telegram": { "chat": "..." }, "webhook": { "url": "...", "format": "text" } } }`，由页面写入（原子写、600），不手改。owner 也可以在页面上绑定，写进这里时优先于 `notify.json` 里的 chat / webhook。
 - `telegram.api` 可省，指向自建 Bot API 服务时改它。
 - `webhook.format`：`text`（默认，正文就是摘要，带 `Title` 头，适合 ntfy）或 `json`（`{ title, text, events }`）。
 - `link` 可省；有的话每条事件后面带图表页链接。
-- `npm run notify:test` 往所有通道发一条测试消息。
+- `npm run notify:test` 往 `notify.json` 里的通道发一条测试消息。
+
+**通知设置页面**（登录后，页头菜单「通知设置」打开帮助抽屉的「通知」页签；未登录或单用户模式下页签提示改 `notify.json`）：
+
+- **绑定 Telegram**：服务端生成一次性码（10 分钟有效，内存里），用 `getMe` 拿 bot 用户名，返回 `https://t.me/<bot>?start=<码>`；面板显示「打开 Telegram 点 Start」和等待状态。有待绑定的码时，服务端用 `getUpdates` 长轮询（timeout 25 秒，只往外连）读 bot 收到的消息；私聊里收到 `/start <码>` 就把这个 chat id 记到对应 login，回一句「已绑定 hebi8：<login>」，确认 update 的 offset。没有待绑定的码时不轮询。
+- 实例的 bot 必须是 hebi8 专用的：同一个 token 被别的程序（比如 Hermes 网关）`getUpdates` 时两边会抢消息。
+- **webhook**：输入地址和格式，保存前校验 http(s)。
+- **发测试消息**、**解除绑定**。状态行显示已绑定的通道（chat id 只显示后 4 位，webhook 只显示主机名）。
+- 接口：`GET /api/notify`（当前 viewer 的通道摘要）、`POST /api/notify/telegram`（开始绑定，返回链接）、`POST /api/notify/telegram/poll`（查绑定结果）、`PUT /api/notify/webhook`、`DELETE /api/notify/<channel>`、`POST /api/notify/test`。都要求登录，只作用于 viewer 自己。
 
 ---
 
@@ -580,4 +620,4 @@ schema v2 + 迁移；`adj` 因子与 `prices` 模式；适配器 meta；应用�
 
 ## 9. 不做的事
 
-登录鉴权（Tailscale 内网；GitHub 登录只用于提交反馈，不保护任何页面）；日内数据；实时或盘中告警（只在同步后推送日线规则的新触发，§2.5）；入站 webhook；数据集爬虫（hebi8 只读仓库）；多用户；Pine Script 兼容；拖拽排序（改 yaml）。
+对外网开放的登录鉴权（GitHub 登录只用来区分局域网里共用实例的人和提交反馈，不防恶意访问者，§1.6）；vault 之间的共享和协作编辑；日内数据；实时或盘中告警（只在同步后推送日线规则的新触发，§2.5）；入站 webhook；数据集爬虫（hebi8 只读仓库）；Pine Script 兼容；拖拽排序（改 yaml）。
