@@ -16,9 +16,14 @@
 - **对比**：把别的标的叠在主图上，用同百分比坐标——滚动、缩放时所有线从可见区间左边缘重新归零，和 TradingView 一致；单位不同的（比如美债收益率）放独立副图。
 - **画线**：趋势线、射线、延长线、水平线、水平射线、垂直线、斐波那契回撤、文字，只画在主图上；磁铁模式、锁定 / 隐藏 / 删除所有绘图。按时间戳保存，周线上画的线切到日线还在。选中后 `Delete` 删除，或右键菜单「删除」；`Esc` 退出绘制。
 - **笔记与复盘**：每个标的一篇 markdown 笔记（thesis）；每周一篇复盘日志。都是自动保存：停止输入 1 秒后写盘，`Ctrl/Cmd+S` 立即保存，浏览器里留一份草稿兜底。复盘页列出本周所有条件变化和有笔记的标的。
+- **帮助与反馈**：页头最右的「?」（或按 `?`）打开帮助抽屉：项目信息、版本、同步状态、快捷键；「反馈」页签把问题直接提交成 GitHub issue，自动附带当前页面、图表状态和最近的前端错误。
 - **合成标的**：`=BTC/GOLD` 这样的表达式当作标的看图、算统计、算条件，逐字段计算，和 TradingView 的 spread 一样。
 
 约束：单用户、无登录、只在内网用；只存日线，周 / 月 / 季线读时合成；读取永远不碰网络。
+
+### 设置应用内反馈
+
+打开 `?` → 反馈 →「配置 GitHub App」，在设置页点「在 GitHub 上创建 App」，GitHub 上点 **Create GitHub App**；跳到安装页后选 **Only select repositories → hebi8-market → Install**；回到本应用会自动打开反馈页签，点「用 GitHub 登录」并授权，之后几秒钟就能提交一条 issue。凭据存在服务器的 `~/.config/hebi8/`（`HEBI8_SECRETS` 可改，权限 600，不进仓库和 vault）。最好从常用的地址（例如 `:8808`）发起创建：App 的回调地址按这里的列表登记，安装完成后 GitHub 也回到发起创建的那个地址。
 
 ## 数据源
 
@@ -46,6 +51,7 @@ npm run dev        # http://localhost:3000
 | 快捷键 | 作用 |
 |---|---|
 | `/`、`Ctrl/Cmd+K` | 打开搜索（图表页直接敲字母、数字也行） |
+| `?` | 帮助与反馈（反馈里 `Ctrl/Cmd+Enter` 提交） |
 | `↑ ↓ Enter Tab Esc` | 搜索里移动、打开 / 添加、换分组、关闭 |
 | `Space`、`Shift+Space` | 图表页切自选列表下一只 / 上一只 |
 | `← →`、`↑ ↓` | 图表滚动、缩放 |
@@ -60,6 +66,8 @@ npm run dev        # http://localhost:3000
 | `HEBI8_VAULT` | `./vault` | 用户内容目录 |
 | `HEBI8_DB` | `./data/hebi8.db` | SQLite 缓存，删了会自动重建 |
 | `BINANCE_API_URL` | `https://api.binance.com` | 换成 `https://data-api.binance.vision` 等镜像 |
+| `HEBI8_SECRETS` | `~/.config/hebi8` | GitHub App 凭据与登录会话（反馈用），权限 700 / 600 |
+| `HEBI8_ORIGINS` | Tailscale 的 8808 / 8809 地址 | 逗号分隔，本应用被访问的地址；创建 GitHub App 时据此生成登录回调地址 |
 
 ## vault
 
@@ -130,16 +138,21 @@ src/
 │   ├── page.tsx              总览（RSC，直接读 vault 和 SQLite）
 │   ├── chart/[key]/page.tsx  图表页 /chart/yahoo%3ASPY
 │   ├── review/page.tsx       复盘
+│   ├── settings/github/      反馈用 GitHub App 的创建与安装状态
 │   ├── actions.ts            Server Actions：写 yaml / 笔记 / 日志 / 图表状态，刷新
 │   └── api/
 │       ├── bars/             日/周/月/季 K 线 + 对齐好的引用标的
-│       └── search/           外部搜索（Yahoo / TradingView / Binance），本地匹配在浏览器里
+│       ├── search/           外部搜索（Yahoo / TradingView / Binance），本地匹配在浏览器里
+│       ├── help/             帮助面板数据（只读本地）
+│       └── github/           App manifest、安装、登录、提交 / 列出反馈 issue
 ├── instrumentation.ts        启动应用内调度器
-├── components/               UiProvider（搜索浮层、toast、快捷键）/ SymbolSearch / Overview / RowMenu / ChartView / KChart / ChartLegend / IndicatorDialog / CompareDialog / WatchlistPanel / FormulaEditor / NotesPanel …
+├── components/               UiProvider（搜索浮层、帮助抽屉、toast、快捷键）/ HelpPanel/ SymbolSearch / Overview / RowMenu / ChartView / KChart / ChartLegend / IndicatorDialog / CompareDialog / WatchlistPanel / FormulaEditor / NotesPanel …
 ├── indicators/               指标目录、代码指标、公式引擎（formula.ts）、纯计算函数
 └── lib/
     ├── search.ts wellknown.ts 搜索的纯函数（匹配、过滤、去重、排序、分组推断）与内置字典
     ├── use-autosave.ts       笔记 / 复盘的自动保存
+    ├── github.ts secrets.ts  GitHub 调用（App JWT、登录、issue）与 ~/.config/hebi8 里的凭据
+    ├── feedback.ts           反馈 issue 的正文、标签与 hebi8-context 格式
     ├── sources/              yahoo / binance / tradingview 适配器
     ├── vault.ts config.ts    vault 的读写层、hebi8.yaml 的类型与校验
     ├── db.ts store.ts        SQLite 缓存（symbols、bars、stats）
