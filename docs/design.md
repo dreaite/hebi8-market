@@ -92,7 +92,7 @@ chart:                         # 全局图表偏好（UI 改动会写回这里�
 
 - 标的引用（groups、bench、公式里的 `close(X)`、合成表达式、对比列表）一律先查 `aliases`，查不到就当完整 key `source:ticker`。
 - `key` 格式：`yahoo:AAPL`、`yahoo:0700.HK`、`yahoo:^GSPC`、`binance:BTCUSDT`、`tv:TVC:US10Y`、`tv:FX_IDC:USDCNH`，或 `=表达式`。
-- 一个标的只出现在一个组里。没有 `name` 时用数据源返回的名字。
+- 一个标的只出现在一个组里。显示名：`name` > 内置字典（`src/lib/wellknown.ts`）的中文名 > 数据源返回的名字。
 - yaml 由 UI 写回时必须保留注释和顺序：用 `yaml` 包的 `parseDocument` 修改后 `toString()`，原子写入（写临时文件再 rename）。
 - yaml 解析失败时页面显示错误（含行号），服务不崩。
 
@@ -245,19 +245,29 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 
 ### 5.1 总览 `/`（RSC 直读 yaml + stats 表）
 
-- 顶部：`hebi8 market · 第八天，观测市场`；右侧「上次复盘 N 天前」（取最新 journal 的周）链到 `/review`；「刷新」；「+ 添加」；周期选择；涨跌色切换。
-- 按 group 分节，每节一张紧凑表格，列：名称（下行小字：代码 · 源 · 币种）· 价格 · 所选涨跌周期 · 距高点 · 52 周位置条 · 条件徽标 · sparkline。
-- 表头点击排序（数值列），默认 yaml 顺序；排序在客户端做。
-- 条件徽标：`now=true` 显示；本周新触发的带高亮点；本周新失效的显示为灰色带删除线。
-- 行点击进图表；hover 出「移除」（从 yaml 的组里删掉，缓存保留）。
-- 窄屏（< 768px）隐藏 sparkline 和 52 周列。
+- 顶部：`自选 · 上次同步`；右侧「上次复盘 N 天前」链到 `/review`、「周期 · 1周 1月 1年」（点开选择显示的涨跌周期）、涨跌色分段开关「绿涨 | 红涨」、「刷新」、「+ 添加」（打开全局搜索，见 §5.4）。
+- **一张表格**，`table-layout: fixed` + `<colgroup>`，分组做 subheader 行，所以「价格」列在每个分组里的 x 坐标一致。名称列吃剩余宽度并 truncate（title 显全名）；其余列固定：价格 112、每个涨跌周期 72、距高点 72、52 周 128、条件 220、两年 200、菜单 28。
+- 表头整格可点排序：第一次降序、第二次升序、第三次恢复 yaml 顺序；箭头指示方向（`aria-sort`）；**同一列的排序同时作用于所有分组**。
+- 整行是链接（`onClick` 路由 + 名称单元格是真正的 `<a>`，中键在新标签打开）。行尾「⋯」菜单始终可聚焦，视觉上 hover / focus / 打开时才显示；右键整行也打开：打开 / 移到分组 ▸（现有分组或新建）/ 改名 / 设基准 / 移除（toast「已移除 X · 撤销」，不用原生 confirm）。
+- 条件徽标三态，同一个 `Badge` 组件（复盘页也用）：`now=true` 普通描边；**本周新触发**淡高亮底（浅色 `bg-accent/10 border-accent/40 text-accent`，深色 `bg-accent/15 border-accent/50`）加圆点；**本周失效**虚线边、`opacity .55`，不用删除线。
+- 显示名：yaml `name` > 内置字典中文名 > 数据源名（超过 24 字符 truncate，hover 显全名）。
+- ≤768px 隐藏 sparkline 与 52 周列，徽标 `whitespace-nowrap`；≤640px 改为列表：第一行 名称 + 价格，第二行 所选涨跌周期，第三行 徽标；外层 `overflow-x-auto` 兜底，不允许横向溢出。
+- 页脚只显示相对路径 `vault/hebi8.yaml`。
 - 同步错误显示在该行；库为空时显示「首次拉取中…」并轮询。
 
 ### 5.2 图表 `/chart/[key]`（key 需 URL 编码，`yahoo:SPY → yahoo%3ASPY`，合成 `=BTC/GOLD → %3DBTC%2FGOLD`）
 
-工具栏：周期 `日 周 月 季` · K 线样式（实心 / 空心阳线 / 美国线 / 面积，默认实心蜡烛）· 对数 · 含分红 · 指标栏（同 v1：芯片开关、参数编辑按周期保存、公式指标编辑）· **对比** · **画线** · **笔记** · 刷新。
+头部：← 总览 · **名称（可点，打开搜索）** · `n / N`（在自选里的位置，‹ › 可点）· 代码 · 源 · 币种 · 基准（显示别名或短名，不显示数据源长名）· 最新价 · 本周期涨跌 · 同步时间。
 
-头部：名称 · 代码 · 源 · 基准 · 最新价 · 本周期涨跌 · 同步时间。
+**键盘**：`←/→` 与 `j/k` 按总览顺序切上一只 / 下一只（跨分组循环，客户端路由，周期等全局偏好保持；下一只的 `/api/bars` 低优先级预取）；焦点不在输入框时敲字母 / 数字直接打开搜索并带入该字符（`j`、`k` 除外）；`Esc` 关闭任何内联面板（对比、公式编辑、参数编辑、笔记编辑态、画线工具）。
+
+工具栏（控件统一 26px 高、12px 字、4px 圆角；按钮只有 primary 实心 / secondary 描边 / 纯文本三种；分段控件 `.seg`）：周期 `日 周 月 季` · K 线样式（自定义下拉，不用原生 `<select>`）· 对数（对比打开百分比坐标时禁用，旁边灰字「百分比坐标下不可用」）· 含分红 · 「对比 N」· 画线按钮组 `水平线 线段 射线 趋势线 斐波那契 文字 清除`（选中态高亮；图上角提示「水平线 · 在主图上点击 · Esc 退出」；画完自动退出）· 笔记 · 刷新。≤640px 时折成「周期分段 + 一个 ⋯ 菜单」，指标芯片一行横向滚动。
+
+指标栏同 v1：芯片 26px 高，参数文字激活 `fg`、未激活 `muted`（不用 accent），参数编辑按周期保存，公式指标编辑。
+
+**布局**：副图（指标、独立副图对比）每个固定 100px；图表容器的最小高度随副图数量增长（`max(520, (101 × 副图数 + 25) / 0.54)`），保证主图至少占 45%。主图 y 轴上方留白 `16 + 20 × (tooltip 行数 + 对比条数)` px（`overrideYAxis({ gap: { top } })`，≥1 按像素），让 OHLC / 均线 / 对比图例不压在 K 线上。画布字体：刻度与十字线用 mono 栈，tooltip 与标注用 sans 栈（`setStyles` 里设 `family`）。
+
+**窄屏**：≤768px 笔记改为底部抽屉（`fixed bottom-0`，最高 60vh），默认关闭；宽屏有笔记时默认打开。
 
 **对比（和 TradingView 一致的显示）**
 
@@ -265,9 +275,10 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 - `percent` 模式（默认）：主图叠加。主图 y 轴切到 KLineChart 的 `percentage`（`overrideYAxis({ paneId: "candle_pane", name: "percentage" })`；百分比轴与对数轴互斥，开对比时对数自动关闭，关掉所有对比后恢复）。每个对比标的是叠在 `candle_pane` 上的一个 indicator（`createIndicator({...}, true)`，`series: "price"`，一条线），值 = `mainClose[base] × cmpClose[i] / cmpClose[base]`，`base` 是**可见区间左边缘**那根（`getVisibleRange().realFrom`，若该处对比标的无数据则向右找第一根有数据的）。订阅 `subscribeAction("onVisibleRangeChange")`，去抖 ~80ms 后用 `overrideIndicator` 更新 base 重算——这样滚动、缩放时所有线都从左边缘重新归零，和 TV 的「同百分比坐标」行为一致。
 - `pane` 模式：对比标的放独立副图（`series: "normal"`，画原始收盘价，自己的坐标轴），用于美债收益率这类单位不同的叠加。
 - 图例（TV 风格）：主标的一行 `名称 O H L C 涨跌`；每个对比标的一行：颜色点 · 名称 · 当前（十字线处）数值与相对 base 的 % · 隐藏/显示 · 移除。优先用 KLineChart 自己的 tooltip：indicator 模板的 `createTooltipDataSource` 返回 `+12.3%` 这样的值，tooltip `features` 放眼睛和 × 图标，由 `onIndicatorTooltipFeatureClick` 处理；若实现不顺，用一个绝对定位的 React 图例覆盖在左上角，通过 `onCrosshairChange` 取十字线处的值。
-- 调色板（明暗模式都可读）：`#e8891d #8e5bd6 #1aa39a #d6409f #c9a227 #5b8def`，按添加顺序取。
+- 调色板（明暗模式都可读，且不与 KLineChart 默认指标色 `#FF9600 #935EBD #2196F3 #E11D74 #01C5C4` 撞色）：`#0e9aa7 #c2410c #2f6fde #a21caf #65a30d #4b5563`，按添加顺序取；线宽 2px。青和锈色排在前面，常见的一两条对比不会和均线同色。
+- 对比面板用全局搜索组件的 `pick` 模式（§5.4）：别名不区分大小写，自选 / 常用 / 搜索三段，Enter = 加入对比，加入后输入框清空；「主图叠加 / 独立副图」单选保留。`pane` 模式的图例同样显示相对可见区间起点的 %。
 
-**画线**：KLineChart 内置 overlay。工具：水平线 `horizontalStraightLine`、线段 `segment`、射线 `rayLine`、趋势线 `straightLine`、斐波那契 `fibonacciLine`、文字 `text`。画完 / 拖动结束 / 删除（overlay 的 `onDrawEnd`、`onPressedMoveEnd`、`onRemoved`）即序列化 `getOverlays()` 写回 `charts/<fileKey>.json`；加载时 `createOverlay` 恢复。提供「清除全部画线」。
+**画线**：KLineChart 内置 overlay。工具：水平线 `horizontalStraightLine`、线段 `segment`、射线 `rayLine`、趋势线 `straightLine`、斐波那契 `fibonacciLine`、文字 `simpleAnnotation`。画完 / 拖动结束 / 删除即序列化 `getOverlays()` 写回 `charts/<fileKey>.json`；加载时 `createOverlay` 恢复。**删除必须写回**：KLineChart 在把 overlay 从列表移除之前就调用 `onRemoved`，所以序列化时按 id 排除正在删除的那条。只保存主图（`candle_pane`）上的画线；在副图上点击会被丢弃并重新开始同一个工具（10.0.3 的 `paneId` 并不能把绘制钉在某个 pane）。提供「清除全部画线」。
 
 **笔记**：右侧可收起侧栏，显示 `notes/<fileKey>.md` 的渲染结果，「编辑」切换 textarea，保存走 Server Action。没有笔记时显示「写下为什么看它」。
 
@@ -275,19 +286,48 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 
 ### 5.3 复盘 `/review`
 
-- 本周 journal：编辑器（textarea）+ 保存；为空时填模板。
+- 本周 journal：textarea 自动聚焦，**自动保存**（§5.6）；为空时填模板。
 - 上周 journal：渲染展示。
-- 本周变化：遍历 stats，列出所有 `prev != now` 的 (标的, 条件)，按组排列，点击进图表。
-- 有笔记的标的：名称 + 笔记首行。
+- 本周变化：遍历 stats，列出所有 `prev != now` 的 (标的, 条件)，按组排列，用同一个 `Badge`（新触发 = 淡高亮，失效 = 虚线），点击进图表。
+- 有笔记的标的：名称 + 笔记首行**纯文本**（`plainFirstLine`：跳过标题和分隔线，去掉强调、代码、链接、图片、列表与引用标记）。
 
-### 5.4 添加标的
+### 5.4 全局搜索（找标的 / 切标的 / 加标的 / 对比，同一个组件 `SymbolSearch`）
 
-- `GET /api/search?q=`：合并 Yahoo `search`、TV `searchMarketV3`（输入含 `:` 或 Yahoo 结果少于 3 条时调用）、Binance 静态匹配；返回 `[{ key, name, exchange?, kind? }]`。
-- 表单：一个输入框（直接输 key/别名也行）→ 候选列表 → 选组 → 可选名称与基准 → 添加（Server Action：先 `syncOne(key, true)`，成功再写 yaml）。
+**入口**：页头中间的搜索框（占位「搜索标的 · 按 /」）；任何页面焦点不在输入框时按 `/` 或 `Ctrl/Cmd+K`；图表页直接敲字母 / 数字（带入该字符）；图表页标题可点；总览「+ 添加」；对比面板（`pick` 模式，内联）。`Esc` 关闭。
+
+**结果三段**（`role="combobox"` / `listbox` / `aria-activedescendant`，默认高亮第一行，↑↓ 移动，Enter 主动作，Tab 在高亮行的分组芯片间切换，鼠标点击 = Enter）：
+
+1. 「使用 `<key>`」：输入本身是合法 key（`yahoo:XXX`、`binance:XXX`、`tv:EX:SYM`、`=A/B`）或别名（不区分大小写）时永远是第一行。
+2. 「自选」：本地即时匹配，不区分大小写，匹配 name、ticker、key、yaml 别名、分组名、内置字典的中文名和拼音（全拼 / 首字母）；每行「名称 · 代码 · 分组」；Enter = 打开（图表页 = 客户端切换）。
+3. 「常用」：yaml `aliases` 与内置字典里尚未在自选的条目；Enter = 添加并打开。
+4. 「搜索」：外部结果，300ms 防抖（ASCII ≥2 字符，CJK ≥1）；状态「搜索中…」/「无结果，可直接输入 source:ticker 或 =表达式」；已在自选的行尾标「已在自选 · 分组」且 Enter = 打开。
+
+**添加**（`navigate` 模式，行不在自选时）：行尾显示推断的分组芯片——`binance` / 加密类 → 加密；`.HK/.SS/.SZ` 或 `tv:SSE/SZSE/HKEX` → 港 A；`tv:TVC/FX_IDC/OANDA` 或 kind ∈ index/bond/commodity/forex/cfd/currency/economic → 宏观；`=` → 比价；其余 → 美股。按组名（含同义词）匹配 yaml 里现有的组，没有就落到第一个组；高亮行展开全部芯片 + 「新建分组…」（内联输入）。Enter = `addSymbol` 到该组 + 立即开图；名称写 yaml 时取字典中文名；若输入的是中文搜索词且添加成功，把「搜索词 → key」写进 `aliases`；成功 toast「已添加到 港 A · 撤销」（撤销 = `removeSymbol`）；已存在 → 直接打开。
+
+**`pick` 模式**（对比面板）：主动作是「加入对比」，自选段也是；排除当前标的与已对比的 key。
+
+**后端**（纯函数在 `src/lib/search.ts`，可测试；路由只做编排）：规范化 query → 合法 key 直接返回 → 本地层（在浏览器里跑：自选 + aliases + 字典 `src/lib/wellknown.ts`，约 65 条 `{ key, zh, en, aliases }`，拼音直接写在 aliases 里，不引入拼音库）→ 外部层并行：
+
+- Binance：`/api/v3/ticker/price` 内存缓存 24h，取 `*USDT`，按币名前缀匹配，`<base>USDT` 完全匹配排最前。
+- Yahoo：仅 ASCII 查询（含 CJK 直接抛 `Invalid Search Query`）；过滤 FUTURE / OPTION / MUTUALFUND；外地挂牌（`.TO/.DU/.F/.DE/.L/.MX…`，`.HK/.SS/.SZ` 除外）只在查询本身含 `.` 时保留；同一公司只留主上市。
+- TradingView：查询含 CJK、或含 `:`、或 Yahoo 命中 < 3 时调用；含 `:` 时直接按交易所查，否则并行 `index`、`cfd`、`stock`（像收益率的查询再加 `bond`）各取前几条合并；丢 bond（除非查询像 `US10Y` / 收益率 / 国债）、structured、swap、dr、warrant、futures（除非查询含 `!` / 期货）、FINRA 等数据商序列；`<em>` 高亮去掉；大交易所的股票 / ETF 改写成 Yahoo key（`HKEX:700 → yahoo:0700.HK`、`SSE:600519 → yahoo:600519.SS`、`NASDAQ:AAPL → yahoo:AAPL`），`BINANCE:XXXUSDT → binance:XXXUSDT`。
+
+排序：精确代码匹配 > 自选 > 字典 > 来源偏好（股票 yahoo > tv；币 binance > yahoo；宏观 / 指数 / 汇率 tv:TVC/HSI/FX_IDC/OANDA > yahoo）> 名称前缀 > 交易所白名单（TVC、HSI、SSE、SZSE、HKEX、NASDAQ、NYSE、BINANCE、FX_IDC、OANDA）> 其余按到达顺序。同一标的多源去重（`yahoo:BTC-USD` 与 `binance:BTCUSDT` 算同一个，币优先 binance）。返回 `{ key, name, exchange?, kind?, source, inWatchlist?, suggestedGroup }`，最多 12 条。
 
 ### 5.5 设置
 
-不做单独页面。周期选择、涨跌色、图表偏好由各处 UI 写回 yaml；其余（同步时间、别名、条件）直接改 yaml，页面上给出 vault 路径提示。
+不做单独页面。周期选择、涨跌色、图表偏好由各处 UI 写回 yaml；分组、名称、基准由总览行菜单写回；其余（同步时间、别名、条件）直接改 yaml，页面上给出 vault 相对路径提示。
+
+### 5.6 自动保存（笔记与复盘日志）
+
+`useAutosave`：输入停止 1s 后保存（Server Action）；`Ctrl/Cmd+S` 立即保存；保存中又有输入则保存完再发最新的；dirty 时 `beforeunload` 拦截；状态文字用 muted 色：「已保存 12:03」/「保存中…」/「未保存」/「保存失败：…」。localStorage 草稿兜底：key 含文件名（`hebi8:draft:notes/<fileKey>.md`、`hebi8:draft:journal/<week>.md`），每次输入写入，保存成功即清；打开时若有草稿、内容与文件不同且比文件的 mtime 新，横幅提示「有 12:03 的未保存草稿 · 恢复 / 丢弃」。笔记面板保留「编辑 / 完成」切换，没有保存按钮。
+
+### 5.7 视觉规范（客观项）
+
+- 次要文字最小 11px；浅色 `--green: #138a4b`（白底 ≥ 4.5:1），深色不变。
+- 所有可聚焦元素统一 `:focus-visible` 2px accent 外框。
+- 状态文字（已保存等）用 muted，不用 accent。
+- 全站按钮：`.btn` 纯文本（hover 底色）、`.btn-primary`（实心 fg 底 + bg 字）、`.btn-secondary`（1px line 描边）；分段 `.seg`；输入 `.input`；徽标 `.badge`；菜单 `.menu`。
 
 ---
 
@@ -297,9 +337,9 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 
 - `GET /api/bars?key=&tf=D|W|M|Q&prices=split|total&with=k1,k2`
   → `{ symbol: {key, name, source, ticker, currency, bench, syncedAt, syncError}, pricePrecision, bars: [{timestamp, open, high, low, close, volume}], refs: { [key]: { c: (number|null)[], o?, h?, l?, v? } } }`，`refs` 与 `bars` 等长对齐。按 `synced_at` 生成 ETag。
-- `GET /api/search?q=`
+- `GET /api/search?q=` → 外部结果 `SearchResult[]`（§5.4；本地层在浏览器里算）。
 
-**Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench? })`、`removeSymbol(key)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveCondition(def)` / `deleteCondition(id)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`。
+**Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench?, alias? })`、`removeSymbol(key)`、`moveSymbol(key, group)`、`renameSymbol(key, name)`、`setBench(key, bench | null)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveCondition(def)` / `deleteCondition(id)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`。Server Action 在客户端是**串行派发**的，自动保存靠去抖合并，不并行发。
 
 所有写入校验输入；文件路径只能落在 vault 内（fileKey 已保证无 `/`、`..`）；写入原子。
 

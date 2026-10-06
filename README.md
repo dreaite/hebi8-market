@@ -10,11 +10,12 @@
 | 深看 | `/chart/[key]` 图表：K 线、指标、对比、画线、笔记 | 值得细看的几个，结构是什么样？和别的比呢？ |
 | 记录 | `/review` 复盘：本周日志、上周日志、本周变化汇总 | 上周怎么想的，这周怎么想？ |
 
-- **总览**：按 `hebi8.yaml` 里的分组列表格，显示最新价、所选周期的涨跌、距历史高点的回撤、52 周区间位置、条件徽标和近两年的周线迷你图。表头可排序；条件在本周新触发的带高亮点，本周失效的显示为灰色删除线。
-- **图表**：基于 [KLineChart](https://github.com/klinecharts/KLineChart)，日 / 周 / 月 / 季线，对数坐标，四种 K 线样式，「含分红」切换总回报价格。内置指标、代码指标和公式指标都可开关、改参数，参数按周期保存。
+- **搜索**：页头搜索框，或在任何页面按 `/`、`Ctrl/Cmd+K`；图表页直接敲字母就开始搜。本地即时匹配自选、别名和一本约 65 条的内置字典（中文名、拼音、首字母：「腾讯」「tx」「maotai」都行），外部再查 Yahoo / TradingView / Binance。Enter 打开；不在自选的回车就按推断的分组加入并开图，Tab 换组，toast 可撤销。
+- **总览**：按 `hebi8.yaml` 里的分组列一张表，显示最新价、所选周期的涨跌、距历史高点的回撤、52 周区间位置、条件徽标和近两年的周线迷你图。表头点击对所有分组排序（降序 → 升序 → 默认）；整行可点，行尾「⋯」或右键：移到分组、改名、设基准、移除（可撤销）。本周新触发的条件淡高亮，本周失效的虚线。
+- **图表**：基于 [KLineChart](https://github.com/klinecharts/KLineChart)，日 / 周 / 月 / 季线，对数坐标，四种 K 线样式，「含分红」切换总回报价格。内置指标、代码指标和公式指标都可开关、改参数，参数按周期保存。`←/→` 或 `j/k` 按总览顺序切换标的，标题旁显示「3 / 11」；`Esc` 关掉任何面板。
 - **对比**：把别的标的叠在主图上，用同百分比坐标——滚动、缩放时所有线从可见区间左边缘重新归零，和 TradingView 一致；单位不同的（比如美债收益率）放独立副图。
-- **画线**：水平线、线段、射线、趋势线、斐波那契、文字标注。按时间戳保存，周线上画的线切到日线还在。右键删除一条。
-- **笔记与复盘**：每个标的一篇 markdown 笔记（thesis）；每周一篇复盘日志，复盘页列出本周所有条件变化和有笔记的标的。
+- **画线**：水平线、线段、射线、趋势线、斐波那契、文字标注，只画在主图上。按时间戳保存，周线上画的线切到日线还在。右键删除一条，`Esc` 退出绘制。
+- **笔记与复盘**：每个标的一篇 markdown 笔记（thesis）；每周一篇复盘日志。都是自动保存：停止输入 1 秒后写盘，`Ctrl/Cmd+S` 立即保存，浏览器里留一份草稿兜底。复盘页列出本周所有条件变化和有笔记的标的。
 - **合成标的**：`=BTC/GOLD` 这样的表达式当作标的看图、算统计、算条件，逐字段计算，和 TradingView 的 spread 一样。
 
 约束：单用户、无登录、只在内网用；只存日线，周 / 月 / 季线读时合成；读取永远不碰网络。
@@ -42,6 +43,14 @@ npm run dev        # http://localhost:3000
 
 生产模式 `npm run build && npm start`。
 
+| 快捷键 | 作用 |
+|---|---|
+| `/`、`Ctrl/Cmd+K` | 打开搜索（图表页直接敲字母、数字也行） |
+| `↑ ↓ Enter Tab Esc` | 搜索里移动、打开 / 添加、换分组、关闭 |
+| `← →`、`j k` | 图表页切上一只 / 下一只 |
+| `Esc` | 关闭面板、退出画线 |
+| `Ctrl/Cmd+S` | 立即保存笔记 / 复盘 |
+
 | 环境变量 | 默认值 | 作用 |
 |---|---|---|
 | `HEBI8_VAULT` | `./vault` | 用户内容目录 |
@@ -60,9 +69,10 @@ vault/
   charts/<fileKey>.json       每个标的的对比列表和画线
 ```
 
-`hebi8.yaml` 的样子见 `vault.example/hebi8.yaml`。界面上改周期、涨跌色、图表偏好、添加 / 移除标的、编辑公式指标时会写回这个文件，注释和顺序都保留；同步时间、别名、条件直接改文件，不用重启。
+`hebi8.yaml` 的样子见 `vault.example/hebi8.yaml`。界面上改周期、涨跌色、图表偏好、添加 / 移除 / 移动 / 改名标的、设基准、编辑公式指标时会写回这个文件，注释和顺序都保留；同步时间、别名、条件直接改文件，不用重启。搜索时用中文词添加的标的，这个词会记进 `aliases`。
 
-- 标的引用（分组、`bench`、公式里的 `close(X)`、合成表达式、对比）先查 `aliases`，查不到就当完整 key。
+- 标的引用（分组、`bench`、公式里的 `close(X)`、合成表达式、对比、搜索）先查 `aliases`，查不到就当完整 key。
+- 显示名：yaml 里的 `name` > 内置字典的中文名 > 数据源的名字。
 - `bench` 是相对强弱和 `close(bench)` 的默认基准。
 - `conditions` 在每次同步后按周线计算，`prev != now` 就是本周的变化。
 - `fileKey`：`tv:TVC:US10Y → tv_TVC_US10Y`，`=BTC/GOLD → expr_BTC_GOLD`。
@@ -119,11 +129,13 @@ src/
 │   ├── actions.ts            Server Actions：写 yaml / 笔记 / 日志 / 图表状态，刷新
 │   └── api/
 │       ├── bars/             日/周/月/季 K 线 + 对齐好的引用标的
-│       └── search/           添加标的时的搜索（Yahoo / TradingView / Binance）
+│       └── search/           外部搜索（Yahoo / TradingView / Binance），本地匹配在浏览器里
 ├── instrumentation.ts        启动应用内调度器
-├── components/               Overview / ChartView / KChart / IndicatorBar / FormulaEditor / NotesPanel …
+├── components/               UiProvider（搜索浮层、toast、快捷键）/ SymbolSearch / Overview / RowMenu / ChartView / KChart / IndicatorBar / FormulaEditor / NotesPanel …
 ├── indicators/               指标目录、代码指标、公式引擎（formula.ts）、纯计算函数
 └── lib/
+    ├── search.ts wellknown.ts 搜索的纯函数（匹配、过滤、去重、排序、分组推断）与内置字典
+    ├── use-autosave.ts       笔记 / 复盘的自动保存
     ├── sources/              yahoo / binance / tradingview 适配器
     ├── vault.ts config.ts    vault 的读写层、hebi8.yaml 的类型与校验
     ├── db.ts store.ts        SQLite 缓存（symbols、bars、stats）
