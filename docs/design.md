@@ -237,7 +237,7 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 - `compile(source)` 额外返回 `refs: string[]`（引用到的标的，别名已解析为 key）。
 - `evaluate(program, { bars, refs: { [key]: AlignedBar[] } })`。
 
-**用在三处**：图表指标（客户端，KLineChart 模板）、总览条件（服务端，同步时按周线）、对比面板（客户端）。引擎是纯 TS，没有环境依赖。
+**用在三处**：图表指标（客户端，KLineChart 模板）、总览条件（服务端，同步时按周线）、对比（客户端）。引擎是纯 TS，没有环境依赖。
 
 ---
 
@@ -257,32 +257,55 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 
 ### 5.2 图表 `/chart/[key]`（key 需 URL 编码，`yahoo:SPY → yahoo%3ASPY`，合成 `=BTC/GOLD → %3DBTC%2FGOLD`）
 
-头部：← 总览 · **名称（可点，打开搜索）** · `n / N`（在自选里的位置，‹ › 可点）· 代码 · 源 · 币种 · 基准（显示别名或短名，不显示数据源长名）· 最新价 · 本周期涨跌 · 同步时间。
+**原则：照搬 TradingView 的操作模型。** 有 TV 肌肉记忆的人不用学；界面文字尽量用 TV 中文版的说法（指标、比较商品、自选列表、十字光标……）。页面占满页头以下的视口（`height: calc(100dvh - var(--site-header-h))`），最小高度随副图数量增长（见下文布局）。
 
-**键盘**：`←/→` 与 `j/k` 按总览顺序切上一只 / 下一只（跨分组循环，客户端路由，周期等全局偏好保持；下一只的 `/api/bars` 低优先级预取）；焦点不在输入框时敲字母 / 数字直接打开搜索并带入该字符（`j`、`k` 除外）；`Esc` 关闭任何内联面板（对比、公式编辑、参数编辑、笔记编辑态、画线工具）。
+**布局（TV 桌面版）**
 
-工具栏（控件统一 26px 高、12px 字、4px 圆角；按钮只有 primary 实心 / secondary 描边 / 纯文本三种；分段控件 `.seg`）：周期 `日 周 月 季` · K 线样式（自定义下拉，不用原生 `<select>`）· 对数（对比打开百分比坐标时禁用，旁边灰字「百分比坐标下不可用」）· 含分红 · 「对比 N」· 画线按钮组 `水平线 线段 射线 趋势线 斐波那契 文字 清除`（选中态高亮；图上角提示「水平线 · 在主图上点击 · Esc 退出」；画完自动退出）· 笔记 · 刷新。≤640px 时折成「周期分段 + 一个 ⋯ 菜单」，指标芯片一行横向滚动。
+- **顶部工具栏**（一行，38px，按钮 30px 热区，组间 1px 竖分隔线）：`‹ 总览` · **商品按钮**（放大镜 + 代码 + 名称，点开全局搜索换标的）· `+` **比较商品** · 周期快捷按钮 `日 周 月 季` · **图表类型**（图标 + 下拉：实心 K 线 / 空心阳线 / 美国线 / 面积）· `fx 指标` · ……右端 **刷新**（tooltip 显示同步时间，加载时图标转动）· **全屏**（`document.documentElement.requestFullscreen()`，全屏时隐藏站点页头，弹窗和搜索浮层照常可用）。
+- **左侧画线工具栏**（42px 竖条，图标按钮，tooltip「名称 · 快捷键」）：十字光标（= 退出画线）· 趋势线 `segment` · 射线 `rayLine` · 延长线 `straightLine` · 水平线 `horizontalStraightLine` · 水平射线 `horizontalRayLine` · 垂直线 `verticalStraightLine` · 斐波那契回撤 `fibonacciLine` · 文字 `simpleAnnotation` ｜ 磁铁模式（overlay `mode: weak_magnet`）· 锁定所有绘图 · 隐藏所有绘图 · 删除所有绘图（确认）。当前工具高亮；画完一条自动回到十字光标（TV 默认）；开始画线时若「隐藏所有绘图」开着会先显示出来。磁铁 / 锁定 / 隐藏是纯界面偏好，存 localStorage（`hebi8:chart:drawing`），作用于所有画线和之后新画的。
+- **图内图例（左上角，TV 样式，React 覆盖层 `ChartLegend`）**：第一行 `名称 周期 · 源 · 币种 · 基准` + `开 高 低 收` + 涨跌（相对上一根收盘，十字线处或最后一根）；然后每个百分比对比一行、每个主图指标一行（名称 + 参数 + 各条线的值，颜色同线）；副图指标 / 新窗格对比的行放在各自窗格左上角（`chart.getSize(paneId).top`）。行上悬停（鼠标指针事件，不用 CSS `:hover`，触屏上点一下）出现 **眼睛**（隐藏 / 显示，会话内）· **设置**（内置指标 = 参数弹窗，按当前周期保存；公式指标 = 公式编辑器）· **×**（移除）；双击行 = 设置。KLineChart 自己的蜡烛与指标 tooltip 关闭（`showRule: "none"`），数值由 `indicator.result` 和图形样式按 KLineChart 同样的规则取（线色按 `lines[i]`，柱按 `figure.styles` 动态色）。
+- **右侧边栏**：最右 42px 图标条（自选列表 · 笔记），面板 280px，同一时间只开一个，上次打开的记在 localStorage（`hebi8:chart:panel`；没记过时有笔记就默认开笔记）。**自选列表**按 yaml 分组，每行名称 · 最新价 · 总览第一个周期的涨跌（`stats`），当前标的高亮，点击客户端切换（偏好不变）。**笔记**即原来的笔记面板。
+- **底部栏**（32px）：左边日期范围 `1年 3年 5年 10年 全部`——按当前周期算出这段有多少根，`setBarSpace(可用宽度 / 根数)` 后 `scrollToRealTime()`；若每根不足 1px（例如日线 10 年），像 TV 一样自动升到下一个周期（日 → 周 → 月）再适配。右边 `ADJ`（含分红，总回报）· `%`（百分比坐标，localStorage）· `log` · `自动`（重新启用价格轴自动缩放；拖动价格轴后它会熄灭）。`%` 与 `log` 互斥；有百分比对比时 `%` 显示为按下且锁定，tooltip「比较模式下使用百分比坐标」，`log` 禁用。
+- **窄屏（≤768px，TV 移动版）**：顶部工具栏一行横向滚动；左侧画线栏隐藏，改为顶栏里的「画线」下拉（工具 + 磁铁 / 锁定 / 隐藏 / 删除）；右侧图标条隐藏，自选 / 笔记按钮进顶栏，面板变成底部抽屉（60vh，默认关闭）；底部栏仍是一行。390px 宽无横向溢出。下拉菜单用 `position: fixed` 按按钮位置弹出，不被滚动的工具栏裁掉。
 
-指标栏同 v1：芯片 26px 高，参数文字激活 `fg`、未激活 `muted`（不用 accent），参数编辑按周期保存，公式指标编辑。
+**快捷键（TV 默认；焦点在输入框里时不响应，`Esc` 除外）**
 
-**布局**：副图（指标、独立副图对比）每个固定 100px；图表容器的最小高度随副图数量增长（`max(520, (101 × 副图数 + 25) / 0.54)`），保证主图至少占 45%。主图 y 轴上方留白 `16 + 20 × (tooltip 行数 + 对比条数)` px（`overrideYAxis({ gap: { top } })`，≥1 按像素），让 OHLC / 均线 / 对比图例不压在 K 线上。画布字体：刻度与十字线用 mono 栈，tooltip 与标注用 sans 栈（`setStyles` 里设 `family`）。
+| 键 | 作用 |
+|---|---|
+| 字母 / 数字 | 打开搜索并带入该字符（换标的） |
+| `/`、`Ctrl/Cmd+K` | 打开搜索 |
+| `Alt+T` / `Alt+H` / `Alt+J` / `Alt+V` / `Alt+F` | 趋势线 / 水平线 / 水平射线 / 垂直线 / 斐波那契回撤 |
+| `Esc` | 退出画线、关闭弹窗和菜单 |
+| `Delete` / `Backspace` | 删除选中的画线（KLineChart `onSelected` / `onDeselected` 跟踪选中）；右键画线弹出「删除」菜单（TV 样式，不再右键直接删） |
+| `Alt+R` | 重置图表：回到最新、默认缩放、价格轴自动 |
+| `←` / `→` | 向更早 / 更新滚动可见宽度的 10% |
+| `↑` / `↓` | 放大 / 缩小 |
+| `Space` / `Shift+Space` | 自选列表下一只 / 上一只（跨分组循环，客户端路由；下一只的 `/api/bars` 低优先级预取） |
 
-**窄屏**：≤768px 笔记改为底部抽屉（`fixed bottom-0`，最高 60vh），默认关闭；宽屏有笔记时默认打开。
+KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
+
+**弹窗**
+
+- **指标**（TV「指标、度量和策略」）：顶部搜索框（同时搜内置与公式），左栏分类「内置 / 我的公式」，列表点一下添加，已添加的打勾、再点移除；需要基准而标的没有 `bench` 的灰掉。「我的公式」里每行有编辑按钮，末尾「新建公式」，都在弹窗内打开公式编辑器。开关照旧写回 yaml `chart.indicators`。
+- **设置**（图例齿轮）：参数输入框（逗号分隔，聚焦全选），说明「只对周线生效」，恢复默认 / 取消 / 确定；参数按周期写回 `chart.params`（去抖）。
+- **比较商品**：见下文对比。
+
+**布局细节**：副图（指标、新窗格对比）每个固定 100px，指标窗格排在对比窗格上面（`setPaneOptions({ order })`）；图表最小高度 `max(520, (101 × 副图数 + 25) / 0.54)`，保证主图至少占 45%。主图上方留给图例的空白 = 图例实测高度 + 12px：KLineChart 的 `gap.top` 是把值域按比例放大（像素值先除以窗格高度），实际留白会偏小，所以按 `top = px × (1 + bottom) / (H − px)` 反解成比例传入，窗格高度变化时重算（仅在自动缩放时）。画布字体：刻度与十字线 mono，标注 sans。
 
 **对比（和 TradingView 一致的显示）**
 
-- 「对比」按钮弹出输入框：可输别名、完整 key，或搜索（§5.4 的搜索接口）；添加后写入 `charts/<fileKey>.json`。
+- 顶栏 `+` 打开「比较商品」弹窗：可输别名、完整 key，或搜索（§5.4 的搜索接口）；高亮行上两个按钮「同百分比坐标」（Enter，默认）/「新窗格」，和 TV 一样；下方列出已添加的对比，可移除。添加后写入 `charts/<fileKey>.json`。
 - `percent` 模式（默认）：主图叠加。主图 y 轴切到 KLineChart 的 `percentage`（`overrideYAxis({ paneId: "candle_pane", name: "percentage" })`；百分比轴与对数轴互斥，开对比时对数自动关闭，关掉所有对比后恢复）。每个对比标的是叠在 `candle_pane` 上的一个 indicator（`createIndicator({...}, true)`，`series: "price"`，一条线），值 = `mainClose[base] × cmpClose[i] / cmpClose[base]`，`base` 是**可见区间左边缘**那根（`getVisibleRange().realFrom`，若该处对比标的无数据则向右找第一根有数据的）。订阅 `subscribeAction("onVisibleRangeChange")`，去抖 ~80ms 后用 `overrideIndicator` 更新 base 重算——这样滚动、缩放时所有线都从左边缘重新归零，和 TV 的「同百分比坐标」行为一致。
 - `pane` 模式：对比标的放独立副图（`series: "normal"`，画原始收盘价，自己的坐标轴），用于美债收益率这类单位不同的叠加。
-- 图例（TV 风格）：主标的一行 `名称 O H L C 涨跌`；每个对比标的一行：颜色点 · 名称 · 当前（十字线处）数值与相对 base 的 % · 隐藏/显示 · 移除。优先用 KLineChart 自己的 tooltip：indicator 模板的 `createTooltipDataSource` 返回 `+12.3%` 这样的值，tooltip `features` 放眼睛和 × 图标，由 `onIndicatorTooltipFeatureClick` 处理；若实现不顺，用一个绝对定位的 React 图例覆盖在左上角，通过 `onCrosshairChange` 取十字线处的值。
+- 图例：每个对比标的一行（名称用线的颜色）· 十字线处的收盘价 · 相对 base 的 %；悬停出现眼睛（隐藏 / 显示）和 ×（移除）。百分比对比在主图图例里，新窗格对比在自己窗格的左上角。
 - 调色板（明暗模式都可读，且不与 KLineChart 默认指标色 `#FF9600 #935EBD #2196F3 #E11D74 #01C5C4` 撞色）：`#0e9aa7 #c2410c #2f6fde #a21caf #65a30d #4b5563`，按添加顺序取；线宽 2px。青和锈色排在前面，常见的一两条对比不会和均线同色。
-- 对比面板用全局搜索组件的 `pick` 模式（§5.4）：别名不区分大小写，自选 / 常用 / 搜索三段，Enter = 加入对比，加入后输入框清空；「主图叠加 / 独立副图」单选保留。`pane` 模式的图例同样显示相对可见区间起点的 %。
+- 比较商品弹窗用全局搜索组件的 `pick` 模式（§5.4，`pickActions` 给出两个按钮）：别名不区分大小写，自选 / 常用 / 搜索三段，Enter = 同百分比坐标，加入后输入框清空。`pane` 模式的图例同样显示相对可见区间起点的 %。
 
-**画线**：KLineChart 内置 overlay。工具：水平线 `horizontalStraightLine`、线段 `segment`、射线 `rayLine`、趋势线 `straightLine`、斐波那契 `fibonacciLine`、文字 `simpleAnnotation`。画完 / 拖动结束 / 删除即序列化 `getOverlays()` 写回 `charts/<fileKey>.json`；加载时 `createOverlay` 恢复。**删除必须写回**：KLineChart 在把 overlay 从列表移除之前就调用 `onRemoved`，所以序列化时按 id 排除正在删除的那条。只保存主图（`candle_pane`）上的画线；在副图上点击会被丢弃并重新开始同一个工具（10.0.3 的 `paneId` 并不能把绘制钉在某个 pane）。提供「清除全部画线」。
+**画线**：KLineChart 内置 overlay，工具见左侧画线栏（TV 的「趋势线」是有限线段，对应 `segment`；无限延伸的 `straightLine` 叫「延长线」）。画完 / 拖动结束 / 删除即序列化 `getOverlays()` 写回 `charts/<fileKey>.json`；加载时 `createOverlay` 恢复。**删除必须写回**：KLineChart 在把 overlay 从列表移除之前就调用 `onRemoved`，所以序列化时按 id 排除正在删除的那条。只保存主图（`candle_pane`）上的画线；在副图上点击会被丢弃并重新开始同一个工具（10.0.3 的 `paneId` 并不能把绘制钉在某个 pane）。「锁定所有绘图」是界面模式，不写进每条画线的 `lock`。
 
-**笔记**：右侧可收起侧栏，显示 `notes/<fileKey>.md` 的渲染结果，「编辑」切换 textarea，保存走 Server Action。没有笔记时显示「写下为什么看它」。
+**笔记**：右侧边栏的「笔记」面板，显示 `notes/<fileKey>.md` 的渲染结果，「编辑」切换 textarea，自动保存走 Server Action。没有笔记时显示「写下为什么看它」。
 
-**数据流**：客户端组件请求 `GET /api/bars?key=&tf=&prices=&with=k1,k2`，`with` = 对比列表 ∪ 已开启公式指标的 `refs` ∪ bench；响应里带对齐好的 `refs`，公式模板通过闭包拿到。`tf`/`log`/`style`/指标开关/参数变化写回 yaml `chart:`（参数编辑去抖）。
+**数据流**：客户端组件请求 `GET /api/bars?key=&tf=&prices=&with=k1,k2`，`with` = 对比列表 ∪ 已开启公式指标的 `refs` ∪ bench；响应里带对齐好的 `refs`，公式模板通过闭包拿到。`tf`/`log`/`style`/指标开关/参数变化写回 yaml `chart:`（参数编辑去抖），`ADJ` 写回 `prices`；`%` 坐标、画线模式、侧栏面板只存 localStorage。图例的眼睛（隐藏指标 / 对比）只在当前页面有效。
 
 ### 5.3 复盘 `/review`
 
@@ -293,7 +316,7 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 
 ### 5.4 全局搜索（找标的 / 切标的 / 加标的 / 对比，同一个组件 `SymbolSearch`）
 
-**入口**：页头中间的搜索框（占位「搜索标的 · 按 /」）；任何页面焦点不在输入框时按 `/` 或 `Ctrl/Cmd+K`；图表页直接敲字母 / 数字（带入该字符）；图表页标题可点；总览「+ 添加」；对比面板（`pick` 模式，内联）。`Esc` 关闭。
+**入口**：页头中间的搜索框（占位「搜索标的 · 按 /」）；任何页面焦点不在输入框时按 `/` 或 `Ctrl/Cmd+K`；图表页直接敲字母 / 数字（带入该字符）；图表页顶栏的商品按钮；总览「+ 添加」；比较商品弹窗（`pick` 模式）。`Esc` 关闭。
 
 **结果三段**（`role="combobox"` / `listbox` / `aria-activedescendant`，默认高亮第一行，↑↓ 移动，Enter 主动作，Tab 在高亮行的分组芯片间切换，鼠标点击 = Enter）：
 
@@ -304,7 +327,7 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 
 **添加**（`navigate` 模式，行不在自选时）：行尾显示推断的分组芯片——`binance` / 加密类 → 加密；`.HK/.SS/.SZ` 或 `tv:SSE/SZSE/HKEX` → 港 A；`tv:TVC/FX_IDC/OANDA` 或 kind ∈ index/bond/commodity/forex/cfd/currency/economic → 宏观；`=` → 比价；其余 → 美股。按组名（含同义词）匹配 yaml 里现有的组，没有就落到第一个组；高亮行展开全部芯片 + 「新建分组…」（内联输入）。Enter = `addSymbol` 到该组 + 立即开图；名称写 yaml 时取字典中文名；若输入的是中文搜索词且添加成功，把「搜索词 → key」写进 `aliases`；成功 toast「已添加到 港 A · 撤销」（撤销 = `removeSymbol`）；已存在 → 直接打开。
 
-**`pick` 模式**（对比面板）：主动作是「加入对比」，自选段也是；排除当前标的与已对比的 key。
+**`pick` 模式**（比较商品弹窗）：主动作由 `pickActions` 给出（「同百分比坐标」/「新窗格」，高亮行上显示为按钮，Enter = 第一个），自选段也是；排除当前标的与已对比的 key。
 
 **后端**（纯函数在 `src/lib/search.ts`，可测试；路由只做编排）：规范化 query → 合法 key 直接返回 → 本地层（在浏览器里跑：自选 + aliases + 字典 `src/lib/wellknown.ts`，约 65 条 `{ key, zh, en, aliases }`，拼音直接写在 aliases 里，不引入拼音库）→ 外部层并行：
 
@@ -328,6 +351,7 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 - 所有可聚焦元素统一 `:focus-visible` 2px accent 外框。
 - 状态文字（已保存等）用 muted，不用 accent。
 - 全站按钮：`.btn` 纯文本（hover 底色）、`.btn-primary`（实心 fg 底 + bg 字）、`.btn-secondary`（1px line 描边）；分段 `.seg`；输入 `.input`；徽标 `.badge`；菜单 `.menu`。
+- 图表页工具栏：`.tb-btn`（30px 热区、fg 色图标或图标 + 短文字、hover 浅底，按下 / 展开时 fg 11% 实底）、`.tb-sep` / `.tb-sep-h` 1px 分隔；图标是 `chart-icons.tsx` 里的 18px 线性 SVG，不引入图标库。
 
 ---
 

@@ -12,9 +12,9 @@
 
 - **搜索**：页头搜索框，或在任何页面按 `/`、`Ctrl/Cmd+K`；图表页直接敲字母就开始搜。本地即时匹配自选、别名和一本约 65 条的内置字典（中文名、拼音、首字母：「腾讯」「tx」「maotai」都行），外部再查 Yahoo / TradingView / Binance。Enter 打开；不在自选的回车就按推断的分组加入并开图，Tab 换组，toast 可撤销。
 - **总览**：按 `hebi8.yaml` 里的分组列一张表，显示最新价、所选周期的涨跌、距历史高点的回撤、52 周区间位置、条件徽标和近两年的周线迷你图。表头点击对所有分组排序（降序 → 升序 → 默认）；整行可点，行尾「⋯」或右键：移到分组、改名、设基准、移除（可撤销）。本周新触发的条件淡高亮，本周失效的虚线。
-- **图表**：基于 [KLineChart](https://github.com/klinecharts/KLineChart)，日 / 周 / 月 / 季线，对数坐标，四种 K 线样式，「含分红」切换总回报价格。内置指标、代码指标和公式指标都可开关、改参数，参数按周期保存。`←/→` 或 `j/k` 按总览顺序切换标的，标题旁显示「3 / 11」；`Esc` 关掉任何面板。
+- **图表**：基于 [KLineChart](https://github.com/klinecharts/KLineChart)，布局和快捷键照搬 TradingView：顶栏是商品搜索、`+` 比较商品、`日 周 月 季`、图表类型、`fx 指标`、刷新、全屏；左边画线工具栏；图内左上角图例（OHLC、各指标和对比的数值，悬停出现隐藏 / 设置 / 移除）；右边自选列表和笔记；底栏是 `1年 3年 5年 10年 全部` 范围按钮和 `ADJ`（含分红）、`%`、`log`、`自动`。内置指标、代码指标和公式指标都在「指标」弹窗里开关，参数在图例的设置里改，按周期保存。
 - **对比**：把别的标的叠在主图上，用同百分比坐标——滚动、缩放时所有线从可见区间左边缘重新归零，和 TradingView 一致；单位不同的（比如美债收益率）放独立副图。
-- **画线**：水平线、线段、射线、趋势线、斐波那契、文字标注，只画在主图上。按时间戳保存，周线上画的线切到日线还在。右键删除一条，`Esc` 退出绘制。
+- **画线**：趋势线、射线、延长线、水平线、水平射线、垂直线、斐波那契回撤、文字，只画在主图上；磁铁模式、锁定 / 隐藏 / 删除所有绘图。按时间戳保存，周线上画的线切到日线还在。选中后 `Delete` 删除，或右键菜单「删除」；`Esc` 退出绘制。
 - **笔记与复盘**：每个标的一篇 markdown 笔记（thesis）；每周一篇复盘日志。都是自动保存：停止输入 1 秒后写盘，`Ctrl/Cmd+S` 立即保存，浏览器里留一份草稿兜底。复盘页列出本周所有条件变化和有笔记的标的。
 - **合成标的**：`=BTC/GOLD` 这样的表达式当作标的看图、算统计、算条件，逐字段计算，和 TradingView 的 spread 一样。
 
@@ -47,8 +47,12 @@ npm run dev        # http://localhost:3000
 |---|---|
 | `/`、`Ctrl/Cmd+K` | 打开搜索（图表页直接敲字母、数字也行） |
 | `↑ ↓ Enter Tab Esc` | 搜索里移动、打开 / 添加、换分组、关闭 |
-| `← →`、`j k` | 图表页切上一只 / 下一只 |
-| `Esc` | 关闭面板、退出画线 |
+| `Space`、`Shift+Space` | 图表页切自选列表下一只 / 上一只 |
+| `← →`、`↑ ↓` | 图表滚动、缩放 |
+| `Alt+T` `Alt+H` `Alt+J` `Alt+V` `Alt+F` | 趋势线、水平线、水平射线、垂直线、斐波那契回撤 |
+| `Delete`、`Backspace` | 删除选中的画线 |
+| `Alt+R` | 重置图表视图 |
+| `Esc` | 关闭弹窗、退出画线 |
 | `Ctrl/Cmd+S` | 立即保存笔记 / 复盘 |
 
 | 环境变量 | 默认值 | 作用 |
@@ -131,7 +135,7 @@ src/
 │       ├── bars/             日/周/月/季 K 线 + 对齐好的引用标的
 │       └── search/           外部搜索（Yahoo / TradingView / Binance），本地匹配在浏览器里
 ├── instrumentation.ts        启动应用内调度器
-├── components/               UiProvider（搜索浮层、toast、快捷键）/ SymbolSearch / Overview / RowMenu / ChartView / KChart / IndicatorBar / FormulaEditor / NotesPanel …
+├── components/               UiProvider（搜索浮层、toast、快捷键）/ SymbolSearch / Overview / RowMenu / ChartView / KChart / ChartLegend / IndicatorDialog / CompareDialog / WatchlistPanel / FormulaEditor / NotesPanel …
 ├── indicators/               指标目录、代码指标、公式引擎（formula.ts）、纯计算函数
 └── lib/
     ├── search.ts wellknown.ts 搜索的纯函数（匹配、过滤、去重、排序、分组推断）与内置字典
