@@ -339,7 +339,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 ### 5.5 设置
 
-不做单独页面。周期选择、涨跌色、图表偏好由各处 UI 写回 yaml；分组、名称、基准由总览行菜单写回；其余（同步时间、别名、条件）直接改 yaml，页面上给出 vault 相对路径提示。唯一的例外是 `/settings/github`（§5.8 反馈用的 GitHub App）。
+不做单独页面。周期选择、涨跌色、图表偏好由各处 UI 写回 yaml；分组、名称、基准由总览行菜单写回；其余（同步时间、别名、条件）直接改 yaml，页面上给出 vault 相对路径提示。反馈用的 GitHub App 只有一个 client id，写在源码里（§5.8），不需要设置页。
 
 ### 5.6 自动保存（笔记与复盘日志）
 
@@ -355,23 +355,44 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 ### 5.8 帮助面板与应用内反馈
 
-**目标**：几秒钟内在应用里把问题报给 GitHub，且 issue 带机器可读的上下文，以后让自动化识别并修复简单问题。
+**目标**：几秒钟内在应用里把问题报给 GitHub，issue 的作者是报告的人自己，且带机器可读的上下文，以后让自动化识别并修复简单问题。任何人自己部署的 hebi8 都能把问题报到 `dreaite/hebi8-market`：实例里不放、也不存任何 App 密钥。
 
-**入口**：页头最右的圆形「?」，或焦点不在输入框时按 `?`（Shift+/）；图表页全屏时页头隐藏，顶栏全屏按钮旁出现同样的「?」。右侧抽屉 380px（≤768px 为底部抽屉 85dvh），两个页签「项目 / 反馈」，上次的页签记在 localStorage（`hebi8:help:tab`）。Esc、点外面、再按 `?` 关闭；抽屉内的按键不冒泡到页面（图表的 Space / 方向键 / 字母搜索不会在背后触发）。`?help=feedback|project`（可带 `error=`）打开抽屉并从地址栏去掉这些参数——GitHub 的回调用它把人带回来。全程不用原生 alert / confirm / prompt（会退出全屏）。
+**入口**：页头最右的圆形「?」，或焦点不在输入框时按 `?`（Shift+/）；图表页全屏时页头隐藏，顶栏全屏按钮旁出现同样的「?」。右侧抽屉 380px（≤768px 为底部抽屉 85dvh），两个页签「项目 / 反馈」，上次的页签记在 localStorage（`hebi8:help:tab`）。Esc、点外面、再按 `?` 关闭；抽屉内的按键不冒泡到页面（图表的 Space / 方向键 / 字母搜索不会在背后触发）。`?help=feedback|project` 打开抽屉并从地址栏去掉这个参数。全程不用原生 alert / confirm / prompt（会退出全屏）。
 
-**项目页签**（`GET /api/help`，只读本地）：名称与含义；版本 = `package.json` version + 构建时的 `git rev-parse --short HEAD` + 构建时间（`next.config.ts` 的 `env` 注入 `HEBI8_VERSION / HEBI8_COMMIT / HEBI8_BUILT_AT`，取不到 commit 时为 `unknown`）；数据状态：自选数、缓存标的数、上次同步、下次同步（调度器 `scheduledNextSync()`，没启动时按 `sync.at` 推算）、同步出错的标的与错误、vault 相对路径；快捷键表；仓库、设计文档、`from-app` issue 列表的链接。
+**项目页签**（`GET /api/help`，只读本地）：名称与含义；版本 = `package.json` version + 构建时的 `git rev-parse --short HEAD` + 构建时间（`next.config.ts` 的 `env` 注入 `HEBI8_VERSION / HEBI8_COMMIT / HEBI8_BUILT_AT`，取不到 commit 时为 `unknown`）；数据状态：自选数、缓存标的数、上次同步、下次同步（调度器 `scheduledNextSync()`，没启动时按 `sync.at` 推算）、同步出错的标的与错误、vault 相对路径；快捷键表；仓库、设计文档、反馈仓库 `from-app` issue 列表的链接。
 
-**反馈页签**三种状态：未配置 GitHub App → 一段说明 +「配置 GitHub App」（去 `/settings/github`）；已配置未登录 →「用 GitHub 登录」；已登录 → 头像 + 用户名 + 退出，表单：类型分段（问题 bug / 体验 ux / 数据 data / 想法 idea）、标题（必填）、描述、「附带页面信息」（默认开，可展开预览将附带的 JSON，预览即实际发送的内容）、「可以自动修复」（加 `auto-fix-ok`）；`Ctrl/Cmd+Enter` 提交，成功 toast「已提交 #123」（链到 issue）并清空；下方列出最近 5 条 `from-app` issue。
+**配置**（`src/lib/app-info.ts`，服务端读，环境变量可覆盖，供 fork 用自己的 App / 仓库）：
 
-**流程**（GitHub App manifest 流程，所有 GitHub 调用都在 `src/lib/github.ts`，错误是带中文消息的 `GitHubError`）：
+| 常量 | 默认 | 环境变量 |
+|---|---|---|
+| `FEEDBACK_REPO` | `dreaite/hebi8-market` | `HEBI8_FEEDBACK_REPO`（须形如 `owner/name`，否则用默认） |
+| `GITHUB_APP_CLIENT_ID` | `""`（App 建好后填入） | `HEBI8_GITHUB_CLIENT_ID` |
+| `GITHUB_APP_SLUG` | `hebi8-market`（只用于 `github.com/apps/<slug>` 链接） | `HEBI8_GITHUB_APP_SLUG` |
 
-1. `/settings/github` 的「在 GitHub 上创建 App」：Server Action 生成 state（HttpOnly cookie，连同回调地址列表），返回 manifest；浏览器把隐藏字段 `manifest` POST 到 `https://github.com/organizations/dreaite/settings/apps/new?state=…`。manifest：名字 `hebi8-market-<4 位随机>`、`url` = 仓库、`public: false`、`default_permissions: { issues: write, metadata: read }`、`default_events: []`、`hook_attributes: { url: <origin>/api/github/webhook, active: false }`（不用 webhook）、`redirect_url` = `<origin>/api/github/manifest`、`setup_url` = `<origin>/api/github/setup`、`setup_on_update: true`、`request_oauth_on_install: false`、`callback_urls` = 页面上可编辑的列表（默认当前 origin + 8808/8809 的 Tailscale IP 与 MagicDNS，`HEBI8_ORIGINS` 可覆盖，最多 10 个）。
-2. GitHub 回到 `GET /api/github/manifest?code&state`：核对 state → `POST /app-manifests/{code}/conversions` → 存凭据 → 跳 `https://github.com/apps/<slug>/installations/new`。
-3. 安装后 GitHub 回到 `GET /api/github/setup?installation_id`：用 App JWT（RS256，node `crypto` 签名，iat −60s、exp +9min、iss = client id）`GET /app/installations/{id}` 核对属于 `dreaite`，再用安装 token 核对 `/installation/repositories` 含本仓库，才写入 `installation_id`，然后回 `/?help=feedback`。没回来时设置页的「检查安装」用 `GET /repos/{owner}/{repo}/installation` 找。
-4. 登录：`/api/github/login?return=<路径>`（只接受同源相对路径）→ cookie 存 state、PKCE verifier、返回路径和 redirect_uri → `github.com/login/oauth/authorize`（`redirect_uri = <origin>/api/github/callback`，必须是登记过的回调地址之一；origin 取 `Host` + `X-Forwarded-Proto`，默认 http）。`/api/github/callback` 换 token（带 `code_verifier`）→ `GET /user` → 建会话（32 字节随机 id，cookie `hebi8_session` HttpOnly、SameSite=Lax、30 天；内网没有 HTTPS，所以不设 Secure）→ 回到原路径 `?help=feedback`。用户 token 8 小时过期，提前 5 分钟用 refresh token 续；续不上（或 GitHub 对用户 token 返回 401）就删会话，面板显示原因和登录按钮。`POST /api/github/logout` 删会话。
-5. 提交：`POST /api/github/issues` → 用安装 token 确保标签存在（缺的就建，失败不影响）→ 用**用户** token `POST /repos/dreaite/hebi8-market/issues`（作者是本人）；带标签被拒（422）时不带标签重试。`GET /api/github/issues` 用安装 token 列最近的 `from-app` issue（去掉 PR）。仓库坐标只在 `src/lib/app-info.ts` 的 `REPO` 一处。
+client id 不是秘密（device flow 的设计就是给拿不住密钥的客户端用的），写在源码里即可。
 
-**凭据**：不在仓库、vault、data 里。目录 `HEBI8_SECRETS`（默认 `~/.config/hebi8`，权限 700），文件原子写入、权限 600：`github-app.json`（id、slug、client_id、client_secret、pem、webhook_secret、owner、html_url、callback_urls、installation_id）、`sessions.json`（会话 id → login、avatar_url、access_token、access_expires_at、refresh_token、refresh_expires_at、created_at）。安装 token 只缓存在内存，到期前 1 分钟换新。token 不写日志、不发给浏览器。
+**反馈页签**的四种状态，表单（类型分段 问题 bug / 体验 ux / 数据 data / 想法 idea、标题、描述、「附带页面信息」、「可以自动修复」、可展开的「预览将附带的信息」= 实际发送的 JSON）在每种状态下都在，未发送的内容在本标签页内关掉抽屉也保留：
+
+- **未启用**（client id 为空）：「反馈未启用」说明；表单下方主按钮是「在 GitHub 网页上提交」。
+- **未登录**：「用 GitHub 登录」+ 说明会以你的名义提交到哪个仓库；表单下方是次要按钮「在 GitHub 网页上提交」。
+- **登录中**：大号、可复制的 user code（复制不用 async clipboard——内网是 http，没有安全上下文——而是隐藏 textarea + `execCommand("copy")`，焦点留在抽屉里）、「打开 github.com/login/device」（新标签页，地址来自 GitHub 的 `verification_uri`，只接受 `https://github.com/…`）、状态行（等待授权 / GitHub 要求放慢）+ 倒计时、「取消」。进行中的登录记在模块变量里，关掉再打开抽屉会接着轮询。
+- **已登录**：头像 + 用户名 +「退出」；「提交」按钮下注明「以你的 GitHub 账号提交到 <repo>」。`Ctrl/Cmd+Enter` 提交，成功 toast「已提交 #123」（链到 issue）并清空；GitHub 返回 403 / 404 / 410 时显示中文原因并给出「在 GitHub 网页上提交」。未登录 / 未启用时 `Ctrl/Cmd+Enter` 打开网页版。
+
+下方列出最近 5 条 `from-app` issue。
+
+**登录：GitHub App 的 device flow**（所有 GitHub 调用都在 `src/lib/github.ts`，错误是带中文消息的 `GitHubError`；token 和 device code 只在服务端，不进浏览器、不写日志）：
+
+1. `POST /api/github/device` → 服务端 `POST https://github.com/login/device/code`（只带 `client_id`）→ device code 留在服务端内存（`globalThis` 上的 Map，键是 32 字节随机 flowId，按 `expires_in` 过期，最多 20 个并发）→ 返回 `{ flowId, user_code, verification_uri, expires_in, interval }`。`device_flow_disabled` → 「GitHub App 没有开启 Device Flow」；不认识的 client id（GitHub 回 404）→ 「GitHub 不认识这个 client id」。
+2. 面板每 `interval` 秒 `POST /api/github/device/poll { flowId }`。服务端每次最多向 GitHub 发一次 `POST https://github.com/login/oauth/access_token`（`client_id`、`device_code`、`grant_type=urn:ietf:params:oauth:grant-type:device_code`，没有 client_secret），且自己也卡住间隔：没到时间直接回 `pending`。`authorization_pending` → 继续；`slow_down` → 间隔 +5 秒（GitHub 给了新 `interval` 就取较大者）；`expired_token` / 超时 → `expired`；`access_denied` → `denied`；其它错误结束本次登录。
+3. 拿到 token → `GET /user` → 建会话（32 字节随机 id，cookie `hebi8_session` HttpOnly、SameSite=Lax、30 天；内网没有 HTTPS，所以不设 Secure）。
+4. 用户 token 8 小时过期；离过期不到 5 分钟时用 `grant_type=refresh_token` + `client_id` + `refresh_token` 续（device flow 拿到的 token 续期不需要 client_secret）。续不上（或 GitHub 对用户 token 返回 401）就删会话，面板显示原因和登录按钮。`POST /api/github/logout` 删会话。
+5. 写操作的接口都拒绝跨站 `Origin`。
+
+**提交**：`POST /api/github/issues` → 用**用户** token `POST /repos/<repo>/issues`，只有 title + body，不带标签（非协作者带的标签会被 GitHub 静默丢掉）。用户 token 只能访问用户和 App 都能访问的资源，所以 App 必须安装在反馈仓库上；没装（404）、账号被仓库限制（403）、仓库关了 issue（410）都映射成中文说明并提供网页版。`GET /api/github/issues`：`from-app` 标签、`state=all`、去掉 PR、前 5 条；登录时用用户 token（被拒就匿名重试），否则匿名（公开仓库）；服务端按仓库缓存 60 秒，提交成功后清缓存。
+
+**网页版**（`webIssueUrl()`，纯函数，浏览器里算）：`https://github.com/<repo>/issues/new?title=…&body=…`，body 与应用内提交的完全一样（含 context 块）。URL 上限 7000 字符（GitHub 约 8 KB 起报 414）：超了先把 JSON 压成一行，再去掉 `errors`、`userAgent`，再只留 `{ v, type, autoFix }`，最后才从尾部截断描述并注明「网页版已截断」。
+
+**会话存储**：不在仓库、vault、data 里。目录 `HEBI8_SECRETS`（默认 `~/.config/hebi8`，权限 700），只有 `sessions.json`（原子写入，权限 600）：会话 id → login、avatar_url、access_token、access_expires_at、refresh_token、refresh_expires_at、created_at。超过 30 天或 refresh token 也过期的会话在每次写入时清掉。
 
 **issue 格式**：标题是用户填的；正文
 
@@ -380,7 +401,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 ---
 
-<details><summary>页面信息</summary>
+<details><summary>页面信息</summary>        （没勾「附带页面信息」时是「反馈信息」）
 
 ```json hebi8-context
 { ... }
@@ -390,27 +411,40 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 <sub>来自 hebi8 market 应用内反馈</sub>
 ````
 
-`hebi8-context`（`src/lib/feedback.ts` 的 `FeedbackContext`，`parseIssueContext()` 可读回）：
+`hebi8-context`（`src/lib/feedback.ts` 的 `FeedbackContext`，`parseIssueContext()` 可读回）。`v`、`type`、`autoFix` 总是在（打标签要用），其余只在勾了「附带页面信息」时出现；`type` 和 `autoFix` 由服务端按表单字段重写：
 
 ```ts
 {
   v: 1,                                   // 字段含义变了就加一；未知字段忽略
   type: "bug" | "ux" | "data" | "idea",
-  app: { version, commit, builtAt },
-  page: "/chart/yahoo%3ASPY",             // 路径 + 查询，不含 origin
+  autoFix: boolean,                       // 「可以自动修复」：只是报告人的意愿，授权看下面的标签
+  app?: { version, commit, builtAt },
+  page?: "/chart/yahoo%3ASPY",            // 路径 + 查询，不含 origin
   chart?: { symbol, tf, style, log, prices, indicators: string[], compares: { key, mode }[] },  // 只在图表页
-  viewport: { width, height, dpr },
-  colorScheme: "light" | "dark",
-  fullscreen: boolean,
-  userAgent: string,
-  errors: { t, kind: "error" | "rejection", message, source? }[],  // 本标签页最近 ≤10 个未捕获错误（ErrorCapture 尽早安装）
-  at: string                              // ISO 时间
+  viewport?: { width, height, dpr },
+  colorScheme?: "light" | "dark",
+  fullscreen?: boolean,
+  userAgent?: string,
+  errors?: { t, kind: "error" | "rejection", message, source? }[],  // 本标签页最近 ≤10 个未捕获错误（ErrorCapture 尽早安装）
+  at?: string                             // ISO 时间
 }
 ```
 
-**标签**：`from-app`（所有应用内反馈）+ 类型标签 `bug` / `ux` / `data` / `idea` + 可选 `auto-fix-ok`。缺的在第一次用时由安装 token 创建（颜色与说明见 `LABEL_SPECS`）。
+**标签：GitHub Actions**（`.github/workflows/app-feedback.yml`，逻辑在 `.github/scripts/feedback-labels.js`，有单元测试）。`issues: [opened, edited]`，权限 `contents: read` + `issues: write`，`actions/checkout@v5`（只稀疏检出 `.github/scripts`，不留凭据）+ `actions/github-script@v8`。正文只当数据：用正则取出 ```` ```json hebi8-context ```` 块，`JSON.parse` 包在 try/catch 里，只认白名单里的 `type`（`bug` / `ux` / `data` / `idea`）和 `autoFix === true`，事件里的内容不拼进脚本或 shell。有块就确保标签存在（缺的按颜色和说明创建）并加上 `from-app` + 类型标签；`autoFix` 为真时，作者的 `author_association` 是 `OWNER` / `MEMBER` / `COLLABORATOR` 才加 `auto-fix-ok`，否则加 `auto-fix-requested`。只加不删。所有人的 issue 都适用，实例里不需要任何密钥。
 
-**给以后的自动化**：只有作者是仓库 admin、且带 `auto-fix-ok` 标签的 issue 才算自动修复候选（标签任何有权限的人都能加，作者才是授权依据）；上下文从 ```` ```json hebi8-context ```` 块里解析，`v` 不认识就跳过。
+**给以后的自动化**：只有带 `auto-fix-ok` 且作者是仓库 owner / 成员 / 协作者的 issue 才算自动修复候选（标签任何有写权限的人都能加，作者关联才是授权依据，自动化应再核对一次）；上下文从 ```` ```json hebi8-context ```` 块里解析，`v` 不认识就跳过。
+
+**仓库 owner 的一次性设置**：
+
+1. 用预填好的链接在 dreaite 组织下注册 App（名字、描述、主页、公开、关闭 webhook、Issues 读写；Metadata 只读是自动带的）：
+   `https://github.com/organizations/dreaite/settings/apps/new?name=hebi8-market&description=hebi8%20market%20%E7%9A%84%E5%BA%94%E7%94%A8%E5%86%85%E5%8F%8D%E9%A6%88%EF%BC%9A%E7%94%A8%E4%BD%A0%E8%87%AA%E5%B7%B1%E7%9A%84%20GitHub%20%E8%B4%A6%E5%8F%B7%E5%9C%A8%20dreaite%2Fhebi8-market%20%E4%B8%8A%E6%8F%90%E4%BA%A4%20issue&url=https%3A%2F%2Fgithub.com%2Fdreaite%2Fhebi8-market&public=true&webhook_active=false&issues=write`
+   核对：**Any account** 可安装（公开——私有 App 只有组织成员能授权）；Webhook 不勾 Active；Repository permissions 只有 Issues: Read and write 和 Metadata: Read-only；Callback URL 留空（device flow 不需要）；**Expire user authorization tokens** 保持勾选（8 小时 + refresh）。不要生成 client secret 或私钥，用不到。
+2. 建好后在 App 的 General 设置里勾选 **Enable Device Flow** 并保存（URL 参数不能设这一项）。
+3. Install App → dreaite → **Only select repositories → hebi8-market** → Install。
+4. 把 App 页面上的 **Client ID**（`Iv23…`）填进 `src/lib/app-info.ts` 的 `GITHUB_APP_CLIENT_ID`，提交。
+5. 确认仓库开着 Issues，Actions 允许运行（Settings → Actions → General：允许 `actions/*`；Workflow permissions 用默认即可，工作流自己声明了 `issues: write`）。
+
+fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己的仓库），设 `HEBI8_GITHUB_CLIENT_ID` 和 `HEBI8_FEEDBACK_REPO`；把 `.github/workflows/app-feedback.yml` 留在自己的仓库里就有同样的标签。
 
 ---
 
@@ -422,7 +456,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
   → `{ symbol: {key, name, source, ticker, currency, bench, syncedAt, syncError}, pricePrecision, bars: [{timestamp, open, high, low, close, volume}], refs: { [key]: { c: (number|null)[], o?, h?, l?, v? } } }`，`refs` 与 `bars` 等长对齐。按 `synced_at` 生成 ETag。
 - `GET /api/search?q=` → 外部结果 `SearchResult[]`（§5.4；本地层在浏览器里算）。
 - `GET /api/help` → 帮助面板数据（§5.8，只读本地）。
-- `/api/github/manifest|setup|login|callback`（GET，重定向）、`/api/github/logout`（POST）、`/api/github/issues`（GET 最近反馈 / POST 提交）：§5.8，唯一会碰 GitHub 网络的接口，都是用户动作触发。
+- `/api/github/device`（POST 开始 device flow / DELETE 取消）、`/api/github/device/poll`（POST）、`/api/github/logout`（POST）、`/api/github/issues`（GET 最近反馈 / POST 提交）：§5.8，唯一会碰 GitHub 网络的接口，都是打开反馈页签或用户动作触发。
 
 **Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench?, alias? })`、`removeSymbol(key)`、`moveSymbol(key, group)`、`renameSymbol(key, name)`、`setBench(key, bench | null)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveCondition(def)` / `deleteCondition(id)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`。Server Action 在客户端是**串行派发**的，自动保存靠去抖合并，不并行发。
 

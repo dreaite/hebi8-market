@@ -21,9 +21,13 @@
 
 约束：单用户、无登录、只在内网用；只存日线，周 / 月 / 季线读时合成；读取永远不碰网络。
 
-### 设置应用内反馈
+### 应用内反馈
 
-打开 `?` → 反馈 →「配置 GitHub App」，在设置页点「在 GitHub 上创建 App」，GitHub 上点 **Create GitHub App**；跳到安装页后选 **Only select repositories → hebi8-market → Install**；回到本应用会自动打开反馈页签，点「用 GitHub 登录」并授权，之后几秒钟就能提交一条 issue。凭据存在服务器的 `~/.config/hebi8/`（`HEBI8_SECRETS` 可改，权限 600，不进仓库和 vault）。最好从常用的地址（例如 `:8808`）发起创建：App 的回调地址按这里的列表登记，安装完成后 GitHub 也回到发起创建的那个地址。
+`?` → 反馈：填好标题和描述，点「用 GitHub 登录」，抽屉里会显示一串代码，到 github.com/login/device 输入并授权，回来就能提交——issue 以**你自己的** GitHub 账号开在 `dreaite/hebi8-market` 上。登录用的是公开 GitHub App「hebi8-market」的 device flow，只需要写在 `src/lib/app-info.ts` 里的 client id，任何人自己部署的 hebi8 都能用，不用配置任何密钥；登录会话存在服务器的 `~/.config/hebi8/sessions.json`（`HEBI8_SECRETS` 可改，权限 600）。不想登录、或者 App 还没配置（「反馈未启用」）时，「在 GitHub 网页上提交」会在 github.com 打开预填好同样内容的新 issue。
+
+标签不由应用加（非协作者开 issue 时 GitHub 会丢掉标签），而是仓库里的 Actions 工作流 `.github/workflows/app-feedback.yml` 读 issue 正文里的 `hebi8-context` 块：加 `from-app` 和类型标签；勾了「可以自动修复」的，作者是仓库 owner / 组织成员 / 协作者才加 `auto-fix-ok`，其他人加 `auto-fix-requested`。
+
+**仓库 owner 要做的一次性设置**（详见 [`docs/design.md`](docs/design.md) §5.8）：在 dreaite 组织下注册公开的 GitHub App（[预填好的注册链接](https://github.com/organizations/dreaite/settings/apps/new?name=hebi8-market&description=hebi8%20market%20%E7%9A%84%E5%BA%94%E7%94%A8%E5%86%85%E5%8F%8D%E9%A6%88%EF%BC%9A%E7%94%A8%E4%BD%A0%E8%87%AA%E5%B7%B1%E7%9A%84%20GitHub%20%E8%B4%A6%E5%8F%B7%E5%9C%A8%20dreaite%2Fhebi8-market%20%E4%B8%8A%E6%8F%90%E4%BA%A4%20issue&url=https%3A%2F%2Fgithub.com%2Fdreaite%2Fhebi8-market&public=true&webhook_active=false&issues=write)），在 App 设置里勾选 **Enable Device Flow**，只安装到 hebi8-market，把 client id 填进 `app-info.ts` 的 `GITHUB_APP_CLIENT_ID`。fork 想把反馈收到自己的仓库：建自己的 App，设环境变量 `HEBI8_GITHUB_CLIENT_ID` 和 `HEBI8_FEEDBACK_REPO`。
 
 ## 数据源
 
@@ -66,8 +70,10 @@ npm run dev        # http://localhost:3000
 | `HEBI8_VAULT` | `./vault` | 用户内容目录 |
 | `HEBI8_DB` | `./data/hebi8.db` | SQLite 缓存，删了会自动重建 |
 | `BINANCE_API_URL` | `https://api.binance.com` | 换成 `https://data-api.binance.vision` 等镜像 |
-| `HEBI8_SECRETS` | `~/.config/hebi8` | GitHub App 凭据与登录会话（反馈用），权限 700 / 600 |
-| `HEBI8_ORIGINS` | Tailscale 的 8808 / 8809 地址 | 逗号分隔，本应用被访问的地址；创建 GitHub App 时据此生成登录回调地址 |
+| `HEBI8_SECRETS` | `~/.config/hebi8` | 反馈用的 GitHub 登录会话 `sessions.json`，权限 700 / 600 |
+| `HEBI8_GITHUB_CLIENT_ID` | `app-info.ts` 的 `GITHUB_APP_CLIENT_ID` | 反馈登录用的 GitHub App client id（fork 用自己的 App 时设）；为空则反馈只能走 GitHub 网页 |
+| `HEBI8_FEEDBACK_REPO` | `dreaite/hebi8-market` | 反馈 issue 开在哪个仓库（`owner/name`） |
+| `HEBI8_GITHUB_APP_SLUG` | `hebi8-market` | App 的 slug，只用于链接 |
 
 ## vault
 
@@ -138,21 +144,20 @@ src/
 │   ├── page.tsx              总览（RSC，直接读 vault 和 SQLite）
 │   ├── chart/[key]/page.tsx  图表页 /chart/yahoo%3ASPY
 │   ├── review/page.tsx       复盘
-│   ├── settings/github/      反馈用 GitHub App 的创建与安装状态
 │   ├── actions.ts            Server Actions：写 yaml / 笔记 / 日志 / 图表状态，刷新
 │   └── api/
 │       ├── bars/             日/周/月/季 K 线 + 对齐好的引用标的
 │       ├── search/           外部搜索（Yahoo / TradingView / Binance），本地匹配在浏览器里
 │       ├── help/             帮助面板数据（只读本地）
-│       └── github/           App manifest、安装、登录、提交 / 列出反馈 issue
+│       └── github/           device flow 登录、退出、提交 / 列出反馈 issue
 ├── instrumentation.ts        启动应用内调度器
 ├── components/               UiProvider（搜索浮层、帮助抽屉、toast、快捷键）/ HelpPanel/ SymbolSearch / Overview / RowMenu / ChartView / KChart / ChartLegend / IndicatorDialog / CompareDialog / WatchlistPanel / FormulaEditor / NotesPanel …
 ├── indicators/               指标目录、代码指标、公式引擎（formula.ts）、纯计算函数
 └── lib/
     ├── search.ts wellknown.ts 搜索的纯函数（匹配、过滤、去重、排序、分组推断）与内置字典
     ├── use-autosave.ts       笔记 / 复盘的自动保存
-    ├── github.ts secrets.ts  GitHub 调用（App JWT、登录、issue）与 ~/.config/hebi8 里的凭据
-    ├── feedback.ts           反馈 issue 的正文、标签与 hebi8-context 格式
+    ├── github.ts secrets.ts  GitHub 调用（device flow 登录、刷新、issue）与 ~/.config/hebi8 里的登录会话
+    ├── feedback.ts           反馈 issue 的正文、hebi8-context 格式与 GitHub 网页预填链接
     ├── sources/              yahoo / binance / tradingview 适配器
     ├── vault.ts config.ts    vault 的读写层、hebi8.yaml 的类型与校验
     ├── db.ts store.ts        SQLite 缓存（symbols、bars、stats）
