@@ -366,7 +366,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 | 常量 | 默认 | 环境变量 |
 |---|---|---|
 | `FEEDBACK_REPO` | `dreaite/hebi8-market` | `HEBI8_FEEDBACK_REPO`（须形如 `owner/name`，否则用默认） |
-| `GITHUB_APP_CLIENT_ID` | `""`（App 建好后填入） | `HEBI8_GITHUB_CLIENT_ID` |
+| `GITHUB_APP_CLIENT_ID` | `"Iv23liCniWEUtlDruFJa"`（dreaite 组织的 hebi8-market App） | `HEBI8_GITHUB_CLIENT_ID`（`off` 关闭应用内登录） |
 | `GITHUB_APP_SLUG` | `hebi8-market`（只用于 `github.com/apps/<slug>` 链接） | `HEBI8_GITHUB_APP_SLUG` |
 
 client id 不是秘密（device flow 的设计就是给拿不住密钥的客户端用的），写在源码里即可。

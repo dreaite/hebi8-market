@@ -104,6 +104,12 @@ describe("configuration", () => {
     expect(feedbackRepo()).toBe("someone/hebi8-fork");
     process.env.HEBI8_FEEDBACK_REPO = "../../evil";
     expect(feedbackRepo()).toBe("dreaite/hebi8-market");
+    process.env.HEBI8_GITHUB_CLIENT_ID = "off";
+    expect(githubClientId()).toBe("");
+  });
+
+  it("ships a well-formed client id for the upstream App", () => {
+    expect(GITHUB_APP_CLIENT_ID).toMatch(/^Iv[0-9A-Za-z]+$/);
   });
 
   it("derives the origin from Host and X-Forwarded-Proto", () => {
@@ -263,7 +269,7 @@ describe("device flow", () => {
   });
 
   it("start route: 409 without a client id, 403 cross-site; cancel forgets the flow", async () => {
-    delete process.env.HEBI8_GITHUB_CLIENT_ID;
+    process.env.HEBI8_GITHUB_CLIENT_ID = "off";
     expect((await devicePOST(req("/api/github/device", { method: "POST" }))).status).toBe(409);
     process.env.HEBI8_GITHUB_CLIENT_ID = CLIENT_ID;
     expect((await devicePOST(req("/api/github/device", { method: "POST", headers: { origin: "http://evil.example" } }))).status).toBe(403);
@@ -364,7 +370,7 @@ describe("issues", () => {
     const cross = await issuesPOST(req("/api/github/issues", { method: "POST", body: { type: "bug", title: "x" }, headers: { origin: "http://evil.example" } }));
     expect(cross.status).toBe(403);
 
-    delete process.env.HEBI8_GITHUB_CLIENT_ID;
+    process.env.HEBI8_GITHUB_CLIENT_ID = "off";
     const off = await submit({}, { type: "bug", title: "x" });
     expect(off.status).toBe(409);
     expect((await off.json()).webFallback).toBe(true);

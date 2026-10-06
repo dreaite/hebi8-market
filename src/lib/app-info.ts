@@ -20,9 +20,10 @@ export const FEEDBACK_REPO = REPO_FULL_NAME;
  * Client id of the public GitHub App "hebi8-market" (owned by the dreaite org, installed on
  * hebi8-market only). Login uses the device flow, which needs nothing but this id, so no secret
  * is shipped or stored. Empty = in-app login disabled (the 反馈 tab still offers the github.com
- * form). A fork with its own App sets `HEBI8_GITHUB_CLIENT_ID`.
+ * form). A fork with its own App sets `HEBI8_GITHUB_CLIENT_ID`; `HEBI8_GITHUB_CLIENT_ID=off` turns
+ * in-app login off.
  */
-export const GITHUB_APP_CLIENT_ID = "";
+export const GITHUB_APP_CLIENT_ID = "Iv23liCniWEUtlDruFJa";
 
 /** The App's slug, for links to github.com/apps/<slug>; `HEBI8_GITHUB_APP_SLUG` overrides. */
 export const GITHUB_APP_SLUG = "hebi8-market";
@@ -42,9 +43,10 @@ export function feedbackRepo(): string {
   return v && REPO_RE.test(v) ? v : FEEDBACK_REPO;
 }
 
-/** The GitHub App's client id (`HEBI8_GITHUB_CLIENT_ID` or the constant); empty when not configured. Server only. */
+/** The GitHub App's client id (`HEBI8_GITHUB_CLIENT_ID` or the constant); empty when not configured or `off`. Server only. */
 export function githubClientId(): string {
   const v = env("HEBI8_GITHUB_CLIENT_ID");
+  if (v?.toLowerCase() === "off") return "";
   if (v && CLIENT_ID_RE.test(v)) return v;
   return CLIENT_ID_RE.test(GITHUB_APP_CLIENT_ID) ? GITHUB_APP_CLIENT_ID : "";
 }

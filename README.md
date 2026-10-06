@@ -71,7 +71,7 @@ npm run dev        # http://localhost:3000
 | `HEBI8_DB` | `./data/hebi8.db` | SQLite 缓存，删了会自动重建 |
 | `BINANCE_API_URL` | `https://api.binance.com` | 换成 `https://data-api.binance.vision` 等镜像 |
 | `HEBI8_SECRETS` | `~/.config/hebi8` | 反馈用的 GitHub 登录会话 `sessions.json`，权限 700 / 600 |
-| `HEBI8_GITHUB_CLIENT_ID` | `app-info.ts` 的 `GITHUB_APP_CLIENT_ID` | 反馈登录用的 GitHub App client id（fork 用自己的 App 时设）；为空则反馈只能走 GitHub 网页 |
+| `HEBI8_GITHUB_CLIENT_ID` | `app-info.ts` 的 `GITHUB_APP_CLIENT_ID` | 反馈登录用的 GitHub App client id（fork 用自己的 App 时设）；设为 `off` 关闭应用内登录，反馈只走 GitHub 网页 |
 | `HEBI8_FEEDBACK_REPO` | `dreaite/hebi8-market` | 反馈 issue 开在哪个仓库（`owner/name`） |
 | `HEBI8_GITHUB_APP_SLUG` | `hebi8-market` | App 的 slug，只用于链接 |
 
