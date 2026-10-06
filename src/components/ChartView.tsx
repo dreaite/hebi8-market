@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { deleteIndicator, saveChartState, saveIndicator, setChartPrefs } from "@/app/actions";
 import { INDICATORS } from "@/indicators/catalog";
@@ -17,7 +18,7 @@ import { COMPARE_COLORS, DRAW_TOOLS, type CompareLegendEntry, type IndicatorSpec
 import { IndicatorBar } from "./IndicatorBar";
 import { NotesPanel } from "./NotesPanel";
 import { SymbolSearch } from "./SymbolSearch";
-import { useUi } from "./UiProvider";
+import { chartHref, isEditable, useUi } from "./UiProvider";
 
 const KChart = dynamic(() => import("./KChart").then((m) => m.KChart), { ssr: false });
 
@@ -30,13 +31,17 @@ interface ChartViewProps {
   formulas: FormulaDef[];
   aliases: Record<string, string>;
   bench: string | null;
+  benchLabel: string | null;
   names: Record<string, string>;
+  /** The watchlist in yaml order, for ←/→ */
+  order: { key: string; name: string }[];
   chartState: ChartState;
   note: string | null;
   noteHtml: string | null;
 }
 
-export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, aliases, bench, names, chartState, note, noteHtml }: ChartViewProps) {
+export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, aliases, bench, benchLabel, names, order, chartState, note, noteHtml }: ChartViewProps) {
+  const router = useRouter();
   const { openSearch, searchCtx } = useUi();
   const [tf, setTf] = useState(prefs.tf);
   const [log, setLog] = useState(prefs.log);
@@ -50,7 +55,31 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
   const [compareOpen, setCompareOpen] = useState(false);
   const [drawRequest, setDrawRequest] = useState<{ tool: string; seq: number } | null>(null);
   const [clearSeq, setClearSeq] = useState(0);
+  const [closeSeq, setCloseSeq] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
+
+  // ←/→ and j/k walk the watchlist in yaml order; Esc closes whatever panel is open
+  const position = order.findIndex((o) => o.key === symbolKey);
+  const neighbour = (step: 1 | -1) => (position < 0 || order.length < 2 ? null : order[(position + step + order.length) % order.length]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || isEditable(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === "Escape") {
+        setCompareOpen(false);
+        setCloseSeq((n) => n + 1);
+        return;
+      }
+      const step = e.key === "ArrowRight" || e.key === "j" ? 1 : e.key === "ArrowLeft" || e.key === "k" ? -1 : 0;
+      if (!step) return;
+      const target = neighbour(step);
+      if (!target) return;
+      e.preventDefault();
+      router.push(chartHref(target.key));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- neighbour derives from order/position
+  }, [order, position, router]);
 
   const [data, setData] = useState<BarsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +121,13 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
       .finally(() => setLoading(false));
     return () => controller.abort();
   }, [symbolKey, tf, prices, withParam, reloadTick]);
+
+  const nextKey = neighbour(1)?.key ?? null;
+  useEffect(() => {
+    if (!data || !nextKey) return;
+    const query = new URLSearchParams({ key: nextKey, tf, prices });
+    void fetch(`/api/bars?${query}`, { priority: "low" }).catch(() => undefined);
+  }, [data, nextKey, tf, prices]);
 
   const report = (result: { ok: boolean; error?: string }) => setMessage(result.ok ? null : (result.error ?? "操作失败"));
   const persist = (partial: Parameters<typeof setChartPrefs>[0]) => void setChartPrefs(partial).then(report);
@@ -172,11 +208,22 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
           <button onClick={() => openSearch()} className="text-base font-medium hover:text-accent" title="换一个标的（/ 或直接敲字母）">
             {names[symbolKey] ?? meta?.name ?? symbolKey}
           </button>
+          {position >= 0 && order.length > 1 && (
+            <span className="flex items-center gap-1 font-mono text-[11px] text-muted" title="← → 或 j k 切换上一只 / 下一只">
+              <button onClick={() => router.push(chartHref(neighbour(-1)!.key))} className="btn h-5 px-1" aria-label="上一只">
+                ‹
+              </button>
+              {position + 1} / {order.length}
+              <button onClick={() => router.push(chartHref(neighbour(1)!.key))} className="btn h-5 px-1" aria-label="下一只">
+                ›
+              </button>
+            </span>
+          )}
           {meta && (
             <span className="font-mono text-[11px] text-muted">
               {meta.ticker} · {meta.source === "expr" ? "合成" : SOURCE_LABELS[meta.source]}
               {meta.currency && ` · ${meta.currency}`}
-              {meta.bench && ` · 基准 ${names[meta.bench] ?? meta.bench}`}
+              {meta.bench && ` · 基准 ${benchLabel ?? names[meta.bench] ?? meta.bench}`}
             </span>
           )}
           {last && data && (
@@ -289,6 +336,7 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
           onParams={setParams}
           onSaveFormula={saveFormula}
           onDeleteFormula={deleteFormula}
+          closeSeq={closeSeq}
         />
       </div>
 
@@ -357,7 +405,7 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
             </div>
           )}
         </div>
-        {showNotes && <NotesPanel symbolKey={symbolKey} note={note} html={noteHtml} onClose={() => setShowNotes(false)} />}
+        {showNotes && <NotesPanel symbolKey={symbolKey} note={note} html={noteHtml} onClose={() => setShowNotes(false)} closeSeq={closeSeq} />}
       </div>
     </main>
   );

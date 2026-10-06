@@ -24,6 +24,8 @@ interface IndicatorBarProps {
   onParams: (name: string, params: number[] | null) => void;
   onSaveFormula: (def: FormulaDef) => Promise<string | null>;
   onDeleteFormula: (id: string) => Promise<string | null>;
+  /** Bumped by the page on Esc; any open editor closes */
+  closeSeq?: number;
 }
 
 const chipClass = (on: boolean) =>
@@ -103,9 +105,15 @@ export function IndicatorBar({
   onParams,
   onSaveFormula,
   onDeleteFormula,
+  closeSeq = 0,
 }: IndicatorBarProps) {
-  const [editing, setEditing] = useState<string | null>(null);
-  const [formulaEditing, setFormulaEditing] = useState<FormulaDef | "new" | null>(null);
+  // editor state is tagged with the closeSeq it was opened under, so a bump closes it without an effect
+  const [editingState, setEditingState] = useState<{ seq: number; name: string | null }>({ seq: 0, name: null });
+  const [formulaState, setFormulaState] = useState<{ seq: number; value: FormulaDef | "new" | null }>({ seq: 0, value: null });
+  const editing = editingState.seq === closeSeq ? editingState.name : null;
+  const formulaEditing = formulaState.seq === closeSeq ? formulaState.value : null;
+  const setEditing = (name: string | null) => setEditingState({ seq: closeSeq, name });
+  const setFormulaEditing = (value: FormulaDef | "new" | null) => setFormulaState({ seq: closeSeq, value });
   const editingDef = INDICATORS.find((d) => d.name === editing);
 
   return (

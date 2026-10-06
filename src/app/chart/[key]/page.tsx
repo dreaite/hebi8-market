@@ -1,9 +1,10 @@
 import { ChartView } from "@/components/ChartView";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
-import { findItem } from "@/lib/config";
+import { allItems, findItem } from "@/lib/config";
 import { renderMarkdown } from "@/lib/markdown";
+import { benchLabel, nameOf } from "@/lib/names";
 import { listSymbols } from "@/lib/store";
-import { isSynthetic, isValidKey, parseKey } from "@/lib/symbols";
+import { isValidKey } from "@/lib/symbols";
 import { ensureVault, readChartState, readConfigSafe, readNote, vaultDir } from "@/lib/vault";
 
 export const dynamic = "force-dynamic";
@@ -29,11 +30,13 @@ export default async function ChartPage({ params }: { params: Promise<{ key: str
   const state = readChartState(key);
   const note = readNote(key);
 
-  // display names for everything the chart may show
+  // display names for everything the chart may show: yaml name > dictionary > source
   const names: Record<string, string> = {};
-  for (const [k, row] of Object.entries(symbols)) names[k] = row.name ?? row.ticker;
-  for (const g of config.groups) for (const s of g.symbols) if (s.name) names[s.key] = s.name;
-  for (const c of state.compare) names[c.key] ??= isSynthetic(c.key) ? c.key.slice(1) : parseKey(c.key).ticker;
+  for (const k of [...Object.keys(symbols), ...allItems(config).map((i) => i.key), ...state.compare.map((c) => c.key), key]) {
+    names[k] = nameOf(config, k, symbols[k]?.name);
+  }
+  // the watchlist in yaml order, for ←/→
+  const order = allItems(config).map((i) => ({ key: i.key, name: names[i.key] }));
 
   return (
     <ChartView
@@ -44,7 +47,9 @@ export default async function ChartPage({ params }: { params: Promise<{ key: str
       formulas={config.indicators}
       aliases={config.aliases}
       bench={item?.bench ?? null}
+      benchLabel={item?.bench ? benchLabel(config, item.bench, symbols[item.bench]?.name) : null}
       names={names}
+      order={order}
       chartState={state}
       note={note}
       noteHtml={note ? renderMarkdown(note) : null}

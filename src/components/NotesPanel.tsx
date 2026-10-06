@@ -8,11 +8,14 @@ interface NotesPanelProps {
   note: string | null;
   html: string | null;
   onClose: () => void;
+  closeSeq?: number;
 }
 
 /** The thesis for a symbol: rendered markdown, with a textarea behind「编辑」. */
-export function NotesPanel({ symbolKey, note, html, onClose }: NotesPanelProps) {
-  const [editing, setEditing] = useState(false);
+export function NotesPanel({ symbolKey, note, html, onClose, closeSeq = 0 }: NotesPanelProps) {
+  const [editState, setEditState] = useState({ seq: 0, on: false });
+  const editing = editState.seq === closeSeq && editState.on;
+  const setEditing = (on: boolean) => setEditState({ seq: closeSeq, on });
   const [body, setBody] = useState(note ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, startTransition] = useTransition();
