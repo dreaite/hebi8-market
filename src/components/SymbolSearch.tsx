@@ -14,6 +14,8 @@ export interface PickDetail {
   /** What was typed, for remembering a Chinese search term as an alias */
   query: string;
   inWatchlist: string | undefined;
+  /** Which of `pickActions` was chosen (pick mode); Enter takes the first */
+  action?: string;
 }
 
 interface SymbolSearchProps {
@@ -28,6 +30,8 @@ interface SymbolSearchProps {
   error?: string | null;
   onPick: (detail: PickDetail) => void;
   onClose: () => void;
+  /** pick mode: buttons on the highlighted row, like TradingView's compare dialog */
+  pickActions?: { id: string; label: string }[];
 }
 
 type Section = "key" | "watchlist" | "common" | "external";
@@ -39,7 +43,7 @@ const SECTION_LABELS: Record<Section, string> = { key: "", watchlist: "自选", 
  * One combobox for finding, opening, adding and comparing symbols. The watchlist, aliases and the
  * dictionary match instantly; external sources arrive after a short debounce.
  */
-export function SymbolSearch({ mode, ctx, initialQuery = "", placeholder, exclude = [], busy, error, onPick, onClose }: SymbolSearchProps) {
+export function SymbolSearch({ mode, ctx, initialQuery = "", placeholder, exclude = [], busy, error, onPick, onClose, pickActions }: SymbolSearchProps) {
   const id = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState(initialQuery);
@@ -95,13 +99,13 @@ export function SymbolSearch({ mode, ctx, initialQuery = "", placeholder, exclud
   const chosenGroup = (r: SearchResult) => groupChoice[r.key] ?? r.suggestedGroup;
   const addable = (r: SearchResult) => mode === "navigate" && !r.inWatchlist;
 
-  const pick = (r: SearchResult, group = chosenGroup(r)) => {
+  const pick = (r: SearchResult, group = chosenGroup(r), action = pickActions?.[0]?.id) => {
     if (busy) return;
     if (addable(r) && group === NEW_GROUP) {
       setNewGroup({ key: r.key, name: "" });
       return;
     }
-    onPick({ key: r.key, name: r.name, group, query: trimmed, inWatchlist: r.inWatchlist });
+    onPick({ key: r.key, name: r.name, group, query: trimmed, inWatchlist: r.inWatchlist, action });
   };
 
   const cycleGroup = (r: SearchResult, step: 1 | -1) => {
@@ -136,7 +140,7 @@ export function SymbolSearch({ mode, ctx, initialQuery = "", placeholder, exclud
   const listId = `${id}-list`;
   const optionId = (i: number) => `${id}-opt-${i}`;
   const activeRow = rows[active];
-  const hint = mode === "pick" ? "加入对比" : activeRow?.inWatchlist ? "打开" : "添加并打开";
+  const hint = mode === "pick" ? (pickActions?.[0]?.label ?? "加入对比") : activeRow?.inWatchlist ? "打开" : "添加并打开";
 
   return (
     <div role="combobox" aria-expanded={rows.length > 0} aria-haspopup="listbox" aria-controls={listId} aria-owns={listId} className="flex flex-col text-xs">
@@ -189,7 +193,25 @@ export function SymbolSearch({ mode, ctx, initialQuery = "", placeholder, exclud
                   {r.name !== ticker && <span className="ml-2 font-mono text-[11px] text-muted">{ticker}</span>}
                   {r.exchange && <span className="ml-2 text-[11px] text-muted">{r.exchange}</span>}
                 </span>
-                {r.inWatchlist ? (
+                {mode === "pick" && pickActions ? (
+                  !isActive ? (
+                    r.inWatchlist && <span className="shrink-0 text-[11px] text-muted">{r.inWatchlist}</span>
+                  ) : (
+                    <span className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      {pickActions.map((a, ai) => (
+                        <button
+                          key={a.id}
+                          type="button"
+                          tabIndex={-1}
+                          onClick={() => pick(r, undefined, a.id)}
+                          className={`h-[22px] rounded border px-2 text-[11px] ${ai === 0 ? "border-fg bg-fg text-bg" : "border-line text-fg hover:border-muted"}`}
+                        >
+                          {a.label}
+                        </button>
+                      ))}
+                    </span>
+                  )
+                ) : r.inWatchlist ? (
                   <span className="shrink-0 text-[11px] text-muted">
                     {section === "watchlist" ? r.inWatchlist : `已在自选 · ${r.inWatchlist}`}
                   </span>
