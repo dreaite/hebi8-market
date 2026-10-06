@@ -19,31 +19,7 @@ import type { ChartBar } from "@/lib/api-types";
 import type { ChartStyle } from "@/lib/config";
 import type { Timeframe } from "@/lib/symbols";
 import type { CompareEntry, OverlaySpec } from "@/lib/vault";
-
-export interface IndicatorSpec {
-  name: string;
-  pane: "main" | "sub";
-  calcParams: number[];
-}
-
-export interface CompareLegendEntry {
-  key: string;
-  value: number | null;
-  /** Change since the base bar (the left edge of the visible range) */
-  pct: number | null;
-}
-
-/** Readable in both themes; taken in order of addition. */
-export const COMPARE_COLORS = ["#e8891d", "#8e5bd6", "#1aa39a", "#d6409f", "#c9a227", "#5b8def"];
-
-export const DRAW_TOOLS = [
-  { name: "horizontalStraightLine", label: "水平线" },
-  { name: "segment", label: "线段" },
-  { name: "rayLine", label: "射线" },
-  { name: "straightLine", label: "趋势线" },
-  { name: "fibonacciLine", label: "斐波那契" },
-  { name: "simpleAnnotation", label: "文字" },
-];
+import { COMPARE_COLORS, type CompareLegendEntry, type IndicatorSpec } from "./chart-types";
 
 interface KChartProps {
   symbolKey: string;
@@ -99,7 +75,8 @@ function registerTemplates() {
       // [base index, raw flag]: rebased to the main close at `base`, or the raw close in its own pane
       calcParams: [0, 0],
       figures: [{ key: "v", title: "", type: "line" }],
-      styles: { tooltip: { showRule: "none" } },
+      // the React legend in ChartView shows these lines; an empty tooltip takes no row
+      createTooltipDataSource: () => ({ name: "", calcParamsText: "", features: [], legends: [] }),
       calc: (dataList, indicator) => {
         const closes = compareSeries[slot] ?? [];
         const [base, raw] = indicator.calcParams;
@@ -374,7 +351,7 @@ export function KChart({
           shortName: c.key,
           calcParams: [0, pane ? 0 : 1],
           visible: !c.hidden,
-          styles: { lines: [{ color: c.color, size: 1.5 }], tooltip: { showRule: "none" } },
+          styles: { lines: [{ color: c.color, size: 1.5 }] },
         },
         true,
       );

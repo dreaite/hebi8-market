@@ -12,8 +12,8 @@ import { changeColor, fmtAgo, fmtPct, fmtPrice } from "@/lib/format";
 import type { Prices } from "@/lib/series";
 import { isValidKey, SOURCE_LABELS, TF_LABELS, TIMEFRAMES, type Timeframe } from "@/lib/symbols";
 import type { ChartState, CompareEntry, OverlaySpec } from "@/lib/vault";
+import { COMPARE_COLORS, DRAW_TOOLS, type CompareLegendEntry, type IndicatorSpec } from "./chart-types";
 import { IndicatorBar } from "./IndicatorBar";
-import { COMPARE_COLORS, DRAW_TOOLS, type CompareLegendEntry, type IndicatorSpec } from "./KChart";
 import { NotesPanel } from "./NotesPanel";
 
 const KChart = dynamic(() => import("./KChart").then((m) => m.KChart), { ssr: false });
@@ -155,6 +155,8 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
   const meta = data?.symbol;
   const percentMode = compare.some((c) => c.mode === "percent" && !hidden.includes(c.key));
   const compareWithHidden = useMemo(() => compare.map((c) => ({ ...c, hidden: hidden.includes(c.key) })), [compare, hidden]);
+  // KLineChart writes one tooltip row for the candle and one per main-pane indicator; the legend goes under them
+  const legendTop = 8 + 20 * (1 + specs.filter((s) => s.pane === "main").length);
 
   return (
     <main className="flex w-full flex-1 flex-col px-5 py-4">
@@ -321,7 +323,7 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
             />
           </div>
           {compare.length > 0 && (
-            <div className="pointer-events-none absolute top-7 left-2 z-10 flex flex-col gap-0.5 text-[11px]">
+            <div className="pointer-events-none absolute left-2 z-10 flex flex-col gap-0.5 text-[11px]" style={{ top: legendTop }}>
               {compare.map((c, i) => {
                 const entry = legend[i];
                 const off = hidden.includes(c.key);
