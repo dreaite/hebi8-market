@@ -295,6 +295,8 @@ export function KChart({
   const [store] = useState(createLegendStore);
   const [legendHeight, setLegendHeight] = useState(24);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  /** Text for the 文字 tool while it is being typed; null when the box is closed */
+  const [textDraft, setTextDraft] = useState<string | null>(null);
   // Latest props for the chart callbacks; declared first so later effects see the new values.
   useEffect(() => {
     onOverlaysChangeRef.current = onOverlaysChange;
@@ -713,13 +715,10 @@ export function KChart({
     const chart = chartRef.current;
     if (!chart) return;
     cancelDrawing();
-    if (!drawTool) return;
-    const extendData = drawTool === "simpleAnnotation" ? window.prompt("标注文字") : undefined;
-    if (drawTool === "simpleAnnotation" && !extendData) {
-      onDrawDoneRef.current();
-      return;
-    }
-    startDrawing(drawTool, extendData);
+    setTextDraft(drawTool === "simpleAnnotation" ? "" : null);
+    // the text tool asks for its text in an in-chart box first: a native prompt() would drop fullscreen
+    if (!drawTool || drawTool === "simpleAnnotation") return;
+    startDrawing(drawTool);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one overlay per tool selection
   }, [drawTool]);
 
@@ -762,6 +761,47 @@ export function KChart({
         compare={compare}
         onMainHeight={(h) => setLegendHeight((prev) => (Math.abs(prev - h) > 2 ? h : prev))}
       />
+      {textDraft !== null && (
+        <form
+          className="absolute top-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-md border border-line bg-card p-2 text-xs shadow-lg"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const text = textDraft.trim();
+            if (!text) return;
+            setTextDraft(null);
+            startDrawing("simpleAnnotation", text);
+          }}
+        >
+          <input
+            autoFocus
+            value={textDraft}
+            onChange={(e) => setTextDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Escape") return;
+              e.preventDefault();
+              e.stopPropagation();
+              setTextDraft(null);
+              onDrawDoneRef.current();
+            }}
+            placeholder="标注文字，回车后在图上点击放置"
+            aria-label="标注文字"
+            className="input h-7 w-64"
+          />
+          <button type="submit" className="btn btn-primary h-7" disabled={!textDraft.trim()}>
+            放置
+          </button>
+          <button
+            type="button"
+            className="btn h-7"
+            onClick={() => {
+              setTextDraft(null);
+              onDrawDoneRef.current();
+            }}
+          >
+            取消
+          </button>
+        </form>
+      )}
       {menu && (
         <div
           role="menu"

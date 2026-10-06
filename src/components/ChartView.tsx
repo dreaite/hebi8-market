@@ -45,7 +45,7 @@ import {
 } from "./chart-icons";
 import { COMPARE_COLORS, DRAW_TOOLS, RANGES, SUB_PANE_HEIGHT, type ChartControl, type IndicatorSpec } from "./chart-types";
 import { CompareDialog } from "./CompareDialog";
-import { Dropdown } from "./Dialog";
+import { Dialog, Dropdown } from "./Dialog";
 import { IndicatorDialog, ParamDialog } from "./IndicatorDialog";
 import type { DrawingModes } from "./KChart";
 import { NotesPanel } from "./NotesPanel";
@@ -73,7 +73,7 @@ const TOOL_ICONS: Record<string, (p: { size?: number }) => ReactNode> = {
 };
 
 type Panel = "watchlist" | "notes";
-type DialogState = { kind: "indicators"; formula?: FormulaDef | "new" } | { kind: "compare" } | { kind: "params"; name: string } | null;
+type DialogState = { kind: "indicators"; formula?: FormulaDef | "new" } | { kind: "compare" } | { kind: "params"; name: string } | { kind: "clear" } | null;
 
 const DEFAULT_DRAWING: DrawingModes = { magnet: false, locked: false, hidden: false };
 
@@ -404,7 +404,11 @@ export function ChartView({
 
   const clearDrawings = () => {
     if (chartState.overlays.length === 0) return;
-    if (!confirm("删除这个标的的全部绘图？")) return;
+    // in-page confirm: a native confirm() would drop fullscreen
+    setDialog({ kind: "clear" });
+  };
+  const confirmClearDrawings = () => {
+    setDialog(null);
     setDrawTool(null);
     setClearSeq((n) => n + 1);
   };
@@ -752,6 +756,19 @@ export function ChartView({
           onSave={(p) => setParams(paramDef.name, p)}
           onClose={() => setDialog(null)}
         />
+      )}
+      {dialog?.kind === "clear" && (
+        <Dialog title="删除所有绘图" onClose={() => setDialog(null)} className="max-w-[360px]">
+          <div className="p-4 text-sm">删除这个标的的全部 {chartState.overlays.length} 个绘图？</div>
+          <div className="flex justify-end gap-2 border-t border-line px-4 py-3">
+            <button type="button" className="btn" onClick={() => setDialog(null)}>
+              取消
+            </button>
+            <button type="button" className="btn btn-primary" autoFocus onClick={confirmClearDrawings}>
+              删除
+            </button>
+          </div>
+        </Dialog>
       )}
     </main>
   );
