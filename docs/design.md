@@ -232,8 +232,8 @@ date,open,high,low,close,volume
 2026-10-06,,15500,11000,12650,171
 ```
 
-- key：`data:<数据集>/<序列 id>`。数据集名在 yaml 的 `datasets` 里映射到地址，key 里不写地址，仓库搬家不影响图表和笔记。数据集名和序列 id 只能用 `[A-Za-z0-9._-]`。
-- 地址是 `https://`、`git@`、`ssh://` 时浅克隆到 `data/datasets/<name>/`，之后每次同步 `git fetch --depth 1` 再 `reset --hard`；私有仓库直接用机器上的 SSH key。以 `/`、`~`、`./` 开头时当本机目录直接读。同一次同步里一个数据集只拉一次。
+- key：`data:<数据集>/<序列 id>`。数据集名在 yaml 的 `datasets` 里映射到地址，key 里不写地址，仓库搬家不影响图表和笔记。数据集名和序列 id 只能用 `[A-Za-z0-9._-]`，并以字母或数字开头。
+- 地址是 `https://`、`git@`、`ssh://`、`file://` 时浅克隆到 `data/datasets/<name>/`，之后每次同步 `git fetch --depth 1` 再 `reset --hard`；私有仓库直接用机器上的 SSH key。以 `/`、`~/`、`./`、`../` 开头时当本机目录直接读，相对路径相对于 vault 目录。同一次同步里一个数据集只拉一次。
 - CSV：表头必须有 `date` 和 `close`，其余列可选、可留空。`open` 空时用 `close`；`high`/`low` 空时取 `open`/`close` 的较大/较小值；`volume` 空为 null。`date` 是 `YYYY-MM-DD`，映射到当天 UTC 零点。同一天出现两次取后一行；空行和 `#` 开头的行跳过。格式错误报行号，只记在这个标的上。
 - 元数据：`name`、`currency` 来自清单，`exchange` 是清单的 `name`，`kind` 是 `dataset`。
 - 比价数据的用法建议：`close` 放当天中位价，`high`/`low` 放区间，`volume` 放有效挂单数。

@@ -1,11 +1,17 @@
-export const SOURCES = ["yahoo", "binance", "tv"] as const;
+export const SOURCES = ["yahoo", "binance", "tv", "data"] as const;
 export type Source = (typeof SOURCES)[number];
 
 export const SOURCE_LABELS: Record<Source, string> = {
   yahoo: "Yahoo",
   binance: "Binance",
   tv: "TradingView",
+  data: "数据集",
 };
+
+/** A dataset or series name: file-name safe, never `.` or `..`. */
+export const DATA_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** `data:<dataset>/<series>`, case-sensitive. */
+export const DATA_TICKER = /^([A-Za-z0-9][A-Za-z0-9._-]*)\/([A-Za-z0-9][A-Za-z0-9._-]*)$/;
 
 export type Timeframe = "D" | "W" | "M" | "Q";
 export const TIMEFRAMES: Timeframe[] = ["D", "W", "M", "Q"];
@@ -27,6 +33,7 @@ export function parseKey(key: string): { source: Source; ticker: string } {
   const source = key.slice(0, i);
   const ticker = key.slice(i + 1);
   if (i <= 0 || !isSource(source) || !ticker) throw new Error(`无效的标的 key「${key}」`);
+  if (source === "data" && !DATA_TICKER.test(ticker)) throw new Error(`无效的数据集 key「${key}」，应为 data:数据集/序列`);
   return { source, ticker };
 }
 

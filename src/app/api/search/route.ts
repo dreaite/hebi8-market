@@ -24,10 +24,14 @@ export async function GET(request: Request) {
   if (!q) return NextResponse.json([]);
   const ctx = searchContextFor(readConfigSafe().config);
 
-  // Yahoo rejects CJK outright; Binance pairs are ASCII anyway.
-  const ascii = !isCJK(q);
-  const [yahoo, binance] = await Promise.all([ascii ? safe(adapters.yahoo.search?.(q)) : [], ascii ? safe(adapters.binance.search?.(q)) : []]);
-  const tv = needsTv(q, yahoo.length) ? await searchTv(q) : [];
-  const results: SearchResult[] = rankExternal(q, { yahoo, binance, tv }, ctx);
+  // Yahoo rejects CJK outright; Binance pairs are ASCII anyway. `data:` asks only the datasets.
+  const ascii = !isCJK(q) && !/^data:/i.test(q);
+  const [yahoo, binance, data] = await Promise.all([
+    ascii ? safe(adapters.yahoo.search?.(q)) : [],
+    ascii ? safe(adapters.binance.search?.(q)) : [],
+    safe(adapters.data.search?.(q)),
+  ]);
+  const tv = needsTv(q, yahoo.length) && !/^data:/i.test(q) ? await searchTv(q) : [];
+  const results: SearchResult[] = rankExternal(q, { yahoo, binance, tv, data }, ctx);
   return NextResponse.json(results);
 }

@@ -52,6 +52,9 @@ conditions:                    # 总览条件徽标；同步时按周线计算�
   - { id: rs_high, label: RS新高, formula: "rs = close / close(bench); rs >= highest(rs, 26)" }
   - { id: below_200w, label: 破200周, formula: "close < sma(close, 200)" }
 
+datasets: {}                   # 自定义数据集：名字 → git 地址或本机目录，key 写 data:名字/序列，见 README
+#  gpu: https://github.com/you/gpu-prices
+
 alerts: []                     # 单个标的的价位规则，同步后新成立就推送；tf 默认 D；通道在 ~/.config/hebi8/notify.json
 #  - { key: BTC, label: BTC 站上 13 万, when: "close > 130000" }
 #  - { key: NVDA, when: "close < sma(close, 200)", tf: W }

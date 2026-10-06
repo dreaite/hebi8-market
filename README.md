@@ -37,10 +37,43 @@
 | `yahoo` | 美股、港股、A 股、指数、ETF | 经 [yahoo-finance2](https://github.com/gadicc/yahoo-finance2) 拉取完整日线历史。价格是拆股复权价，分红因子另存，`prices: total` 时折进价格。直接请求 Yahoo 接口会返回 429，所以必须走这个库。 |
 | `binance` | 加密货币现货 | 公开 K 线接口，无需 key，增量拉取。 |
 | `tv` | 指数、国债收益率、外汇、商品等 Yahoo 缺的品种 | 非官方的 [TradingView-API](https://github.com/Mathieu2301/TradingView-API)，无需登录，最多约 6000 根日线。属于逆向接口，TradingView 改动协议后可能失效。 |
+| `data` | 自己的日线数据集，比如爬虫每天推送的显卡二手价 | 一个 git 仓库或本机目录，按下文的约定放 CSV。hebi8 只读不爬。 |
 
-代码示例：`yahoo:AAPL`、`yahoo:0700.HK`、`yahoo:600519.SS`、`yahoo:^GSPC`、`binance:BTCUSDT`、`tv:TVC:US10Y`、`tv:HSI:HSTECH`、`tv:FX_IDC:USDCNH`、`=BTC/GOLD`。
+代码示例：`yahoo:AAPL`、`yahoo:0700.HK`、`yahoo:600519.SS`、`yahoo:^GSPC`、`binance:BTCUSDT`、`tv:TVC:US10Y`、`tv:HSI:HSTECH`、`tv:FX_IDC:USDCNH`、`data:gpu/4090-xianyu`、`=BTC/GOLD`。
 
 各数据源的日线时间戳不同：美股记在开盘时刻，亚洲市场记在 01:30 UTC，外汇和 TVC 品种记在前一晚开盘时刻。入库前统一按交易所时区换算成交易日。
+
+### 自定义数据集
+
+任何按下面约定存放日线 CSV 的 git 仓库或本机目录，都能当数据源用。接进来以后，图表、公式、条件、对比、合成标的、同步后通知都和普通标的一样。
+
+```yaml
+# vault/hebi8.yaml
+datasets:
+  gpu: https://github.com/you/gpu-prices     # 也可以写 git@ / ssh:// / file:// 地址，或本机目录 ~/data/gpu-prices、./datasets/gpu
+aliases:
+  GPU4090: data:gpu/4090-xianyu
+```
+
+仓库根目录放清单 `hebi8-dataset.yaml`，每条序列一个 CSV：
+
+```yaml
+name: 显卡二手与零售价
+series:
+  - { id: 4090-xianyu, name: RTX 4090 咸鱼, currency: CNY, file: series/4090-xianyu.csv }
+  - { id: 4090-jd,     name: RTX 4090 京东, currency: CNY, file: series/4090-jd.csv }
+```
+
+```csv
+date,open,high,low,close,volume
+2026-10-05,,15800,11200,12900,184
+2026-10-06,,15500,11000,12650,171
+```
+
+- key 是 `data:<数据集>/<序列 id>`，区分大小写。在合成表达式和 `close(...)` 里要用别名或带引号的 key，比如 `=GPU4090/"tv:FX_IDC:USDCNH"`。
+- 远程仓库浅克隆到 `data/datasets/<name>/`，每次同步前拉一次。私有仓库用机器上的 SSH key。本机目录直接读，相对路径相对于 vault 目录。
+- CSV 只要求 `date` 和 `close` 两列，日期写 `YYYY-MM-DD`。`open` 空着就用 `close`，`high`、`low` 空着就取开收的高低，`volume` 可以留空。格式错误会报行号，只影响这一个标的。
+- 清单读到以后，搜索框输入序列名、id 或数据集名就能找到并加进自选；输入 `data:` 开头只查数据集。
 
 ## 运行
 
@@ -196,7 +229,7 @@ src/
     ├── use-autosave.ts       笔记 / 复盘的自动保存
     ├── github.ts secrets.ts  GitHub 调用（device flow 登录、刷新、issue）与 ~/.config/hebi8 里的登录会话
     ├── feedback.ts           反馈 issue 的正文、hebi8-context 格式与 GitHub 网页预填链接
-    ├── sources/              yahoo / binance / tradingview 适配器
+    ├── sources/              yahoo / binance / tradingview / dataset（自定义数据集）适配器
     ├── vault.ts config.ts    vault 的读写层、hebi8.yaml 的类型与校验
     ├── db.ts store.ts        SQLite 缓存（symbols、bars、stats、alert_state）
     ├── sync.ts scheduler.ts  同步、同步后算 stats 和通知、每日定时

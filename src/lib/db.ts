@@ -54,8 +54,13 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
     `),
 ];
 
+const dbFile = () => process.env.HEBI8_DB ?? path.join(process.cwd(), "data", "hebi8.db");
+
+/** The cache directory: the database and anything else that a re-sync rebuilds. */
+export const dataDir = () => path.dirname(dbFile());
+
 function open(): Database.Database {
-  const file = process.env.HEBI8_DB ?? path.join(process.cwd(), "data", "hebi8.db");
+  const file = dbFile();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new Database(file);
   db.pragma("journal_mode = WAL");

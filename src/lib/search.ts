@@ -1,6 +1,6 @@
 /**
  * Symbol search, pure: the local layer (watchlist, aliases, dictionary) runs in the browser on
- * every keystroke; the external layer (Yahoo / Binance / TradingView) is filtered, deduplicated
+ * every keystroke; the external layer (Yahoo / Binance / TradingView / datasets) is filtered, deduplicated
  * and ranked here after the route handler has fetched it.
  */
 import type { SearchHit } from "./sources/types";
@@ -57,7 +57,8 @@ export function directKey(query: string, aliases: Record<string, string>): strin
   const i = q.indexOf(":");
   if (i <= 0) return null;
   const source = q.slice(0, i).toLowerCase();
-  const ticker = q.slice(i + 1).toUpperCase();
+  // dataset ids are file names, so their case is kept
+  const ticker = source === "data" ? q.slice(i + 1) : q.slice(i + 1).toUpperCase();
   if (!(SOURCES as readonly string[]).includes(source) || !ticker) return null;
   const key = `${source}:${ticker}`;
   return isValidKey(key) ? key : null;
@@ -65,7 +66,7 @@ export function directKey(query: string, aliases: Record<string, string>): strin
 
 // ---------------------------------------------------------------------------- groups
 
-export type GroupLabel = "加密" | "港 A" | "宏观" | "比价" | "美股";
+export type GroupLabel = "加密" | "港 A" | "宏观" | "比价" | "数据" | "美股";
 
 const MACRO_KINDS = new Set(["index", "bond", "commodity", "forex", "cfd", "currency", "economic", "spot"]);
 const MACRO_EXCHANGES = /^(TVC|FX_IDC|OANDA|FX|FOREXCOM|CAPITALCOM|ECONOMICS|CBOT|COMEX|NYMEX|ICEUS|CME):/;
@@ -75,6 +76,7 @@ export function groupLabel(key: string, kind?: string): GroupLabel {
   if (isSynthetic(key)) return "比价";
   const { source, ticker } = parseKey(key);
   const k = kind?.toLowerCase();
+  if (source === "data") return "数据";
   if (source === "binance" || k === "cryptocurrency" || k === "crypto") return "加密";
   if (/\.(HK|SS|SZ)$/i.test(ticker) || (source === "tv" && /^(SSE|SZSE|HKEX):/.test(ticker))) return "港 A";
   if (source === "tv" && MACRO_EXCHANGES.test(ticker)) return "宏观";
@@ -87,6 +89,7 @@ const GROUP_SYNONYMS: Record<GroupLabel, string[]> = {
   "港 A": ["港a", "港股", "a股", "港", "中国", "hk", "china"],
   宏观: ["宏观", "指数", "商品", "macro", "index"],
   比价: ["比价", "合成", "spread", "ratio"],
+  数据: ["数据", "data", "价格", "price", "自定义"],
   美股: ["美股", "美国", "us", "stock"],
 };
 
@@ -126,6 +129,7 @@ function codesOf(key: string): string[] {
   const out = new Set<string>([key, ticker]);
   const bare = ticker.replace(/^\^/, "").replace(/\.(HK|SS|SZ)$/i, "").replace(/^[A-Z_]+:/, "");
   out.add(bare);
+  if (key.startsWith("data:")) out.add(ticker.slice(ticker.indexOf("/") + 1));
   if (/^0\d{3}$/.test(bare)) out.add(bare.replace(/^0+/, ""));
   return [...out];
 }
@@ -209,6 +213,8 @@ export interface RawExternal {
   yahoo: SearchHit[];
   binance: SearchHit[];
   tv: SearchHit[];
+  /** Series from the yaml's datasets, read from disk */
+  data?: SearchHit[];
 }
 
 const YAHOO_DROP = new Set(["future", "option", "mutualfund", "money_market"]);
@@ -303,6 +309,7 @@ const isCrypto = (h: SearchHit) => parseKey(h.key).source === "binance" || /^cry
 
 function sourceScore(h: SearchHit): number {
   const { source, ticker } = parseKey(h.key);
+  if (source === "data") return 60;
   if (isCrypto(h)) return source === "binance" ? 60 : 30;
   if (isMacro(h)) {
     if (source === "tv") return /^(TVC|HSI|FX_IDC|OANDA):/.test(ticker) ? 60 : 20;
@@ -329,7 +336,7 @@ export function rankExternal(query: string, raw: RawExternal, ctx: SearchContext
   const q = normalizeQuery(query);
   const lower = q.toLowerCase();
   const watched = new Map(ctx.watchlist.map((w) => [w.key, w]));
-  const merged = [...raw.binance, ...filterYahoo(q, raw.yahoo), ...filterTv(q, raw.tv)].filter((h) => isValidKey(h.key));
+  const merged = [...(raw.data ?? []), ...raw.binance, ...filterYahoo(q, raw.yahoo), ...filterTv(q, raw.tv)].filter((h) => isValidKey(h.key));
 
   // one row per instrument: the preferred key wins, otherwise the first seen
   const groups = new Map<string, SearchHit[]>();

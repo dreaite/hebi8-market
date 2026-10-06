@@ -2,7 +2,7 @@
 import { compile } from "@/indicators/formula";
 import { CHANGE_PERIODS, DEFAULT_PERIODS, MAX_PERIODS, type ChangePeriod } from "./periods";
 import type { Prices } from "./series";
-import { hash6, isSynthetic, isTimeframe, isValidKey, type Timeframe } from "./symbols";
+import { DATA_ID, hash6, isSynthetic, isTimeframe, isValidKey, type Timeframe } from "./symbols";
 import { parseSynth } from "./synth";
 
 export type UpDown = "green-up" | "red-up";
@@ -74,6 +74,8 @@ export interface Config {
   indicators: FormulaDef[];
   conditions: ConditionDef[];
   alerts: AlertDef[];
+  /** Dataset name → git URL or local directory (absolute, `~/`, or relative to the vault) */
+  datasets: Record<string, string>;
   chart: ChartPrefs;
 }
 
@@ -211,6 +213,16 @@ export function normalizeConfig(raw: unknown): Config {
     ids.add(a.id);
   }
 
+  const datasets: Record<string, string> = {};
+  for (const [name, value] of Object.entries(obj(root.datasets))) {
+    const where = `datasets.${name}`;
+    if (!DATA_ID.test(name)) throw new ConfigError(`${where}：名字只能用字母、数字、点、下划线、横线，并以字母或数字开头`);
+    const location = text(value);
+    if (!location) throw new ConfigError(`${where}：需要 git 地址或本机目录`);
+    if (!isDatasetLocation(location)) throw new ConfigError(`${where}：「${location}」应为 https:// / ssh:// / git@ / file:// 地址，或以 / ~/ ./ ../ 开头的目录`);
+    datasets[name] = location;
+  }
+
   const chart = obj(root.chart);
   const style = chart.style ?? DEFAULT_CHART.style;
   if (typeof style !== "string" || !(style in CHART_STYLES)) throw new ConfigError(`chart.style：未知样式「${String(style)}」`);
@@ -225,6 +237,7 @@ export function normalizeConfig(raw: unknown): Config {
     indicators,
     conditions,
     alerts,
+    datasets,
     chart: {
       tf: isTimeframe(chart.tf) ? chart.tf : DEFAULT_CHART.tf,
       log: typeof chart.log === "boolean" ? chart.log : DEFAULT_CHART.log,
@@ -234,6 +247,10 @@ export function normalizeConfig(raw: unknown): Config {
     },
   };
 }
+
+/** Remote repos are cloned into the cache; anything path-like is read in place. */
+export const isRemoteDataset = (location: string) => /^(https:\/\/|ssh:\/\/|file:\/\/|git@[^:]+:)/.test(location);
+const isDatasetLocation = (location: string) => isRemoteDataset(location) || /^(\/|~\/|\.\.?\/)/.test(location);
 
 export function allItems(cfg: Config): WatchItem[] {
   return cfg.groups.flatMap((g) => g.symbols);
