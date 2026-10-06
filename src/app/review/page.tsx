@@ -2,10 +2,9 @@ import Link from "next/link";
 import { Badge } from "@/components/Badge";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
 import { JournalEditor } from "@/components/JournalEditor";
-import { allItems } from "@/lib/config";
 import { plainFirstLine, renderMarkdown } from "@/lib/markdown";
+import { nameOf as displayNameOf } from "@/lib/names";
 import { listSymbols, readAllStats } from "@/lib/store";
-import { isSynthetic, parseKey } from "@/lib/symbols";
 import { ensureVault, JOURNAL_TEMPLATE, journalMtime, listNotes, readConfigSafe, readJournal, vaultDir } from "@/lib/vault";
 import { currentWeekId, shiftWeek } from "@/lib/week";
 
@@ -23,10 +22,7 @@ export default async function ReviewPage() {
 
   const symbols = listSymbols();
   const stats = readAllStats();
-  const nameOf = (key: string) => {
-    const item = allItems(config).find((s) => s.key === key);
-    return item?.name ?? symbols[key]?.name ?? (isSynthetic(key) ? key.slice(1) : parseKey(key).ticker);
-  };
+  const nameOf = (key: string) => displayNameOf(config, key, symbols[key]?.name);
   const labels = Object.fromEntries(config.conditions.map((c) => [c.id, c.label]));
 
   // every condition that flipped between last week's bar and this week's

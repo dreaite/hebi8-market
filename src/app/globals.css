@@ -116,6 +116,11 @@ body {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+/* Text fields show focus by their caret and border, not a frame around the whole editor. */
+textarea:focus-visible,
+input:focus-visible {
+  outline: none;
+}
 
 @layer components {
   .btn,
