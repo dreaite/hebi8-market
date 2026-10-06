@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Badge } from "@/components/Badge";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
 import { JournalEditor } from "@/components/JournalEditor";
 import { allItems } from "@/lib/config";
@@ -70,11 +71,11 @@ export default async function ReviewPage() {
                         <li key={i}>
                           <Link
                             href={`/chart/${encodeURIComponent(it.key)}`}
-                            className={`flex h-6 items-center gap-1.5 rounded-full border px-2.5 hover:border-muted ${it.on ? "border-accent/50" : "border-line text-muted"}`}
+                            className="flex h-7 items-center gap-1.5 rounded px-1.5 hover:bg-bg/60"
+                            title={`${it.name}：${it.label}${it.on ? " 本周新触发" : " 本周失效"}`}
                           >
                             <span>{it.name}</span>
-                            <span className={it.on ? "text-fg" : "line-through"}>{it.label}</span>
-                            <span className={it.on ? "text-up" : "text-down"}>{it.on ? "触发" : "失效"}</span>
+                            <Badge label={it.label} state={it.on ? "fresh" : "off"} />
                           </Link>
                         </li>
                       ))}

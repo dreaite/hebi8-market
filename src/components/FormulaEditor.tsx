@@ -44,7 +44,7 @@ export function FormulaEditor({ initial, scope, onSave, onDelete, onClose }: For
     setBusy(false);
   };
 
-  const input = "rounded border border-line bg-bg px-2 text-sm outline-none focus:border-accent";
+  const input = "rounded border border-line bg-bg px-2 text-xs outline-none focus:border-accent";
   return (
     <form
       className="rounded-lg border border-line bg-card p-3 text-xs"
@@ -57,7 +57,7 @@ export function FormulaEditor({ initial, scope, onSave, onDelete, onClose }: For
         <div className="flex flex-col gap-2">
           <label className="flex flex-col gap-1 text-muted">
             名称
-            <input value={label} onChange={(e) => setLabel(e.target.value)} className={`${input} h-7 w-36`} autoFocus />
+            <input value={label} onChange={(e) => setLabel(e.target.value)} className="input w-36" autoFocus />
           </label>
           <div className="flex gap-3 text-muted">
             {(["main", "sub"] as const).map((p) => (
@@ -67,7 +67,7 @@ export function FormulaEditor({ initial, scope, onSave, onDelete, onClose }: For
               </label>
             ))}
           </div>
-          {initial && <span className="font-mono text-[10px] text-muted">id: {initial.id}</span>}
+          {initial && <span className="font-mono text-[11px] text-muted">id: {initial.id}</span>}
         </div>
         <label className="flex min-w-[280px] flex-1 flex-col gap-1 text-muted">
           公式（每行或分号一条线，name = 表达式 可命名并被后面引用，# 开头是注释）
@@ -107,18 +107,18 @@ export function FormulaEditor({ initial, scope, onSave, onDelete, onClose }: For
           ))}
         {serverError && <span className="text-down">{serverError}</span>}
         <span className="flex-1" />
-        <button type="button" onClick={() => setShowHelp((v) => !v)} className="text-muted hover:text-fg">
+        <button type="button" onClick={() => setShowHelp((v) => !v)} aria-pressed={showHelp} className="btn">
           {showHelp ? "收起语法" : "语法"}
         </button>
         {onDelete && (
-          <button type="button" onClick={() => void submit(onDelete)} disabled={busy} className="text-down hover:underline">
+          <button type="button" onClick={() => void submit(onDelete)} disabled={busy} className="btn text-down">
             删除
           </button>
         )}
-        <button type="button" onClick={onClose} className="text-muted hover:text-fg">
+        <button type="button" onClick={onClose} className="btn">
           取消
         </button>
-        <button type="submit" disabled={!valid || busy} className="rounded bg-fg px-3 py-1 text-bg disabled:opacity-40">
+        <button type="submit" disabled={!valid || busy} className="btn btn-primary">
           {busy ? "保存中…" : "保存"}
         </button>
       </div>

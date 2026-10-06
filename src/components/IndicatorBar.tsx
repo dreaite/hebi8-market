@@ -29,7 +29,7 @@ interface IndicatorBarProps {
 }
 
 const chipClass = (on: boolean) =>
-  `flex h-7 items-center rounded-full border text-xs transition-colors ${
+  `chip flex h-[26px] shrink-0 items-center rounded-full border text-xs transition-colors ${
     on ? "border-fg/40 bg-card text-fg" : "border-line text-muted"
   }`;
 
@@ -65,14 +65,9 @@ function ParamEditor({
       }}
     >
       <span className="text-muted">{def.label} 参数</span>
-      <input
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        autoFocus
-        className={`h-6 w-36 rounded border bg-bg px-1.5 font-mono outline-none ${parsed ? "border-line focus:border-accent" : "border-down"}`}
-      />
+      <input value={text} onChange={(e) => setText(e.target.value)} autoFocus aria-invalid={!parsed} className="input w-36 font-mono" />
       <span className="text-muted">{def.hint}</span>
-      <button type="submit" disabled={!parsed} className="text-accent disabled:opacity-40">
+      <button type="submit" disabled={!parsed} className="btn btn-primary">
         应用
       </button>
       {overridden && (
@@ -82,12 +77,12 @@ function ParamEditor({
             onSave(null);
             onClose();
           }}
-          className="text-muted hover:text-fg"
+          className="btn"
         >
           恢复默认
         </button>
       )}
-      <button type="button" onClick={onClose} className="text-muted hover:text-fg">
+      <button type="button" onClick={onClose} className="btn">
         取消
       </button>
     </form>
@@ -118,7 +113,8 @@ export function IndicatorBar({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-1.5">
+      {/* one scrolling row on narrow screens, wrapping otherwise */}
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 sm:flex-wrap sm:overflow-visible sm:pb-0">
         {INDICATORS.map((def) => {
           const on = enabled.includes(def.name);
           const unavailable = def.needsBenchmark && !hasBenchmark;
@@ -135,8 +131,8 @@ export function IndicatorBar({
               {on && !unavailable && p.length > 0 ? (
                 <button
                   onClick={() => setEditing(editing === def.name ? null : def.name)}
-                  className={`h-full pr-3 pl-1 font-mono text-[11px] hover:text-accent ${overridden.has(def.name) ? "text-accent" : "text-muted"}`}
-                  title="修改参数"
+                  className={`h-full pr-3 pl-1 font-mono text-[11px] hover:text-fg ${overridden.has(def.name) ? "text-fg" : "text-muted"}`}
+                  title={overridden.has(def.name) ? "修改参数（已自定义）" : "修改参数"}
                 >
                   {p.join("·")}
                 </button>
@@ -146,7 +142,7 @@ export function IndicatorBar({
             </div>
           );
         })}
-        <span className="mx-1 h-4 w-px bg-line" />
+        <span className="mx-1 h-4 w-px shrink-0 bg-line" />
         {formulas.map(({ def, error }) => (
           <div
             key={def.id}
@@ -159,7 +155,7 @@ export function IndicatorBar({
             </button>
             <button
               onClick={() => setFormulaEditing(formulaEditing !== "new" && formulaEditing?.id === def.id ? null : def)}
-              className="h-full pr-3 pl-1 text-[11px] text-muted hover:text-accent"
+              className="h-full pr-3 pl-1 text-[11px] text-muted hover:text-fg"
               title="编辑公式"
             >
               ✎
@@ -168,7 +164,7 @@ export function IndicatorBar({
         ))}
         <button
           onClick={() => setFormulaEditing(formulaEditing === "new" ? null : "new")}
-          className="h-7 rounded-full border border-dashed border-line px-3 text-xs text-muted hover:border-muted hover:text-fg"
+          className="chip h-[26px] shrink-0 rounded-full border border-dashed border-line px-3 text-xs text-muted hover:border-muted hover:text-fg"
           title="用公式定义自己的指标，保存在 hebi8.yaml"
         >
           + 公式指标
