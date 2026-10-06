@@ -1,35 +1,48 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { compile, FormulaError, FUNCTIONS, SERIES_VARS } from "@/indicators/formula";
-import { FORMULA_EXAMPLES, type FormulaDef } from "@/indicators/formula-indicators";
+import { compile, FUNCTIONS, SERIES_VARS } from "@/indicators/formula";
+import { describeError, FORMULA_EXAMPLES, newFormulaId } from "@/indicators/formula-indicators";
+import type { FormulaDef } from "@/lib/config";
+
+/** What the formula may reference on this chart: aliases, and the benchmark if the symbol has one. */
+export interface FormulaScope {
+  aliases: Record<string, string>;
+  bench: string | null;
+}
 
 interface FormulaEditorProps {
   /** null creates a new formula */
   initial: FormulaDef | null;
-  onSave: (def: Omit<FormulaDef, "id">) => void;
-  onDelete?: () => void;
+  scope: FormulaScope;
+  onSave: (def: FormulaDef) => Promise<string | null>;
+  onDelete?: () => Promise<string | null>;
   onClose: () => void;
 }
 
-function validate(source: string): { lines: string[] } | { error: string } {
+function validate(source: string, scope: FormulaScope): { lines: string[] } | { error: string } {
   try {
-    return { lines: compile(source).outputs };
+    return { lines: compile(source, scope).outputs };
   } catch (err) {
-    if (err instanceof FormulaError) {
-      return { error: err.pos === undefined ? err.message : `${err.message}（第 ${err.pos + 1} 个字符）` };
-    }
-    return { error: String(err) };
+    return { error: describeError(err) };
   }
 }
 
-export function FormulaEditor({ initial, onSave, onDelete, onClose }: FormulaEditorProps) {
+export function FormulaEditor({ initial, scope, onSave, onDelete, onClose }: FormulaEditorProps) {
   const [label, setLabel] = useState(initial?.label ?? "");
-  const [source, setSource] = useState(initial?.source ?? "");
+  const [source, setSource] = useState(initial?.formula ?? "");
   const [pane, setPane] = useState<FormulaDef["pane"]>(initial?.pane ?? "sub");
   const [showHelp, setShowHelp] = useState(false);
-  const result = useMemo(() => (source.trim() ? validate(source) : null), [source]);
+  const [busy, setBusy] = useState(false);
+  const [serverError, setServerError] = useState<string | null>(null);
+  const result = useMemo(() => (source.trim() ? validate(source, scope) : null), [source, scope]);
   const valid = result !== null && "lines" in result && label.trim() !== "";
+
+  const submit = async (fn: () => Promise<string | null>) => {
+    setBusy(true);
+    setServerError(await fn());
+    setBusy(false);
+  };
 
   const input = "rounded border border-line bg-bg px-2 text-sm outline-none focus:border-accent";
   return (
@@ -37,7 +50,7 @@ export function FormulaEditor({ initial, onSave, onDelete, onClose }: FormulaEdi
       className="rounded-lg border border-line bg-card p-3 text-xs"
       onSubmit={(e) => {
         e.preventDefault();
-        if (valid) onSave({ label: label.trim(), source, pane });
+        if (valid) void submit(() => onSave({ id: initial?.id ?? newFormulaId(), label: label.trim(), formula: source, pane }));
       }}
     >
       <div className="flex flex-wrap items-start gap-3">
@@ -54,6 +67,7 @@ export function FormulaEditor({ initial, onSave, onDelete, onClose }: FormulaEdi
               </label>
             ))}
           </div>
+          {initial && <span className="font-mono text-[10px] text-muted">id: {initial.id}</span>}
         </div>
         <label className="flex min-w-[280px] flex-1 flex-col gap-1 text-muted">
           公式（每行或分号一条线，name = 表达式 可命名并被后面引用，# 开头是注释）
@@ -83,7 +97,7 @@ export function FormulaEditor({ initial, onSave, onDelete, onClose }: FormulaEdi
               type="button"
               onClick={() => {
                 setLabel(ex.label);
-                setSource(ex.source);
+                setSource(ex.formula);
                 setPane(ex.pane);
               }}
               className="text-accent hover:underline"
@@ -91,20 +105,21 @@ export function FormulaEditor({ initial, onSave, onDelete, onClose }: FormulaEdi
               {ex.label}
             </button>
           ))}
+        {serverError && <span className="text-down">{serverError}</span>}
         <span className="flex-1" />
         <button type="button" onClick={() => setShowHelp((v) => !v)} className="text-muted hover:text-fg">
           {showHelp ? "收起语法" : "语法"}
         </button>
         {onDelete && (
-          <button type="button" onClick={onDelete} className="text-down hover:underline">
+          <button type="button" onClick={() => void submit(onDelete)} disabled={busy} className="text-down hover:underline">
             删除
           </button>
         )}
         <button type="button" onClick={onClose} className="text-muted hover:text-fg">
           取消
         </button>
-        <button type="submit" disabled={!valid} className="rounded bg-fg px-3 py-1 text-bg disabled:opacity-40">
-          保存
+        <button type="submit" disabled={!valid || busy} className="rounded bg-fg px-3 py-1 text-bg disabled:opacity-40">
+          {busy ? "保存中…" : "保存"}
         </button>
       </div>
 
@@ -117,7 +132,11 @@ export function FormulaEditor({ initial, onSave, onDelete, onClose }: FormulaEdi
                 <code className="text-fg">{name}</code> {desc}
               </div>
             ))}
-            <div className="mt-2">运算：+ - * / ^ 和括号；数字可直接参与运算</div>
+            <div className="mt-2">
+              别的标的：<code className="text-fg">close(QQQ)</code>（别名）、<code className="text-fg">close(&quot;yahoo:QQQ&quot;)</code>、
+              <code className="text-fg">close(bench)</code>；open / high / low / volume 同理，按本标的交易日对齐
+            </div>
+            <div className="mt-2">运算：+ - * / ^ 和括号；比较 &gt; &lt; &gt;= &lt;= == !=；逻辑 and or not（结果为 0/1）</div>
           </div>
           <div>
             <div className="mb-1 text-fg">函数</div>

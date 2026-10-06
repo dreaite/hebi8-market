@@ -2,8 +2,14 @@
 
 import { useState } from "react";
 import { INDICATORS, type IndicatorDef } from "@/indicators/catalog";
-import { formulaIndicatorName, type FormulaDef } from "@/indicators/formula-indicators";
-import { FormulaEditor } from "./FormulaEditor";
+import type { FormulaDef } from "@/lib/config";
+import { FormulaEditor, type FormulaScope } from "./FormulaEditor";
+
+export interface FormulaStatus {
+  def: FormulaDef;
+  /** Why it cannot run for this symbol (e.g. no benchmark), or null */
+  error: string | null;
+}
 
 interface IndicatorBarProps {
   enabled: string[];
@@ -11,13 +17,13 @@ interface IndicatorBarProps {
   params: Record<string, number[]>;
   overridden: Set<string>;
   hasBenchmark: boolean;
-  formulas: FormulaDef[];
+  formulas: FormulaStatus[];
+  scope: FormulaScope;
   onToggle: (name: string) => void;
   /** null resets to the default for this timeframe */
   onParams: (name: string, params: number[] | null) => void;
-  /** Without an id the formula is new */
-  onSaveFormula: (def: Omit<FormulaDef, "id"> & { id?: string }) => void;
-  onDeleteFormula: (id: string) => void;
+  onSaveFormula: (def: FormulaDef) => Promise<string | null>;
+  onDeleteFormula: (id: string) => Promise<string | null>;
 }
 
 const chipClass = (on: boolean) =>
@@ -92,6 +98,7 @@ export function IndicatorBar({
   overridden,
   hasBenchmark,
   formulas,
+  scope,
   onToggle,
   onParams,
   onSaveFormula,
@@ -112,13 +119,9 @@ export function IndicatorBar({
             <div
               key={def.name}
               className={`${chipClass(on && !unavailable)} ${unavailable ? "opacity-40" : ""}`}
-              title={unavailable ? "需要在添加时设置对比基准" : def.hint}
+              title={unavailable ? "需要在 hebi8.yaml 里设置 bench" : def.hint}
             >
-              <button
-                onClick={() => !unavailable && onToggle(def.name)}
-                className="h-full pr-1 pl-3"
-                disabled={unavailable}
-              >
+              <button onClick={() => !unavailable && onToggle(def.name)} className="h-full pr-1 pl-3" disabled={unavailable}>
                 {def.label}
               </button>
               {on && !unavailable && p.length > 0 ? (
@@ -136,28 +139,29 @@ export function IndicatorBar({
           );
         })}
         <span className="mx-1 h-4 w-px bg-line" />
-        {formulas.map((f) => {
-          const name = formulaIndicatorName(f.id);
-          return (
-            <div key={f.id} className={chipClass(enabled.includes(name))} title={f.source}>
-              <button onClick={() => onToggle(name)} className="h-full pr-1 pl-3">
-                <span className="mr-1 font-mono text-muted italic">ƒ</span>
-                {f.label}
-              </button>
-              <button
-                onClick={() => setFormulaEditing(formulaEditing === f ? null : f)}
-                className="h-full pr-3 pl-1 text-[11px] text-muted hover:text-accent"
-                title="编辑公式"
-              >
-                ✎
-              </button>
-            </div>
-          );
-        })}
+        {formulas.map(({ def, error }) => (
+          <div
+            key={def.id}
+            className={`${chipClass(enabled.includes(def.id) && !error)} ${error ? "border-down/50 opacity-70" : ""}`}
+            title={error ?? def.formula}
+          >
+            <button onClick={() => !error && onToggle(def.id)} className="h-full pr-1 pl-3" disabled={Boolean(error)}>
+              <span className="mr-1 font-mono text-muted italic">ƒ</span>
+              {def.label}
+            </button>
+            <button
+              onClick={() => setFormulaEditing(formulaEditing !== "new" && formulaEditing?.id === def.id ? null : def)}
+              className="h-full pr-3 pl-1 text-[11px] text-muted hover:text-accent"
+              title="编辑公式"
+            >
+              ✎
+            </button>
+          </div>
+        ))}
         <button
           onClick={() => setFormulaEditing(formulaEditing === "new" ? null : "new")}
           className="h-7 rounded-full border border-dashed border-line px-3 text-xs text-muted hover:border-muted hover:text-fg"
-          title="用公式定义自己的指标"
+          title="用公式定义自己的指标，保存在 hebi8.yaml"
         >
           + 公式指标
         </button>
@@ -166,16 +170,19 @@ export function IndicatorBar({
         <FormulaEditor
           key={formulaEditing === "new" ? "new" : formulaEditing.id}
           initial={formulaEditing === "new" ? null : formulaEditing}
-          onSave={(def) => {
-            onSaveFormula(formulaEditing === "new" ? def : { ...def, id: formulaEditing.id });
-            setFormulaEditing(null);
+          scope={scope}
+          onSave={async (def) => {
+            const error = await onSaveFormula(def);
+            if (!error) setFormulaEditing(null);
+            return error;
           }}
           onDelete={
             formulaEditing === "new"
               ? undefined
-              : () => {
-                  onDeleteFormula(formulaEditing.id);
-                  setFormulaEditing(null);
+              : async () => {
+                  const error = await onDeleteFormula(formulaEditing.id);
+                  if (!error) setFormulaEditing(null);
+                  return error;
                 }
           }
           onClose={() => setFormulaEditing(null)}
