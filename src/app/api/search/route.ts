@@ -1,12 +1,9 @@
 import { NextResponse } from "next/server";
-import { allItems } from "@/lib/config";
-import { isCJK, looksLikeYield, needsTv, normalizeQuery, rankExternal, type SearchContext, type SearchResult } from "@/lib/search";
+import { isCJK, looksLikeYield, needsTv, normalizeQuery, rankExternal, type SearchResult } from "@/lib/search";
+import { searchContextFor } from "@/lib/search-context";
 import { adapters } from "@/lib/sources";
 import type { SearchHit } from "@/lib/sources/types";
-import { listSymbols } from "@/lib/store";
-import { tickerOf } from "@/lib/symbols";
 import { readConfigSafe } from "@/lib/vault";
-import { displayName } from "@/lib/wellknown";
 
 export const dynamic = "force-dynamic";
 
@@ -25,13 +22,7 @@ async function searchTv(q: string): Promise<SearchHit[]> {
 export async function GET(request: Request) {
   const q = normalizeQuery(new URL(request.url).searchParams.get("q") ?? "");
   if (!q) return NextResponse.json([]);
-  const { config } = readConfigSafe();
-  const names = listSymbols();
-  const ctx: SearchContext = {
-    watchlist: config ? allItems(config).map((i) => ({ key: i.key, name: displayName(i.key, i.name, names[i.key]?.name), ticker: tickerOf(i.key), group: i.group })) : [],
-    aliases: config?.aliases ?? {},
-    groups: config?.groups.map((g) => g.name) ?? [],
-  };
+  const ctx = searchContextFor(readConfigSafe().config);
 
   // Yahoo rejects CJK outright; Binance pairs are ASCII anyway.
   const ascii = !isCJK(q);

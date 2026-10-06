@@ -8,6 +8,8 @@ import { CHART_STYLES, findItem, resolveKey, type ChartPrefs, type ConditionDef,
 import { CHANGE_PERIODS, MAX_PERIODS } from "@/lib/periods";
 import type { Prices } from "@/lib/series";
 import { getSymbol } from "@/lib/store";
+import { wellKnownName } from "@/lib/wellknown";
+import { isCJK } from "@/lib/search";
 import { isSynthetic, isTimeframe, isValidKey } from "@/lib/symbols";
 import { parseSynth } from "@/lib/synth";
 import { recomputeStats, syncAll, syncOne } from "@/lib/sync";
@@ -51,13 +53,56 @@ function entryKey(item: unknown, aliases: Record<string, string>): string | null
   return typeof value === "string" ? resolveKey(value, aliases) : null;
 }
 
+/** Where a watched key lives in the document: its group's `symbols` list and the index in it. */
+function locateEntry(doc: Document, key: string, aliases: Record<string, string>): { symbols: YAMLSeq; index: number } | null {
+  const groups = doc.get("groups");
+  if (!isSeq(groups)) return null;
+  for (const group of groups.items) {
+    if (!isMap(group)) continue;
+    const symbols = group.get("symbols");
+    if (!isSeq(symbols)) continue;
+    const index = symbols.items.findIndex((item) => entryKey(item, aliases) === key);
+    if (index >= 0) return { symbols, index };
+  }
+  return null;
+}
+
+/** A plain `- SPY` entry becomes `{ key: SPY }` so fields can be attached without losing the alias. */
+function entryAsMap(doc: Document, symbols: YAMLSeq, index: number): YAMLMap {
+  const item = symbols.items[index];
+  if (isMap(item)) return item;
+  const ref = isScalar(item) ? String(item.value) : String(item);
+  const node = flowNode(doc, { key: ref }) as YAMLMap;
+  symbols.items[index] = node;
+  return node;
+}
+
+function groupNode(doc: Document, name: string): YAMLMap {
+  const groups = seqOf(doc.contents as YAMLMap, "groups", doc);
+  let node = groups.items.find((g) => isMap(g) && g.get("name") === name) as YAMLMap | undefined;
+  if (!node) {
+    node = doc.createNode({ name, symbols: [] }) as YAMLMap;
+    groups.add(node);
+  }
+  return node;
+}
+
 export async function refresh(): Promise<ActionResult> {
   return attempt(async () => {
     await syncAll(true);
   });
 }
 
-export async function addSymbol(input: { key: string; group: string; name?: string; bench?: string }): Promise<ActionResult> {
+export interface AddSymbolInput {
+  key: string;
+  group: string;
+  name?: string;
+  bench?: string;
+  /** The search text that led here (e.g.「腾讯」); remembered as an alias for the key */
+  alias?: string;
+}
+
+export async function addSymbol(input: AddSymbolInput): Promise<ActionResult> {
   return attempt(async () => {
     const cfg = readConfig();
     const ref = str(input.key);
@@ -78,24 +123,76 @@ export async function addSymbol(input: { key: string; group: string; name?: stri
         if (!outcome.ok) throw new Error(`拉取 ${k} 失败：${outcome.error}`);
       }
     } else {
-      const outcome = await syncOne(key, true);
+      const outcome = await syncOne(key);
       if (!outcome.ok) throw new Error(`拉取 ${key} 失败：${outcome.error}`);
     }
     if (bench) await syncOne(bench);
 
-    const name = str(input.name);
+    const name = str(input.name) || wellKnownName(key) || "";
+    // a Chinese search term that found this key is worth keeping as an alias
+    const alias = str(input.alias);
+    const keepAlias = alias && isCJK(alias) && !alias.includes(":") && !cfg.aliases[alias] && alias !== name;
     updateConfig((doc) => {
-      const groups = seqOf(doc.contents as YAMLMap, "groups", doc);
-      let node = groups.items.find((g) => isMap(g) && g.get("name") === group) as YAMLMap | undefined;
-      if (!node) {
-        node = doc.createNode({ name: group, symbols: [] }) as YAMLMap;
-        groups.add(node);
-      }
-      const symbols = seqOf(node, "symbols", doc);
+      const symbols = seqOf(groupNode(doc, group), "symbols", doc);
       const entry: Record<string, string> = { key: ref };
       if (name) entry.name = name;
       if (benchRef) entry.bench = benchRef;
       symbols.add(name || benchRef ? flowNode(doc, entry) : doc.createNode(ref));
+      if (keepAlias) {
+        const aliases = doc.get("aliases");
+        if (isMap(aliases)) aliases.set(alias, key);
+        else doc.set("aliases", doc.createNode({ [alias]: key }));
+      }
+    });
+    recomputeStats(readConfig());
+  });
+}
+
+export async function moveSymbol(key: string, group: string): Promise<ActionResult> {
+  return attempt(() => {
+    const target = str(group);
+    if (!target) throw new Error("请选择分组");
+    updateConfig((doc) => {
+      const found = locateEntry(doc, key, readConfig().aliases);
+      if (!found) throw new Error(`${key} 不在自选里`);
+      const [item] = found.symbols.items.splice(found.index, 1);
+      seqOf(groupNode(doc, target), "symbols", doc).add(item);
+    });
+  });
+}
+
+export async function renameSymbol(key: string, name: string): Promise<ActionResult> {
+  return attempt(() => {
+    const next = str(name);
+    updateConfig((doc) => {
+      const found = locateEntry(doc, key, readConfig().aliases);
+      if (!found) throw new Error(`${key} 不在自选里`);
+      const entry = entryAsMap(doc, found.symbols, found.index);
+      if (next) entry.set("name", next);
+      else entry.delete("name");
+    });
+  });
+}
+
+export async function setBench(key: string, bench: string | null): Promise<ActionResult> {
+  return attempt(async () => {
+    const cfg = readConfig();
+    const benchRef = str(bench);
+    const target = benchRef ? resolveKey(benchRef, cfg.aliases) : null;
+    if (target) {
+      if (!isValidKey(target)) throw new Error(`无效的基准「${benchRef}」`);
+      if (target === key) throw new Error("基准不能是自己");
+      if (!isSynthetic(target)) {
+        const outcome = await syncOne(target);
+        if (!outcome.ok) throw new Error(`拉取 ${target} 失败：${outcome.error}`);
+      }
+    }
+    updateConfig((doc) => {
+      const found = locateEntry(doc, key, cfg.aliases);
+      if (!found) throw new Error(`${key} 不在自选里`);
+      const entry = entryAsMap(doc, found.symbols, found.index);
+      if (benchRef) entry.set("bench", benchRef);
+      else entry.delete("bench");
     });
     recomputeStats(readConfig());
   });
@@ -104,16 +201,8 @@ export async function addSymbol(input: { key: string; group: string; name?: stri
 export async function removeSymbol(key: string): Promise<ActionResult> {
   return attempt(() => {
     updateConfig((doc) => {
-      const aliases = readConfig().aliases;
-      const groups = doc.get("groups");
-      if (!isSeq(groups)) return;
-      for (const group of groups.items) {
-        if (!isMap(group)) continue;
-        const symbols = group.get("symbols");
-        if (!isSeq(symbols)) continue;
-        const index = symbols.items.findIndex((item) => entryKey(item, aliases) === key);
-        if (index >= 0) symbols.delete(index);
-      }
+      const found = locateEntry(doc, key, readConfig().aliases);
+      if (found) found.symbols.delete(found.index);
     });
   });
 }

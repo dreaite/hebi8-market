@@ -9,8 +9,8 @@ import { changeColor, fmtAgo, fmtPct, fmtPrice } from "@/lib/format";
 import { CHANGE_PERIODS, MAX_PERIODS, type ChangePeriod } from "@/lib/periods";
 import type { Stats } from "@/lib/stats";
 import { SOURCE_LABELS, type Source } from "@/lib/symbols";
-import { AddSymbolForm } from "./AddSymbolForm";
 import { Sparkline } from "./Sparkline";
+import { useUi } from "./UiProvider";
 
 export interface OverviewRow {
   key: string;
@@ -148,10 +148,10 @@ function Th({
 
 export function Overview({ data }: { data: OverviewData }) {
   const router = useRouter();
+  const { openSearch } = useUi();
   const [pending, startTransition] = useTransition();
   const [refreshing, setRefreshing] = useState(false);
   const [sort, setSort] = useState<Sort>(null);
-  const [adding, setAdding] = useState(false);
   const [choosingPeriods, setChoosingPeriods] = useState(false);
   const [periods, setPeriodsState] = useState(data.periods);
   const [updown, setUpdownState] = useState(data.updown);
@@ -215,7 +215,7 @@ export function Overview({ data }: { data: OverviewData }) {
           >
             {refreshing ? "同步中…" : "刷新"}
           </button>
-          <button onClick={() => setAdding((v) => !v)} className="rounded border border-line px-3 py-1 hover:border-muted">
+          <button onClick={() => openSearch()} className="rounded border border-line px-3 py-1 hover:border-muted">
             + 添加
           </button>
         </div>
@@ -230,7 +230,6 @@ export function Overview({ data }: { data: OverviewData }) {
           }}
         />
       )}
-      {adding && <AddSymbolForm groups={data.groups.map((g) => g.name)} onDone={() => setAdding(false)} />}
       {message && <p className="mb-3 text-xs text-down">{message}</p>}
       {data.firstRun && <p className="mb-3 text-sm text-muted">首次拉取中，正在从数据源获取全部历史，稍等几秒…</p>}
 

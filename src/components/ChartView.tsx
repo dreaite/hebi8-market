@@ -6,15 +6,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { deleteIndicator, saveChartState, saveIndicator, setChartPrefs } from "@/app/actions";
 import { INDICATORS } from "@/indicators/catalog";
 import { compileFormula, formulaIndicatorName, formulaTemplate } from "@/indicators/formula-indicators";
-import type { BarsResponse, SearchHit } from "@/lib/api-types";
-import { CHART_STYLES, resolveKey, type ChartPrefs, type ChartStyle, type FormulaDef, type ParamOverrides } from "@/lib/config";
+import type { BarsResponse } from "@/lib/api-types";
+import { CHART_STYLES, type ChartPrefs, type ChartStyle, type FormulaDef, type ParamOverrides } from "@/lib/config";
 import { changeColor, fmtAgo, fmtPct, fmtPrice } from "@/lib/format";
 import type { Prices } from "@/lib/series";
-import { isValidKey, SOURCE_LABELS, TF_LABELS, TIMEFRAMES, type Timeframe } from "@/lib/symbols";
+import { SOURCE_LABELS, TF_LABELS, TIMEFRAMES, type Timeframe } from "@/lib/symbols";
 import type { ChartState, CompareEntry, OverlaySpec } from "@/lib/vault";
+import type { SearchContext } from "@/lib/search";
 import { COMPARE_COLORS, DRAW_TOOLS, type CompareLegendEntry, type IndicatorSpec } from "./chart-types";
 import { IndicatorBar } from "./IndicatorBar";
 import { NotesPanel } from "./NotesPanel";
+import { SymbolSearch } from "./SymbolSearch";
+import { useUi } from "./UiProvider";
 
 const KChart = dynamic(() => import("./KChart").then((m) => m.KChart), { ssr: false });
 
@@ -34,6 +37,7 @@ interface ChartViewProps {
 }
 
 export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, aliases, bench, names, chartState, note, noteHtml }: ChartViewProps) {
+  const { openSearch, searchCtx } = useUi();
   const [tf, setTf] = useState(prefs.tf);
   const [log, setLog] = useState(prefs.log);
   const [chartStyle, setChartStyle] = useState(prefs.style);
@@ -165,7 +169,9 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
           <Link href="/" className="text-xs text-muted hover:text-fg">
             ← 总览
           </Link>
-          <h1 className="text-base font-medium">{meta?.name ?? names[symbolKey] ?? symbolKey}</h1>
+          <button onClick={() => openSearch()} className="text-base font-medium hover:text-accent" title="换一个标的（/ 或直接敲字母）">
+            {names[symbolKey] ?? meta?.name ?? symbolKey}
+          </button>
           {meta && (
             <span className="font-mono text-[11px] text-muted">
               {meta.ticker} · {meta.source === "expr" ? "合成" : SOURCE_LABELS[meta.source]}
@@ -288,7 +294,8 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
 
       {compareOpen && (
         <ComparePanel
-          aliases={aliases}
+          ctx={searchCtx}
+          symbolKey={symbolKey}
           existing={compare}
           onAdd={async (key, mode) => {
             const used = new Set(compare.map((c) => c.color));
@@ -357,66 +364,26 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
 }
 
 function ComparePanel({
-  aliases,
+  ctx,
+  symbolKey,
   existing,
   onAdd,
   onClose,
 }: {
-  aliases: Record<string, string>;
+  ctx: SearchContext;
+  symbolKey: string;
   existing: CompareEntry[];
   onAdd: (key: string, mode: CompareEntry["mode"]) => Promise<boolean>;
   onClose: () => void;
 }) {
-  const [query, setQuery] = useState("");
   const [mode, setMode] = useState<CompareEntry["mode"]>("percent");
-  const [hits, setHits] = useState<SearchHit[]>([]);
   const [busy, setBusy] = useState(false);
-  const direct = resolveKey(query, aliases);
-  const isKey = isValidKey(direct);
-
-  useEffect(() => {
-    const q = query.trim();
-    if (q.length < 2 || isValidKey(resolveKey(q, aliases))) return;
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: controller.signal })
-        .then((res) => (res.ok ? (res.json() as Promise<SearchHit[]>) : []))
-        .then(setHits)
-        .catch(() => undefined);
-    }, 300);
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [query, aliases]);
-
-  const add = async (key: string) => {
-    if (existing.some((c) => c.key === key)) return;
-    setBusy(true);
-    if (await onAdd(key, mode)) {
-      setQuery("");
-      setHits([]);
-    }
-    setBusy(false);
-  };
+  const [error, setError] = useState<string | null>(null);
 
   return (
-    <div className="mb-3 rounded-lg border border-line bg-card p-3 text-xs">
-      <form
-        className="flex flex-wrap items-center gap-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (isKey) void add(direct);
-        }}
-      >
-        <span className="text-muted">对比</span>
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="别名、key 或搜索：QQQ / tv:TVC:US10Y / apple"
-          className="h-7 w-72 rounded border border-line bg-bg px-2 font-mono outline-none focus:border-accent"
-          autoFocus
-        />
+    <div className="mb-3 rounded-lg border border-line bg-card text-xs">
+      <div className="flex flex-wrap items-center gap-3 border-b border-line px-3 py-2">
+        <span className="font-medium">对比</span>
         <div className="flex gap-3 text-muted">
           <label className="flex cursor-pointer items-center gap-1">
             <input type="radio" checked={mode === "percent"} onChange={() => setMode("percent")} className="accent-current" />
@@ -427,25 +394,27 @@ function ComparePanel({
             独立副图
           </label>
         </div>
-        <button type="submit" disabled={!isKey || busy} className="rounded bg-fg px-3 py-1 text-bg disabled:opacity-40">
-          {busy ? "拉取中…" : "添加"}
-        </button>
+        <span className="flex-1" />
         <button type="button" onClick={onClose} className="text-muted hover:text-fg">
           关闭
         </button>
-      </form>
-      {!isKey && hits.length > 0 && (
-        <ul className="mt-2 flex flex-wrap gap-1.5">
-          {hits.map((h) => (
-            <li key={h.key}>
-              <button type="button" onClick={() => void add(h.key)} disabled={busy} className="rounded-full border border-line px-2.5 py-1 hover:border-muted" title={h.key}>
-                <span className="font-mono">{h.key}</span>
-                <span className="ml-1.5 text-muted">{h.name}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      </div>
+      <SymbolSearch
+        mode="pick"
+        ctx={ctx}
+        placeholder="别名、key 或搜索：QQQ / tv:TVC:US10Y / apple"
+        exclude={[symbolKey, ...existing.map((c) => c.key)]}
+        busy={busy}
+        error={error}
+        onPick={async (d) => {
+          setBusy(true);
+          setError(null);
+          const ok = await onAdd(d.key, mode);
+          setBusy(false);
+          if (!ok) setError(`无法拉取 ${d.key}`);
+        }}
+        onClose={onClose}
+      />
     </div>
   );
 }
