@@ -69,14 +69,17 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
   const neighbour = (step: 1 | -1) => (position < 0 || order.length < 2 ? null : order[(position + step + order.length) % order.length]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || isEditable(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.defaultPrevented) return;
+      // Esc works from inside an editor's own input too; the search overlay stops its own Esc
       if (e.key === "Escape") {
         setCompareOpen(false);
         setDrawTool(null);
         setMoreOpen(false);
         setCloseSeq((n) => n + 1);
+        if (isEditable(e.target)) (e.target as HTMLElement).blur();
         return;
       }
+      if (isEditable(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
       const step = e.key === "ArrowRight" || e.key === "j" ? 1 : e.key === "ArrowLeft" || e.key === "k" ? -1 : 0;
       if (!step) return;
       const target = neighbour(step);
