@@ -240,6 +240,8 @@ export function filterYahoo(query: string, hits: SearchHit[]): SearchHit[] {
 }
 
 const TV_DROP = new Set(["structured", "swap", "dr", "warrant", "right", "fundamental"]);
+/** Data vendors whose series are noise here (short volume, fundamentals). */
+const TV_DROP_EXCHANGES = /^(FINRA|QUANDL|FRED|ECONOMICS):/;
 const TV_EXCHANGES = ["TVC", "HSI", "SSE", "SZSE", "HKEX", "NASDAQ", "NYSE", "BINANCE", "FX_IDC", "OANDA"];
 const US_EXCHANGES = new Set(["NASDAQ", "NYSE", "AMEX", "NYSEARCA", "BATS", "CBOE", "OTC"]);
 
@@ -281,6 +283,7 @@ export function filterTv(query: string, hits: SearchHit[]): SearchHit[] {
   return hits.flatMap((h) => {
     const kind = h.kind?.toLowerCase();
     if (kind && TV_DROP.has(kind)) return [];
+    if (TV_DROP_EXCHANGES.test(tickerOf(h.key))) return [];
     if (kind === "bond" && !yieldQuery) return [];
     if (kind === "futures" && !futuresQuery) return [];
     const key = canonicalKey(h.key, kind);

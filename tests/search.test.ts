@@ -144,6 +144,7 @@ describe("filterTv / canonicalKey", () => {
       { key: "tv:BINANCE:BTCUSDT", name: "BTC/USDT", kind: "spot" },
       { key: "tv:TVC:GOLD", name: "GOLD", kind: "cfd" },
       { key: "tv:SHFE:AU1!", name: "GOLD FUTURES", kind: "futures" },
+      { key: "tv:FINRA:QQQP_SHORT_VOLUME", name: "QQQP Short Sale Volume", kind: "economic" },
     ]);
     expect(hits.map((h) => `${h.key}|${h.name}`)).toEqual([
       "yahoo:0700.HK|TENCENT HOLDINGS",
