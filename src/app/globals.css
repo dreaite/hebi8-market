@@ -270,6 +270,32 @@ input:focus-visible {
   }
 }
 
+/*
+ * Overview columns that only fit on wide screens. A hidden <col> still takes its width in a fixed
+ * layout and a display:none cell shifts the following cells into the wrong columns, so these
+ * columns are sized to 0 and their cells stay in the row, clipped, until xl.
+ */
+:root {
+  --col-pos52: 0px;
+  --col-spark: 0px;
+}
+.wide-col {
+  padding-left: 0;
+  padding-right: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+@media (min-width: 1280px) {
+  :root {
+    --col-pos52: 128px;
+    --col-spark: 200px;
+  }
+  .wide-col {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+}
+
 /* Toolbar folded into the ⋯ menu on narrow screens: the drawing group may wrap. */
 .menu .seg {
   flex-wrap: wrap;

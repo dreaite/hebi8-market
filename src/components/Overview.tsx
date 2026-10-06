@@ -68,7 +68,7 @@ function sortRows(rows: OverviewRow[], sort: Sort): OverviewRow[] {
  * Column widths shared by every group, so the price column sits at the same x everywhere.
  * The 52-week bar and the sparkline only fit from xl (1280px) up; below md the table becomes a list.
  */
-const COL = { price: 112, period: 72, ddAth: 72, pos52: 128, conditions: 220, spark: 200, menu: 28 };
+const COL = { price: 112, period: 72, ddAth: 72, conditions: 220, menu: 28 }; // pos52 128 and spark 200 come from CSS variables
 
 function PeriodPicker({ value, onChange }: { value: ChangePeriod[]; onChange: (next: ChangePeriod[]) => void }) {
   const toggle = (key: ChangePeriod) => {
@@ -289,9 +289,9 @@ export function Overview({ data }: { data: OverviewData }) {
               <col key={p.key} style={{ width: COL.period }} />
             ))}
             <col style={{ width: COL.ddAth }} />
-            <col style={{ width: COL.pos52 }} className="hidden xl:table-column" />
+            <col style={{ width: "var(--col-pos52)" }} />
             <col style={{ width: COL.conditions }} />
-            <col style={{ width: COL.spark }} className="hidden xl:table-column" />
+            <col style={{ width: "var(--col-spark)" }} />
             <col style={{ width: COL.menu }} />
           </colgroup>
           <thead>
@@ -302,9 +302,9 @@ export function Overview({ data }: { data: OverviewData }) {
                 <Th key={p.key} label={p.label} sortKey={p.key} sort={sort} onSort={onSort} className="text-right" />
               ))}
               <Th label="距高点" sortKey="ddAth" sort={sort} onSort={onSort} className="text-right" />
-              <Th label="52周" sortKey="pos52" sort={sort} onSort={onSort} className="hidden xl:table-cell" />
+              <Th label="52周" sortKey="pos52" sort={sort} onSort={onSort} className="wide-col" />
               <Th label="条件" sort={sort} onSort={onSort} />
-              <Th label="两年" sort={sort} onSort={onSort} className="hidden xl:table-cell" />
+              <Th label="两年" sort={sort} onSort={onSort} className="wide-col" />
               <th />
             </tr>
           </thead>
@@ -430,7 +430,7 @@ function GroupRows({
               </td>
             ))}
             <td className={`tabular ${cell} text-right ${changeColor(s?.ddAth)}`}>{fmtPct(s?.ddAth)}</td>
-            <td className={`${cell} hidden xl:table-cell`}>
+            <td className={`${cell} wide-col`}>
               {s?.pos52 != null && (
                 <div className="relative h-1 w-20 rounded bg-line" title={`52 周区间位置 ${Math.round(s.pos52 * 100)}%`}>
                   <div className="absolute top-1/2 h-2.5 w-0.5 -translate-y-1/2 rounded bg-fg" style={{ left: `${Math.round(s.pos52 * 100)}%` }} />
@@ -440,7 +440,7 @@ function GroupRows({
             <td className={cell}>
               <Badges row={row} conditions={conditions} />
             </td>
-            <td className={`${cell} hidden py-1 xl:table-cell`}>{s && <Sparkline values={s.spark} width={180} height={26} className="w-[180px]" />}</td>
+            <td className={`${cell} wide-col py-1`}>{s && <Sparkline values={s.spark} width={180} height={26} className="w-[180px]" />}</td>
             <td className={`relative ${cell} rounded-r-md px-0 text-right`}>
               <button
                 onClick={(e) => {
