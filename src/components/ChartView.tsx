@@ -206,8 +206,9 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
   const meta = data?.symbol;
   const percentMode = compare.some((c) => c.mode === "percent" && !hidden.includes(c.key));
   const compareWithHidden = useMemo(() => compare.map((c) => ({ ...c, hidden: hidden.includes(c.key) })), [compare, hidden]);
-  // KLineChart writes one tooltip row for the candle and one per main-pane indicator; the legend goes under them
-  const mainRows = 1 + specs.filter((s) => s.pane === "main").length;
+  // KLineChart writes one tooltip row for the candle and one per main-pane indicator; the legend goes under them.
+  // On narrow screens the candle row wraps onto about three lines.
+  const mainRows = (wide ? 1 : 3) + specs.filter((s) => s.pane === "main").length;
   const legendTop = 8 + 20 * mainRows;
   // room above the highest candle for those rows, and a fixed slice per sub pane below
   const headroom = 16 + 20 * (mainRows + compare.length);
