@@ -138,6 +138,12 @@ export function readNote(key: string): string | null {
   return fs.readFileSync(file, "utf8").replace(FRONTMATTER, "");
 }
 
+/** When the note was last written, for telling a local draft from the file. */
+export function noteMtime(key: string): number | null {
+  const file = notePath(key);
+  return fs.existsSync(file) ? fs.statSync(file).mtimeMs : null;
+}
+
 export function writeNote(key: string, body: string): void {
   const file = notePath(key);
   const trimmed = body.replace(/\s+$/, "");
@@ -174,6 +180,11 @@ const journalPath = (week: string) => {
 export function readJournal(week: string): string | null {
   const file = journalPath(week);
   return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
+}
+
+export function journalMtime(week: string): number | null {
+  const file = journalPath(week);
+  return fs.existsSync(file) ? fs.statSync(file).mtimeMs : null;
 }
 
 export function writeJournal(week: string, body: string): void {

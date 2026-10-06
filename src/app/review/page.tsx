@@ -2,10 +2,10 @@ import Link from "next/link";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
 import { JournalEditor } from "@/components/JournalEditor";
 import { allItems } from "@/lib/config";
-import { firstLine, renderMarkdown } from "@/lib/markdown";
+import { plainFirstLine, renderMarkdown } from "@/lib/markdown";
 import { listSymbols, readAllStats } from "@/lib/store";
 import { isSynthetic, parseKey } from "@/lib/symbols";
-import { ensureVault, JOURNAL_TEMPLATE, listNotes, readConfigSafe, readJournal, vaultDir } from "@/lib/vault";
+import { ensureVault, JOURNAL_TEMPLATE, journalMtime, listNotes, readConfigSafe, readJournal, vaultDir } from "@/lib/vault";
 import { currentWeekId, shiftWeek } from "@/lib/week";
 
 export const dynamic = "force-dynamic";
@@ -38,13 +38,13 @@ export default async function ReviewPage() {
     ),
   })).filter((g) => g.items.length > 0);
 
-  const notes = listNotes().map((n) => ({ ...n, name: nameOf(n.key), summary: firstLine(n.body) }));
+  const notes = listNotes().map((n) => ({ ...n, name: nameOf(n.key), summary: plainFirstLine(n.body) }));
 
   return (
     <main className="mx-auto w-full max-w-[1400px] px-5 py-5">
       <div className="grid gap-5 lg:grid-cols-[1fr_1fr]">
         <section>
-          <JournalEditor key={week} week={week} initial={current} />
+          <JournalEditor key={week} week={week} initial={current} savedAt={journalMtime(week)} />
         </section>
         <section className="flex flex-col gap-5">
           <div className="rounded-lg border border-line bg-card">

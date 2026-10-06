@@ -5,7 +5,7 @@ import { renderMarkdown } from "@/lib/markdown";
 import { benchLabel, nameOf } from "@/lib/names";
 import { listSymbols } from "@/lib/store";
 import { isValidKey } from "@/lib/symbols";
-import { ensureVault, readChartState, readConfigSafe, readNote, vaultDir } from "@/lib/vault";
+import { ensureVault, noteMtime, readChartState, readConfigSafe, readNote, vaultDir } from "@/lib/vault";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +53,7 @@ export default async function ChartPage({ params }: { params: Promise<{ key: str
       chartState={state}
       note={note}
       noteHtml={note ? renderMarkdown(note) : null}
+      noteSavedAt={noteMtime(key)}
     />
   );
 }

@@ -38,9 +38,10 @@ interface ChartViewProps {
   chartState: ChartState;
   note: string | null;
   noteHtml: string | null;
+  noteSavedAt: number | null;
 }
 
-export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, aliases, bench, benchLabel, names, order, chartState, note, noteHtml }: ChartViewProps) {
+export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, aliases, bench, benchLabel, names, order, chartState, note, noteHtml, noteSavedAt }: ChartViewProps) {
   const router = useRouter();
   const { openSearch, searchCtx } = useUi();
   const [tf, setTf] = useState(prefs.tf);
@@ -405,7 +406,7 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
             </div>
           )}
         </div>
-        {showNotes && <NotesPanel symbolKey={symbolKey} note={note} html={noteHtml} onClose={() => setShowNotes(false)} closeSeq={closeSeq} />}
+        {showNotes && <NotesPanel symbolKey={symbolKey} note={note} html={noteHtml} savedAt={noteSavedAt} onClose={() => setShowNotes(false)} closeSeq={closeSeq} className="w-80 shrink-0" />}
       </div>
     </main>
   );
