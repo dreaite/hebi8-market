@@ -2,6 +2,7 @@ import type { RefSeries } from "@/indicators/formula";
 import type { Source } from "./symbols";
 
 export type { SearchHit } from "./sources/types";
+export type { SearchResult } from "./search";
 
 /** Shape expected by KLineChart, plus the aligned benchmark close for the RS indicator. */
 export interface ChartBar {

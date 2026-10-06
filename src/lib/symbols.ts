@@ -41,6 +41,11 @@ export function isValidKey(key: unknown): key is string {
   }
 }
 
+/** The part after the source: `yahoo:0700.HK → 0700.HK`, `=BTC/GOLD → BTC/GOLD`. */
+export function tickerOf(key: string): string {
+  return isSynthetic(key) ? key.slice(1) : parseKey(key).ticker;
+}
+
 /** File name for a key: `tv:TVC:US10Y → tv_TVC_US10Y`, `=BTC/GOLD → expr_BTC_GOLD`. */
 export function fileKey(key: string): string {
   const clean = (s: string) => s.replace(/[^A-Za-z0-9.\-]/g, "_");

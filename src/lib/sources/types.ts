@@ -31,5 +31,6 @@ export interface SearchHit {
 export interface SourceAdapter {
   /** @param since time of the latest stored bar, for incremental sources */
   fetchDaily(ticker: string, since: number | null): Promise<FetchResult>;
-  search?(query: string): Promise<SearchHit[]>;
+  /** @param filter source-specific category, e.g. TradingView's `index` / `cfd` / `stock` / `bond` */
+  search?(query: string, filter?: string): Promise<SearchHit[]>;
 }

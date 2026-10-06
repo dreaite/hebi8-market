@@ -88,8 +88,8 @@ export const tradingview: SourceAdapter = {
     return job;
   },
 
-  async search(query) {
-    const hits = await TradingView.searchMarketV3(query);
-    return hits.slice(0, 8).map((h) => ({ key: `tv:${h.id}`, name: h.description, exchange: h.exchange, kind: h.type }));
+  async search(query, filter = "") {
+    const hits = await TradingView.searchMarketV3(query, filter);
+    return hits.slice(0, 6).map((h) => ({ key: `tv:${h.id}`, name: h.description, exchange: h.exchange, kind: h.type }));
   },
 };

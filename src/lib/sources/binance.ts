@@ -44,9 +44,41 @@ export const binance: SourceAdapter = {
     };
   },
 
-  /** No search endpoint worth calling: a plausible USDT pair is offered as is. */
+  /** Spot USDT pairs whose base starts with the query; the exact pair first. */
   async search(query) {
-    const ticker = query.trim().toUpperCase();
-    return /^[A-Z0-9]{2,12}USDT$/.test(ticker) ? [{ key: `binance:${ticker}`, name: ticker, exchange: "Binance", kind: "crypto" }] : [];
+    const q = query.trim().toUpperCase().replace(/USDT$/, "");
+    if (!/^[A-Z0-9]{1,12}$/.test(q)) return [];
+    const bases = await usdtBases();
+    const hit = (base: string) => ({ key: `binance:${base}USDT`, name: `${base}USDT`, exchange: "Binance", kind: "crypto" });
+    if (bases === null) return /^[A-Z0-9]{2,12}$/.test(q) ? [hit(q)] : [];
+    return bases
+      .filter((b) => b.startsWith(q))
+      .sort((a, b) => Number(b === q) - Number(a === q) || a.length - b.length || a.localeCompare(b))
+      .slice(0, 6)
+      .map(hit);
   },
 };
+
+const TICKER_TTL = 24 * 60 * 60 * 1000;
+let tickers: { at: number; bases: string[] } | null = null;
+let loading: Promise<string[] | null> | null = null;
+
+/** Base assets of every spot USDT pair, from the 160KB ticker list, cached for a day. */
+async function usdtBases(): Promise<string[] | null> {
+  if (tickers && Date.now() - tickers.at < TICKER_TTL) return tickers.bases;
+  loading ??= (async () => {
+    try {
+      const res = await fetch(`${BASE_URL}/api/v3/ticker/price`, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
+      if (!res.ok) throw new Error(`Binance ${res.status}`);
+      const rows = (await res.json()) as { symbol: string }[];
+      const bases = rows.map((r) => r.symbol).filter((s) => s.endsWith("USDT")).map((s) => s.slice(0, -4));
+      tickers = { at: Date.now(), bases };
+      return bases;
+    } catch {
+      return tickers?.bases ?? null;
+    } finally {
+      loading = null;
+    }
+  })();
+  return loading;
+}
