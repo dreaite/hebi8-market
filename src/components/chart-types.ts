@@ -13,8 +13,11 @@ export interface CompareLegendEntry {
   pct: number | null;
 }
 
-/** Readable in both themes; taken in order of addition. */
-export const COMPARE_COLORS = ["#e8891d", "#8e5bd6", "#1aa39a", "#d6409f", "#c9a227", "#5b8def"];
+/** Readable in both themes and distinct from KLineChart's indicator palette (orange, purple, blue, pink, teal); taken in order of addition. */
+export const COMPARE_COLORS = ["#2f6fde", "#0e9aa7", "#c2410c", "#a21caf", "#65a30d", "#4b5563"];
+
+/** Height of one indicator or compare sub pane, matching KChart's layout. */
+export const SUB_PANE_HEIGHT = 100;
 
 export const DRAW_TOOLS = [
   { name: "horizontalStraightLine", label: "水平线" },

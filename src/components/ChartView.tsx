@@ -14,7 +14,8 @@ import type { Prices } from "@/lib/series";
 import { SOURCE_LABELS, TF_LABELS, TIMEFRAMES, type Timeframe } from "@/lib/symbols";
 import type { ChartState, CompareEntry, OverlaySpec } from "@/lib/vault";
 import type { SearchContext } from "@/lib/search";
-import { COMPARE_COLORS, DRAW_TOOLS, type CompareLegendEntry, type IndicatorSpec } from "./chart-types";
+import { useMediaQuery } from "@/lib/use-media-query";
+import { COMPARE_COLORS, DRAW_TOOLS, SUB_PANE_HEIGHT, type CompareLegendEntry, type IndicatorSpec } from "./chart-types";
 import { IndicatorBar } from "./IndicatorBar";
 import { NotesPanel } from "./NotesPanel";
 import { SymbolSearch } from "./SymbolSearch";
@@ -52,9 +53,13 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
   const [overrides, setOverrides] = useState<ParamOverrides>(prefs.params);
   const [hidden, setHidden] = useState<string[]>([]);
   const [legend, setLegend] = useState<CompareLegendEntry[]>([]);
-  const [showNotes, setShowNotes] = useState(Boolean(note));
+  // notes open by default only when there is a note and room for a sidebar
+  const wide = useMediaQuery("(min-width: 768px)");
+  const [notesPref, setNotesPref] = useState<boolean | null>(null);
+  const showNotes = notesPref ?? (wide && Boolean(note));
   const [compareOpen, setCompareOpen] = useState(false);
-  const [drawRequest, setDrawRequest] = useState<{ tool: string; seq: number } | null>(null);
+  const [drawTool, setDrawTool] = useState<string | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [clearSeq, setClearSeq] = useState(0);
   const [closeSeq, setCloseSeq] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
@@ -67,6 +72,8 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
       if (e.defaultPrevented || isEditable(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === "Escape") {
         setCompareOpen(false);
+        setDrawTool(null);
+        setMoreOpen(false);
         setCloseSeq((n) => n + 1);
         return;
       }
@@ -197,7 +204,74 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
   const percentMode = compare.some((c) => c.mode === "percent" && !hidden.includes(c.key));
   const compareWithHidden = useMemo(() => compare.map((c) => ({ ...c, hidden: hidden.includes(c.key) })), [compare, hidden]);
   // KLineChart writes one tooltip row for the candle and one per main-pane indicator; the legend goes under them
-  const legendTop = 8 + 20 * (1 + specs.filter((s) => s.pane === "main").length);
+  const mainRows = 1 + specs.filter((s) => s.pane === "main").length;
+  const legendTop = 8 + 20 * mainRows;
+  // room above the highest candle for those rows, and a fixed slice per sub pane below
+  const headroom = 16 + 20 * (mainRows + compare.length);
+  const subPanes = specs.filter((s) => s.pane === "sub").length + compare.filter((c) => c.mode === "pane").length;
+  const drawLabel = DRAW_TOOLS.find((t) => t.name === drawTool)?.label;
+
+  const tools = (
+    <>
+      <StyleMenu
+        value={chartStyle}
+        onChange={(style) => {
+          setChartStyle(style);
+          persist({ style });
+        }}
+      />
+      <button
+        onClick={() => {
+          setLog(!log);
+          persist({ log: !log });
+        }}
+        aria-pressed={log && !percentMode}
+        disabled={percentMode}
+        className="btn"
+        title="对数坐标"
+      >
+        对数
+      </button>
+      {percentMode && <span className="text-[11px] text-muted">百分比坐标下不可用</span>}
+      <button
+        onClick={() => {
+          const next: Prices = prices === "total" ? "split" : "total";
+          setPrices(next);
+          persist({ prices: next });
+        }}
+        aria-pressed={prices === "total"}
+        className="btn"
+        title="总回报：把分红折进价格"
+      >
+        含分红
+      </button>
+      <button onClick={() => setCompareOpen((v) => !v)} aria-pressed={compareOpen} className="btn">
+        对比{compare.length > 0 && ` ${compare.length}`}
+      </button>
+      <div className="seg" role="group" aria-label="画线">
+        {DRAW_TOOLS.map((t) => (
+          <button key={t.name} onClick={() => setDrawTool(drawTool === t.name ? null : t.name)} aria-pressed={drawTool === t.name} title={`${t.label}：在主图上点击画，右键删除`}>
+            {t.label}
+          </button>
+        ))}
+        <button
+          onClick={() => {
+            if (confirm("清除这个标的的全部画线？")) setClearSeq((n) => n + 1);
+          }}
+          disabled={chartState.overlays.length === 0}
+          title="清除全部画线"
+        >
+          清除
+        </button>
+      </div>
+      <button onClick={() => setNotesPref(!showNotes)} aria-pressed={showNotes} className="btn">
+        笔记
+      </button>
+      <button onClick={() => setReloadTick((n) => n + 1)} disabled={loading} className="btn">
+        {loading ? "加载中…" : "刷新"}
+      </button>
+    </>
+  );
 
   return (
     <main className="flex w-full flex-1 flex-col px-5 py-4">
@@ -237,8 +311,8 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
           )}
           {meta && <span className="text-[11px] text-muted">{meta.source === "expr" ? "按需合成" : fmtAgo(meta.syncedAt)}</span>}
         </div>
-        <div className="flex flex-wrap items-center gap-3 text-xs">
-          <div className="flex rounded-md border border-line p-0.5">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <div className="seg" role="group" aria-label="周期">
             {TIMEFRAMES.map((t) => (
               <button
                 key={t}
@@ -246,82 +320,19 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
                   setTf(t);
                   persist({ tf: t });
                 }}
-                className={`rounded px-3 py-0.5 ${t === tf ? "bg-fg text-bg" : "text-muted hover:text-fg"}`}
+                aria-pressed={t === tf}
               >
                 {TF_LABELS[t]}
               </button>
             ))}
           </div>
-          <select
-            value={chartStyle}
-            onChange={(e) => {
-              const style = e.target.value as ChartStyle;
-              setChartStyle(style);
-              persist({ style });
-            }}
-            className="h-6 rounded border border-line bg-bg px-1 text-muted outline-none hover:text-fg"
-            title="K 线样式"
-          >
-            {(Object.keys(CHART_STYLES) as ChartStyle[]).map((s) => (
-              <option key={s} value={s}>
-                {CHART_STYLES[s]}
-              </option>
-            ))}
-          </select>
-          <label className={`flex items-center gap-1.5 ${percentMode ? "cursor-not-allowed opacity-50" : "cursor-pointer"} text-muted`} title={percentMode ? "对比时用百分比坐标" : undefined}>
-            <input
-              type="checkbox"
-              checked={log && !percentMode}
-              disabled={percentMode}
-              onChange={(e) => {
-                setLog(e.target.checked);
-                persist({ log: e.target.checked });
-              }}
-              className="accent-current"
-            />
-            对数
-          </label>
-          <label className="flex cursor-pointer items-center gap-1.5 text-muted" title="总回报：把分红折进价格">
-            <input
-              type="checkbox"
-              checked={prices === "total"}
-              onChange={(e) => {
-                const next: Prices = e.target.checked ? "total" : "split";
-                setPrices(next);
-                persist({ prices: next });
-              }}
-              className="accent-current"
-            />
-            含分红
-          </label>
-          <button onClick={() => setCompareOpen((v) => !v)} className={`${compareOpen ? "text-fg" : "text-muted"} hover:text-fg`}>
-            对比
-          </button>
-          <select
-            value=""
-            onChange={(e) => {
-              const tool = e.target.value;
-              if (tool === "clear") {
-                if (confirm("清除这个标的的全部画线？")) setClearSeq((n) => n + 1);
-              } else if (tool) setDrawRequest({ tool, seq: (drawRequest?.seq ?? 0) + 1 });
-            }}
-            className="h-6 rounded border border-line bg-bg px-1 text-muted outline-none hover:text-fg"
-            title="画线：选工具后在图上点击；右键删除一条"
-          >
-            <option value="">画线</option>
-            {DRAW_TOOLS.map((t) => (
-              <option key={t.name} value={t.name}>
-                {t.label}
-              </option>
-            ))}
-            <option value="clear">清除全部画线</option>
-          </select>
-          <button onClick={() => setShowNotes((v) => !v)} className={`${showNotes ? "text-fg" : "text-muted"} hover:text-fg`}>
-            笔记
-          </button>
-          <button onClick={() => setReloadTick((n) => n + 1)} disabled={loading} className="text-muted hover:text-fg disabled:opacity-50">
-            {loading ? "加载中…" : "刷新"}
-          </button>
+          <div className="hidden items-center gap-2 sm:flex">{tools}</div>
+          <div className="relative sm:hidden">
+            <button onClick={() => setMoreOpen((v) => !v)} aria-expanded={moreOpen} aria-haspopup="menu" aria-label="更多工具" className="btn btn-secondary px-2">
+              ⋯
+            </button>
+            {moreOpen && <div className="menu flex w-[calc(100vw-2.5rem)] max-w-[22rem] flex-wrap items-center gap-2 p-2">{tools}</div>}
+          </div>
         </div>
       </div>
 
@@ -357,8 +368,13 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
 
       {(error || message) && <p className="mb-2 text-xs text-down">{error ? `加载失败：${error}` : message}</p>}
 
-      <div className="flex min-h-[520px] flex-1 gap-3">
-        <div className="relative flex-1 rounded-lg border border-line bg-card">
+      <div className="flex flex-1 gap-3" style={{ minHeight: chartMinHeight(subPanes) }}>
+        <div className="relative min-w-0 flex-1 rounded-lg border border-line bg-card">
+          {drawLabel && (
+            <div className="pointer-events-none absolute top-2 right-16 z-10 rounded bg-card/90 px-2 py-1 text-[11px] text-muted" role="status">
+              {drawLabel} · 在主图上点击 · Esc 退出
+            </div>
+          )}
           <div className="absolute inset-0 p-1">
             <KChart
               symbolKey={symbolKey}
@@ -373,8 +389,10 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
               refs={data?.refs ?? {}}
               overlays={chartState.overlays}
               onOverlaysChange={onOverlaysChange}
-              drawRequest={drawRequest}
+              drawTool={drawTool}
+              onDrawDone={() => setDrawTool(null)}
               clearSeq={clearSeq}
+              headroom={headroom}
               onLegend={setLegend}
             />
           </div>
@@ -389,7 +407,7 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
                     <span>{names[c.key] ?? c.key}</span>
                     <span className="text-muted">{c.mode === "pane" ? "副图" : ""}</span>
                     {entry?.value != null && <span className="tabular text-muted">{fmtPrice(entry.value)}</span>}
-                    {c.mode === "percent" && entry?.pct != null && <span className={`tabular ${changeColor(entry.pct)}`}>{fmtPct(entry.pct)}</span>}
+                    {entry?.pct != null && <span className={`tabular ${changeColor(entry.pct)}`} title="相对可见区间起点">{fmtPct(entry.pct)}</span>}
                     <button
                       onClick={() => setHidden(off ? hidden.filter((k) => k !== c.key) : [...hidden, c.key])}
                       className="text-muted hover:text-fg"
@@ -406,9 +424,62 @@ export function ChartView({ symbolKey, prefs, prices: initialPrices, formulas, a
             </div>
           )}
         </div>
-        {showNotes && <NotesPanel symbolKey={symbolKey} note={note} html={noteHtml} savedAt={noteSavedAt} onClose={() => setShowNotes(false)} closeSeq={closeSeq} className="w-80 shrink-0" />}
+        {showNotes && (
+          <NotesPanel
+            symbolKey={symbolKey}
+            note={note}
+            html={noteHtml}
+            savedAt={noteSavedAt}
+            onClose={() => setNotesPref(false)}
+            closeSeq={closeSeq}
+            className="fixed inset-x-0 bottom-0 z-40 max-h-[60vh] rounded-b-none shadow-xl md:static md:w-80 md:max-h-none md:shrink-0 md:rounded-lg md:shadow-none"
+          />
+        )}
       </div>
     </main>
+  );
+}
+
+/** Tall enough that the main pane keeps 45% once each sub pane (plus separator) and the x-axis take theirs. */
+function chartMinHeight(subPanes: number): number {
+  return Math.max(520, Math.ceil(((SUB_PANE_HEIGHT + 1) * subPanes + 25) / 0.54));
+}
+
+/** K-line style picker in the toolbar's own style instead of a native <select>. */
+function StyleMenu({ value, onChange }: { value: ChartStyle; onChange: (style: ChartStyle) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} className="btn btn-secondary" title="K 线样式">
+        {CHART_STYLES[value]} <span className="text-[9px]">▾</span>
+      </button>
+      {open && (
+        <div role="menu" className="menu min-w-[8rem]">
+          {(Object.keys(CHART_STYLES) as ChartStyle[]).map((s) => (
+            <button
+              key={s}
+              role="menuitem"
+              onClick={() => {
+                onChange(s);
+                setOpen(false);
+              }}
+              className={`menu-item ${s === value ? "font-medium" : ""}`}
+            >
+              {CHART_STYLES[s]}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -449,6 +520,7 @@ function ComparePanel({
         </button>
       </div>
       <SymbolSearch
+        key={existing.length}
         mode="pick"
         ctx={ctx}
         placeholder="别名、key 或搜索：QQQ / tv:TVC:US10Y / apple"

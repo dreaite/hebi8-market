@@ -10,6 +10,7 @@ import {
   type DeepPartial,
   type IndicatorTemplate,
   type KLineData,
+  type Overlay,
   type OverlayCreate,
   type Styles,
 } from "klinecharts";
@@ -35,8 +36,13 @@ interface KChartProps {
   refs: Record<string, RefSeries>;
   overlays: OverlaySpec[];
   onOverlaysChange: (overlays: OverlaySpec[]) => void;
-  drawRequest: { tool: string; seq: number } | null;
+  /** Overlay name of the active drawing tool, null when not drawing */
+  drawTool: string | null;
+  /** A drawing finished or was abandoned, so the toolbar can deselect */
+  onDrawDone: () => void;
   clearSeq: number;
+  /** Pixels kept free above the highest candle, for the tooltip and legend rows */
+  headroom: number;
   onLegend: (entries: CompareLegendEntry[]) => void;
 }
 
@@ -56,11 +62,18 @@ function initialBarSpace(width: number, tf: Timeframe, total: number): number {
 }
 
 const CANDLE_PANE = "candle_pane";
+/** The main pane keeps at least this share of the chart; sub panes are a fixed height. */
+const MAIN_PANE_SHARE = 0.45;
+const SUB_PANE_HEIGHT = 100;
 const MAX_COMPARE = COMPARE_COLORS.length;
 const compareName = (slot: number) => `CMP${slot}`;
 const isCompare = (name: string) => name.startsWith("CMP");
 /** Aligned closes per compare slot; templates read them by slot so overrides never merge data. */
 const compareSeries: ((number | null)[] | undefined)[] = [];
+
+// Same stacks as globals.css; the canvas cannot read Tailwind's theme.
+const SANS = 'ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif';
+const MONO = 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace';
 
 let registered = false;
 function registerTemplates() {
@@ -110,7 +123,8 @@ function applyTheme(chart: Chart, style: ChartStyle) {
   const muted = cssVar("--muted");
   const line = cssVar("--line");
   const accent = cssVar("--accent");
-  const axis = { axisLine: { color: line }, tickLine: { color: line }, tickText: { color: muted } };
+  const axis = { axisLine: { color: line }, tickLine: { color: line }, tickText: { color: muted, family: MONO, size: 11 } };
+  const tooltipFont = { title: { family: SANS }, legend: { family: SANS } };
   const overrides: DeepPartial<Styles> = {
     grid: { horizontal: { color: cssVar("--chart-grid") }, vertical: { show: false } },
     candle: {
@@ -134,14 +148,21 @@ function applyTheme(chart: Chart, style: ChartStyle) {
         downWickColor: down,
         noChangeWickColor: muted,
       },
-      priceMark: { last: { upColor: up, downColor: down, noChangeColor: muted } },
+      priceMark: {
+        high: { textFamily: MONO },
+        low: { textFamily: MONO },
+        last: { upColor: up, downColor: down, noChangeColor: muted, text: { family: MONO } },
+      },
       // The page header already names the symbol and timeframe.
-      tooltip: { title: { show: false } },
+      tooltip: { ...tooltipFont, title: { show: false, family: SANS } },
     },
     indicator: {
       bars: [{ upColor: withAlpha(up, 0.55), downColor: withAlpha(down, 0.55), noChangeColor: muted }],
+      tooltip: tooltipFont,
+      lastValueMark: { text: { family: MONO } },
     },
-    overlay: { line: { color: accent }, point: { color: accent, borderColor: withAlpha(accent, 0.35) } },
+    crosshair: { horizontal: { text: { family: MONO } }, vertical: { text: { family: MONO } } },
+    overlay: { line: { color: accent }, point: { color: accent, borderColor: withAlpha(accent, 0.35) }, text: { family: SANS } },
     xAxis: axis,
     yAxis: axis,
     separator: { color: line },
@@ -150,8 +171,10 @@ function applyTheme(chart: Chart, style: ChartStyle) {
   chart.setStyles(overrides);
 }
 
-function serializeOverlays(chart: Chart): OverlaySpec[] {
+/** Finished drawings on the main pane; `except` is one being removed right now. */
+function serializeOverlays(chart: Chart, except?: string): OverlaySpec[] {
   return chart.getOverlays().flatMap((o) => {
+    if (o.paneId !== CANDLE_PANE || o.id === except) return [];
     const points = o.points
       .filter((p) => typeof p.timestamp === "number" && typeof p.value === "number")
       .map((p) => ({ timestamp: p.timestamp!, value: p.value! }));
@@ -176,8 +199,10 @@ export function KChart({
   refs,
   overlays,
   onOverlaysChange,
-  drawRequest,
+  drawTool,
+  onDrawDone,
   clearSeq,
+  headroom,
   onLegend,
 }: KChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -189,15 +214,18 @@ export function KChart({
   const crosshairRef = useRef<number | null>(null);
   const overlaysRef = useRef(overlays);
   const restoringRef = useRef(false);
+  const drawingRef = useRef<{ tool: string; id: string; overlay: Overlay | null; extendData?: unknown } | null>(null);
   const onOverlaysChangeRef = useRef(onOverlaysChange);
+  const onDrawDoneRef = useRef(onDrawDone);
   const onLegendRef = useRef(onLegend);
   // Latest props for the chart callbacks; declared first so later effects see the new values.
   useEffect(() => {
     onOverlaysChangeRef.current = onOverlaysChange;
+    onDrawDoneRef.current = onDrawDone;
     onLegendRef.current = onLegend;
     compareRef.current = compare;
     overlaysRef.current = overlays;
-  }, [onOverlaysChange, onLegend, compare, overlays]);
+  }, [onOverlaysChange, onDrawDone, onLegend, compare, overlays]);
 
   const emitLegend = () => {
     const bars = barsRef.current;
@@ -212,7 +240,7 @@ export function KChart({
     );
   };
 
-  /** Rebase every percent-mode compare line to the left edge of the visible range. */
+  /** Rebase every compare line to the left edge of the visible range (percent lines on the chart, pane lines in the legend). */
   const updateBases = () => {
     const chart = chartRef.current;
     if (!chart) return;
@@ -220,40 +248,87 @@ export function KChart({
     const bars = barsRef.current;
     compareRef.current.forEach((c, slot) => {
       const closes = compareSeries[slot];
-      if (c.mode !== "percent" || !closes) return;
+      if (!closes) return;
       let base = Math.max(0, Math.min(realFrom, bars.length - 1));
       while (base < closes.length && closes[base] == null) base++;
       if (basesRef.current[slot] !== base) {
         basesRef.current[slot] = base;
-        chart.overrideIndicator({ name: compareName(slot), paneId: CANDLE_PANE, calcParams: [base, 0] });
+        if (c.mode === "percent") chart.overrideIndicator({ name: compareName(slot), paneId: CANDLE_PANE, calcParams: [base, 0] });
       }
     });
     emitLegend();
   };
 
-  const persistOverlays = () => {
+  const persistOverlays = (except?: string) => {
     const chart = chartRef.current;
     if (!chart || restoringRef.current) return;
-    onOverlaysChangeRef.current(serializeOverlays(chart));
+    onOverlaysChangeRef.current(serializeOverlays(chart, except));
+  };
+
+  /** Drop the drawing in progress (if any) and start the same tool again. */
+  const restartDrawing = () => {
+    const chart = chartRef.current;
+    const d = drawingRef.current;
+    if (!chart || !d) return;
+    drawingRef.current = null;
+    chart.removeOverlay({ id: d.id });
+    startDrawing(d.tool, d.extendData);
   };
 
   const overlayHandlers = (): Partial<OverlayCreate> => ({
-    onDrawEnd: persistOverlays,
-    onPressedMoveEnd: persistOverlays,
-    onRemoved: persistOverlays,
+    onDrawStart: (e) => {
+      if (drawingRef.current && drawingRef.current.id === e.overlay.id) drawingRef.current.overlay = e.overlay;
+    },
+    onDrawEnd: (e) => {
+      if (e.overlay.paneId !== CANDLE_PANE) {
+        // drawn on a sub pane: discard it, the click listener below restarts the tool
+        e.chart.removeOverlay({ id: e.overlay.id });
+        return;
+      }
+      persistOverlays();
+      if (drawingRef.current?.id === e.overlay.id) {
+        drawingRef.current = null;
+        onDrawDoneRef.current();
+      }
+    },
+    onPressedMoveEnd: () => persistOverlays(),
+    // KLineChart calls this before the overlay leaves its list, so it is excluded by id
+    onRemoved: (e) => persistOverlays(e.overlay.id),
     onRightClick: (e) => {
       e.chart.removeOverlay({ id: e.overlay.id });
     },
   });
 
+  const startDrawing = (tool: string, extendData?: unknown) => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const id = chart.createOverlay({ name: tool, paneId: CANDLE_PANE, extendData, ...overlayHandlers() });
+    if (typeof id === "string") drawingRef.current = { tool, id, overlay: null, extendData };
+  };
+
+  const cancelDrawing = () => {
+    const d = drawingRef.current;
+    if (!d) return;
+    drawingRef.current = null;
+    chartRef.current?.removeOverlay({ id: d.id });
+  };
+
+  const sizePanes = () => {
+    const chart = chartRef.current;
+    const el = containerRef.current;
+    if (!chart || !el) return;
+    chart.setPaneOptions({ id: CANDLE_PANE, minHeight: Math.round(el.clientHeight * MAIN_PANE_SHARE) });
+  };
+
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     registerTemplates();
-    const chart = init(el, { locale: "zh-CN", timezone: "UTC" });
+    const chart = init(el, { locale: "zh-CN", timezone: "UTC", layout: { pane: { height: SUB_PANE_HEIGHT, minHeight: 60 } } });
     if (!chart) return;
     chartRef.current = chart;
     applyTheme(chart, styleRef.current);
+    sizePanes();
     // The full history arrives in one response, so there is never more to load.
     chart.setDataLoader({
       getBars: ({ type, callback }) => callback(type === "init" ? (barsRef.current as KLineData[]) : [], false),
@@ -269,15 +344,26 @@ export function KChart({
       crosshairRef.current = typeof c.dataIndex === "number" && c.kLineData ? c.dataIndex : null;
       emitLegend();
     });
+    // Drawing follows the mouse into sub panes; a click there is thrown away and the tool restarts on the main pane.
+    const onClick = () =>
+      setTimeout(() => {
+        const d = drawingRef.current;
+        if (d?.overlay && d.overlay.paneId !== CANDLE_PANE) restartDrawing();
+      }, 0);
+    el.addEventListener("click", onClick, true);
 
     const retheme = () => applyTheme(chart, styleRef.current);
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     media.addEventListener("change", retheme);
-    const resize = new ResizeObserver(() => chart.resize());
+    const resize = new ResizeObserver(() => {
+      sizePanes();
+      chart.resize();
+    });
     resize.observe(el);
 
     return () => {
       clearTimeout(timer);
+      el.removeEventListener("click", onClick, true);
       media.removeEventListener("change", retheme);
       resize.disconnect();
       dispose(el);
@@ -296,10 +382,11 @@ export function KChart({
     chart.setPeriod(PERIODS[tf]);
     // Drawings are stored by timestamp, so they land on the nearest bar of any timeframe.
     restoringRef.current = true;
+    drawingRef.current = null;
     chart.removeOverlay();
     if (overlaysRef.current.length) {
       chart.createOverlay(
-        overlaysRef.current.map((o) => ({ ...o, styles: o.styles as OverlayCreate["styles"], ...overlayHandlers() })),
+        overlaysRef.current.map((o) => ({ ...o, paneId: CANDLE_PANE, styles: o.styles as OverlayCreate["styles"], ...overlayHandlers() })),
       );
     }
     restoringRef.current = false;
@@ -330,6 +417,7 @@ export function KChart({
         chart.createIndicator({ name: spec.name, calcParams: spec.calcParams, paneId: `pane_${spec.name}` });
       }
     }
+    sizePanes();
   }, [indicatorKey, templates]);
 
   const compareKey = JSON.stringify(compare);
@@ -351,34 +439,41 @@ export function KChart({
           shortName: c.key,
           calcParams: [0, pane ? 0 : 1],
           visible: !c.hidden,
-          styles: { lines: [{ color: c.color, size: 1.5 }] },
+          styles: { lines: [{ color: c.color, size: 2 }] },
         },
         true,
       );
     });
     for (let slot = entries.length; slot < MAX_COMPARE; slot++) compareSeries[slot] = undefined;
+    sizePanes();
     updateBases();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- updateBases reads refs
   }, [compareKey, bars, refs]);
 
   const percent = compare.some((c) => c.mode === "percent" && !c.hidden);
   useEffect(() => {
-    chartRef.current?.overrideYAxis({ paneId: CANDLE_PANE, name: percent ? "percentage" : log ? "logarithm" : "normal" });
-  }, [log, percent]);
+    chartRef.current?.overrideYAxis({ paneId: CANDLE_PANE, name: percent ? "percentage" : log ? "logarithm" : "normal", gap: { top: headroom, bottom: 0.1 } });
+  }, [log, percent, headroom]);
 
   useEffect(() => {
     const chart = chartRef.current;
-    if (!chart || !drawRequest) return;
-    const extendData = drawRequest.tool === "simpleAnnotation" ? window.prompt("标注文字") : undefined;
-    if (drawRequest.tool === "simpleAnnotation" && !extendData) return;
-    chart.createOverlay({ name: drawRequest.tool, extendData, ...overlayHandlers() });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- one overlay per request
-  }, [drawRequest]);
+    if (!chart) return;
+    cancelDrawing();
+    if (!drawTool) return;
+    const extendData = drawTool === "simpleAnnotation" ? window.prompt("标注文字") : undefined;
+    if (drawTool === "simpleAnnotation" && !extendData) {
+      onDrawDoneRef.current();
+      return;
+    }
+    startDrawing(drawTool, extendData);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one overlay per tool selection
+  }, [drawTool]);
 
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || clearSeq === 0) return;
     restoringRef.current = true;
+    drawingRef.current = null;
     chart.removeOverlay();
     restoringRef.current = false;
     onOverlaysChangeRef.current([]);

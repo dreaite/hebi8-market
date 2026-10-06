@@ -264,3 +264,10 @@ body {
     outline: none;
   }
 }
+
+/* Toolbar folded into the ⋯ menu on narrow screens: the drawing group may wrap. */
+.menu .seg {
+  flex-wrap: wrap;
+  height: auto;
+  gap: 2px;
+}
