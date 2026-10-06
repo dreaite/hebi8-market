@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { klineToBar } from "@/lib/sources/binance";
-import { overviewStats, pricePrecision } from "@/lib/stats";
+import { computeStats, pricePrecision } from "@/lib/stats";
 import type { Bar } from "@/lib/series";
 
 const DAY = 86400;
@@ -11,16 +11,17 @@ function series(): Bar[] {
   const bars: Bar[] = [];
   for (let i = 0; i <= 730; i++) {
     const c = i === 365 ? 400 : 100 + i * 0.1;
-    bars.push({ t: start + i * DAY, o: c, h: c, l: c, c, v: 1 });
+    bars.push({ t: start + i * DAY, o: c, h: c, l: c, c, v: 1, adj: 1 });
   }
   return bars;
 }
 
-describe("overviewStats", () => {
-  const stats = overviewStats(series())!;
+describe("computeStats", () => {
+  const stats = computeStats(series(), { currency: "USD" })!;
 
-  it("reports the last close and calendar-based changes", () => {
+  it("reports the last close, currency and calendar-based changes", () => {
     expect(stats.last).toBeCloseTo(173);
+    expect(stats.currency).toBe("USD");
     expect(stats.changes["1W"]).toBeCloseTo(173 / 172.3 - 1);
     expect(stats.changes["1Y"]).toBeCloseTo(173 / 400 - 1); // a year ago was the spike
   });
@@ -49,9 +50,15 @@ describe("overviewStats", () => {
     expect(stats.spark.at(-1)).toBeCloseTo(173);
   });
 
+  it("carries condition results with their previous value", () => {
+    const withConditions = computeStats(series(), { conditions: { trend: { now: true, prev: false } } })!;
+    expect(withConditions.conditions.trend).toEqual({ now: true, prev: false });
+    expect(stats.conditions).toEqual({});
+  });
+
   it("handles short and empty histories", () => {
-    expect(overviewStats([])).toBeNull();
-    expect(overviewStats(series().slice(0, 10))!.changes["1Y"]).toBeNull();
+    expect(computeStats([])).toBeNull();
+    expect(computeStats(series().slice(0, 10))!.changes["1Y"]).toBeNull();
   });
 });
 
@@ -64,6 +71,7 @@ describe("helpers", () => {
       l: 1,
       c: 1.8,
       v: 300,
+      adj: 1,
     });
   });
 

@@ -1,0 +1,53 @@
+sync:
+  at: ["07:30", "17:30"]       # 本地时间，按 tz 解释；美股收盘后、亚洲收盘后各一次
+  tz: Asia/Tokyo
+prices: split                  # split = 拆股复权（默认，和 TradingView 一致）；total = 含分红的总回报
+periods: [1W, 1M, 1Y]          # 总览显示的涨跌周期，最多 4 个：1W 1M 3M YTD 1Y 3Y 5Y
+updown: green-up               # green-up | red-up
+
+aliases:                       # 公式、条件、对比、合成标的里可用的短名
+  SPY: yahoo:SPY
+  QQQ: yahoo:QQQ
+  HSI: yahoo:^HSI
+  CSI300: tv:SSE:000300
+  BTC: binance:BTCUSDT
+  GOLD: tv:TVC:GOLD
+
+groups:
+  - name: 加密
+    symbols:
+      - BTC                                      # 字符串：别名或完整 key
+      - { key: binance:ETHUSDT, bench: BTC }     # bench：相对强弱、close(bench) 的默认基准
+  - name: 美股
+    symbols:
+      - SPY
+      - { key: QQQ, bench: SPY }
+      - { key: yahoo:NVDA, name: 英伟达, bench: QQQ }
+  - name: 港 A
+    symbols:
+      - { key: yahoo:0700.HK, name: 腾讯控股, bench: HSI }
+      - { key: yahoo:600519.SS, name: 贵州茅台, bench: CSI300 }
+  - name: 宏观
+    symbols: [GOLD, tv:TVC:US10Y, tv:TVC:DXY]
+  - name: 比价
+    symbols:
+      - { key: "=BTC/GOLD", name: 比特币/黄金 }   # 以 = 开头的是合成标的
+
+indicators:                    # 公式指标，图表页可开关
+  - { id: dev40, label: 均线乖离, pane: sub, formula: "(close / sma(close, 40) - 1) * 100" }
+  - { id: vs_bench, label: 对基准比价, pane: sub, formula: "close / close(bench)" }
+
+conditions:                    # 总览条件徽标；同步时按周线计算，布尔结果
+  - { id: trend, label: 趋势, formula: "close > sma(close, 40) and sma(close, 10) > sma(close, 40)" }
+  - { id: near_high, label: 近高点, formula: "close >= highest(high, 52) * 0.9" }
+  - { id: new_high, label: 新高, formula: "close >= highest(close, 52)" }
+  - { id: rs_high, label: RS新高, formula: "rs = close / close(bench); rs >= highest(rs, 26)" }
+  - { id: below_200w, label: 破200周, formula: "close < sma(close, 200)" }
+
+chart:                         # 全局图表偏好（UI 改动会写回这里）
+  tf: W                        # D | W | M | Q
+  log: true
+  style: candle_solid          # candle_solid | candle_up_stroke | ohlc | area
+  indicators: [MA, VOL]        # 默认开启的指标名（内置 / 代码 / 公式 id）
+  params:                      # 按周期覆盖指标参数；没写的用目录里的默认值
+    W: { MA: [10, 40, 200] }

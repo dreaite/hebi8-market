@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { compile, evaluate, FormulaError, type OhlcvBar } from "@/indicators/formula";
+import { compile, evaluate, FormulaError, type OhlcvBar, type RefSeries } from "@/indicators/formula";
 import { formulaTemplate } from "@/indicators/formula-indicators";
 
 const bars = (closes: number[], extra: Partial<OhlcvBar>[] = []): OhlcvBar[] =>
   closes.map((close, i) => ({ open: close, high: close + 1, low: close - 1, close, volume: 10, ...extra[i] }));
 
-const run = (source: string, data: OhlcvBar[]) => evaluate(compile(source), data);
+const run = (source: string, data: OhlcvBar[], refs?: Record<string, RefSeries>, opts = {}) =>
+  evaluate(compile(source, opts), { bars: data, refs });
 const round = (s: number[]) => s.map((v) => (Number.isFinite(v) ? Math.round(v * 1e6) / 1e6 : v));
 
 describe("compile", () => {
@@ -29,6 +30,9 @@ describe("compile", () => {
     ["close +", "公式不完整"],
     ["close $ 2", "无法识别的字符"],
     ["b = a + 1; a = close", "未知变量「a」"],
+    ['"yahoo:SPY" + 1', "字符串只能用在"],
+    ["close(NOPE)", "未知别名「NOPE」"],
+    ["close(sma(close, 2))", "应是别名"],
   ])("rejects %j", (source, message) => {
     expect(() => compile(source)).toThrow(FormulaError);
     expect(() => compile(source)).toThrow(message);
@@ -44,6 +48,20 @@ describe("compile", () => {
     })();
     expect(error?.pos).toBe(8);
   });
+
+  it("resolves symbol references through aliases and quotes, and reports them", () => {
+    const program = compile('close(QQQ) / close("tv:TVC:GOLD") + open(QQQ)', { aliases: { QQQ: "yahoo:QQQ" } });
+    expect(program.refs).toEqual(["yahoo:QQQ", "tv:TVC:GOLD"]);
+    expect(program.benchKey).toBeNull();
+  });
+
+  it("maps bench to the configured benchmark", () => {
+    const program = compile("close / close(bench) + bench", { bench: "yahoo:SPY" });
+    expect(program.refs).toEqual(["yahoo:SPY"]);
+    expect(program.benchKey).toBe("yahoo:SPY");
+    expect(() => compile("close / bench", { bench: null })).toThrow("未设置基准");
+    expect(compile("close / bench").refs).toEqual([]); // bench unknown: allowed, evaluates to NaN
+  });
 });
 
 describe("evaluate", () => {
@@ -58,6 +76,7 @@ describe("evaluate", () => {
   it("provides price-derived series", () => {
     expect(run("hl2", data)[0]).toEqual([1, 2, 3, 4, 5]);
     expect(run("volume", data)[0]).toEqual([10, 10, 10, 10, 10]);
+    expect(run("tr", data)[0]).toEqual([2, 2, 2, 2, 2]);
   });
 
   it("lets later statements reuse named lines", () => {
@@ -101,9 +120,40 @@ describe("evaluate", () => {
     expect(run("abs(close - 3)", data)[0]).toEqual([2, 1, 0, 1, 2]);
   });
 
-  it("reads the benchmark close, NaN where it is missing", () => {
-    const withBench = bars([10, 20], [{ bench: 100 }, {}]);
-    expect(run("close / bench", withBench)[0]).toEqual([0.1, NaN]);
+  it("evaluates comparisons and logic as 0/1 with NaN passthrough", () => {
+    expect(run("close > 2", data)[0]).toEqual([0, 0, 1, 1, 1]);
+    expect(run("close >= 2 and close <= 4", data)[0]).toEqual([0, 1, 1, 1, 0]);
+    expect(run("close == 1 or close != 5", data)[0]).toEqual([1, 1, 1, 1, 0]);
+    expect(run("not close > 2", data)[0]).toEqual([1, 1, 0, 0, 0]);
+    // not binds tighter than and, which binds tighter than or; all below arithmetic
+    expect(run("not close > 4 and close + 1 > 2 or close == 5", data)[0]).toEqual([0, 1, 1, 1, 1]);
+    expect(run("sma(close, 2) > 2", data)[0]).toEqual([NaN, 0, 1, 1, 1]);
+  });
+
+  it("reads other symbols aligned to the bars", () => {
+    const refs = { "yahoo:QQQ": { c: [null, 10, 20, 20, 40], o: [null, 1, 2, 3, 4] } };
+    const aliases = { QQQ: "yahoo:QQQ" };
+    expect(run("close(QQQ)", data, refs, { aliases })[0]).toEqual([NaN, 10, 20, 20, 40]);
+    expect(run('open("yahoo:QQQ") * 10', data, refs)[0]).toEqual([NaN, 10, 20, 30, 40]);
+    expect(run("high(QQQ)", data, refs, { aliases })[0]).toEqual([NaN, NaN, NaN, NaN, NaN]);
+    expect(run("close / close(bench)", data, refs, { bench: "yahoo:QQQ" })[0]).toEqual([NaN, 0.2, 0.15, 0.2, 0.125]);
+    expect(run("bench", data, refs, { bench: "yahoo:QQQ" })[0]).toEqual([NaN, 10, 20, 20, 40]);
+    expect(run("close(QQQ)", data, {}, { aliases })[0]).toEqual([NaN, NaN, NaN, NaN, NaN]);
+  });
+
+  it("offers iff, cross and barssince", () => {
+    expect(run("iff(close > 3, 1, -1)", data)[0]).toEqual([-1, -1, -1, 1, 1]);
+    expect(run("cross(close, 2.5)", data)[0]).toEqual([NaN, 0, 1, 0, 0]);
+    // needs both bars of each side: the sma warm-up leaves the second bar undefined
+    expect(run("cross(close, sma(close, 2))", bars([5, 1, 9, 9]))[0]).toEqual([NaN, NaN, 1, 0]);
+    expect(run("barssince(close == 2)", data)[0]).toEqual([NaN, 0, 1, 2, 3]);
+  });
+
+  it("offers atr, corr and pctrank", () => {
+    expect(run("atr(2)", data)[0]).toEqual([NaN, 2, 2, 2, 2]);
+    expect(round(run("corr(close, close * 2, 3)", data)[0])).toEqual([NaN, NaN, 1, 1, 1]);
+    expect(round(run("corr(close, -close, 3)", data)[0])).toEqual([NaN, NaN, -1, -1, -1]);
+    expect(run("pctrank(close, 2)", bars([1, 3, 2, 5, 0]))[0]).toEqual([NaN, NaN, 50, 100, 0]);
   });
 
   it("requires window lengths to be positive integers", () => {
@@ -114,8 +164,11 @@ describe("evaluate", () => {
 });
 
 describe("formulaTemplate", () => {
+  const def = (id: string, formula: string, pane: "main" | "sub" = "main") => ({ id, label: "t", formula, pane });
+
   it("builds a KLineChart template whose calc maps lines to figure keys", async () => {
-    const template = formulaTemplate({ id: "x1", label: "通道", source: "up = close + 1; dn = close - 1", pane: "main" })!;
+    const d = def("x1", "up = close + 1; dn = close - 1");
+    const template = formulaTemplate(d, compile(d.formula), {});
     expect(template.name).toBe("F_x1");
     expect(template.series).toBe("price");
     expect(template.figures?.map((f) => f.key)).toEqual(["v0", "v1"]);
@@ -132,8 +185,11 @@ describe("formulaTemplate", () => {
     ]);
   });
 
-  it("drops NaN so the chart leaves gaps", async () => {
-    const template = formulaTemplate({ id: "x2", label: "均线", source: "sma(close, 2)", pane: "sub" })!;
+  it("drops NaN so the chart leaves gaps, and reads refs through the closure", async () => {
+    const d = def("x2", "sma(close, 2) + close(QQQ)", "sub");
+    const program = compile(d.formula, { aliases: { QQQ: "yahoo:QQQ" } });
+    const template = formulaTemplate(d, program, { "yahoo:QQQ": { c: [1, 1] } });
+    expect(template.series).toBe("normal");
     const result = await template.calc(
       [
         { timestamp: 1, open: 1, high: 1, low: 1, close: 5 },
@@ -141,10 +197,6 @@ describe("formulaTemplate", () => {
       ],
       template as never,
     );
-    expect(result).toEqual([{ v0: undefined }, { v0: 6 }]);
-  });
-
-  it("returns null for formulas that no longer compile", () => {
-    expect(formulaTemplate({ id: "x3", label: "坏", source: "nope(", pane: "sub" })).toBeNull();
+    expect(result).toEqual([{ v0: undefined }, { v0: 7 }]);
   });
 });

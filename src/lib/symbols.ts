@@ -7,41 +7,52 @@ export const SOURCE_LABELS: Record<Source, string> = {
   tv: "TradingView",
 };
 
-export type Timeframe = "D" | "W" | "M";
-export const TIMEFRAMES: Timeframe[] = ["D", "W", "M"];
-
-export interface SymbolMeta {
-  /** `${source}:${ticker}`, e.g. `yahoo:AAPL`, `binance:BTCUSDT`, `tv:TVC:US10Y` */
-  key: string;
-  source: Source;
-  ticker: string;
-  name: string;
-  /** Symbol key used by the relative-strength indicator */
-  benchmark: string | null;
-  sort: number;
-  watch: boolean;
-  syncedAt: number | null;
-  syncError: string | null;
-}
+export type Timeframe = "D" | "W" | "M" | "Q";
+export const TIMEFRAMES: Timeframe[] = ["D", "W", "M", "Q"];
+export const TF_LABELS: Record<Timeframe, string> = { D: "日", W: "周", M: "月", Q: "季" };
 
 export function isSource(value: unknown): value is Source {
   return typeof value === "string" && (SOURCES as readonly string[]).includes(value);
 }
 
-export function makeKey(source: Source, ticker: string): string {
-  return `${source}:${ticker}`;
+export function isTimeframe(value: unknown): value is Timeframe {
+  return typeof value === "string" && (TIMEFRAMES as string[]).includes(value);
 }
+
+/** `=BTC/GOLD`: computed from other symbols on read, never stored. */
+export const isSynthetic = (key: string) => key.startsWith("=");
 
 export function parseKey(key: string): { source: Source; ticker: string } {
   const i = key.indexOf(":");
   const source = key.slice(0, i);
   const ticker = key.slice(i + 1);
-  if (i <= 0 || !isSource(source) || !ticker) {
-    throw new Error(`Invalid symbol key: ${key}`);
-  }
+  if (i <= 0 || !isSource(source) || !ticker) throw new Error(`无效的标的 key「${key}」`);
   return { source, ticker };
 }
 
-export function normalizeTicker(ticker: string): string {
-  return ticker.trim().toUpperCase();
+export function isValidKey(key: unknown): key is string {
+  if (typeof key !== "string") return false;
+  if (isSynthetic(key)) return key.length > 1;
+  try {
+    parseKey(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** File name for a key: `tv:TVC:US10Y → tv_TVC_US10Y`, `=BTC/GOLD → expr_BTC_GOLD`. */
+export function fileKey(key: string): string {
+  const clean = (s: string) => s.replace(/[^A-Za-z0-9.\-]/g, "_");
+  return isSynthetic(key) ? `expr_${clean(key.slice(1))}` : clean(key);
+}
+
+/** Short stable hash (FNV-1a), appended to a file name when two keys sanitize alike. */
+export function hash6(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0").slice(0, 6);
 }

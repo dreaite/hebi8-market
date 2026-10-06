@@ -2,14 +2,18 @@ import type { Timeframe } from "./symbols";
 import { DAY } from "./time";
 
 export interface Bar {
-  /** Unix seconds at UTC midnight of the trading day (or of the week/month start) */
+  /** Unix seconds at UTC midnight of the trading day (or of the week/month/quarter start) */
   t: number;
   o: number;
   h: number;
   l: number;
   c: number;
   v: number | null;
+  /** Dividend adjustment factor; o/h/l/c are split-adjusted only, total return = price × adj */
+  adj: number;
 }
+
+export type Prices = "split" | "total";
 
 /** Sort by time and keep the last bar for each timestamp. */
 export function dedupeBars(bars: Bar[]): Bar[] {
@@ -25,10 +29,11 @@ export function bucketStart(t: number, tf: Timeframe): number {
     const daysSinceMonday = (date.getUTCDay() + 6) % 7;
     return t - daysSinceMonday * DAY;
   }
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1) / 1000;
+  const month = date.getUTCMonth();
+  return Date.UTC(date.getUTCFullYear(), tf === "Q" ? Math.floor(month / 3) * 3 : month, 1) / 1000;
 }
 
-/** Aggregate ascending daily bars into weekly (Monday-start) or monthly bars. */
+/** Aggregate ascending daily bars into weekly (Monday-start), monthly or quarterly bars. */
 export function aggregate(daily: Bar[], tf: Timeframe): Bar[] {
   if (tf === "D") return daily;
   const out: Bar[] = [];
@@ -43,24 +48,30 @@ export function aggregate(daily: Bar[], tf: Timeframe): Bar[] {
     cur.h = Math.max(cur.h, bar.h);
     cur.l = Math.min(cur.l, bar.l);
     cur.c = bar.c;
+    cur.adj = bar.adj;
     cur.v = cur.v === null && bar.v === null ? null : (cur.v ?? 0) + (bar.v ?? 0);
   }
   return out;
 }
 
+/** `total` folds dividends into the prices; `split` returns the bars untouched. */
+export function applyPrices(bars: Bar[], prices: Prices): Bar[] {
+  if (prices !== "total") return bars;
+  return bars.map((b) =>
+    b.adj === 1 ? b : { ...b, o: b.o * b.adj, h: b.h * b.adj, l: b.l * b.adj, c: b.c * b.adj, adj: 1 },
+  );
+}
+
 /**
- * For each bar, the benchmark close at the same time or the latest one before it
- * (benchmarks may trade on different days, e.g. crypto vs. stocks).
+ * For each target bar, the other series' bar on the same day or the latest one before it
+ * (forward fill: crypto trades on days stocks do not). Null before the other series starts.
  */
-export function alignCloses(bars: Bar[], benchmark: Bar[]): (number | undefined)[] {
-  const out: (number | undefined)[] = [];
+export function align(target: Bar[], other: Bar[]): (Bar | null)[] {
+  const out: (Bar | null)[] = [];
   let j = 0;
-  let last: number | undefined;
-  for (const bar of bars) {
-    while (j < benchmark.length && benchmark[j].t <= bar.t) {
-      last = benchmark[j].c;
-      j++;
-    }
+  let last: Bar | null = null;
+  for (const bar of target) {
+    while (j < other.length && other[j].t <= bar.t) last = other[j++];
     out.push(last);
   }
   return out;

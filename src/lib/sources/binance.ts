@@ -4,6 +4,7 @@ import type { SourceAdapter } from "./types";
 
 const BASE_URL = process.env.BINANCE_API_URL ?? "https://api.binance.com";
 const PAGE = 1000;
+const QUOTES = ["USDT", "USDC", "FDUSD", "BTC", "ETH", "BNB"];
 
 /** Binance kline row: [openTime(ms), open, high, low, close, volume, ...] */
 export function klineToBar(row: unknown[]): Bar {
@@ -14,6 +15,7 @@ export function klineToBar(row: unknown[]): Bar {
     l: Number(row[3]),
     c: Number(row[4]),
     v: Number(row[5]),
+    adj: 1,
   };
 }
 
@@ -34,6 +36,17 @@ export const binance: SourceAdapter = {
       if (rows.length < PAGE) break;
       startTime = Number(rows[rows.length - 1][0]) + DAY * 1000;
     }
-    return { bars, mode: since === null ? "replace" : "merge" };
+    const quote = QUOTES.find((q) => ticker.endsWith(q));
+    return {
+      bars,
+      meta: { name: ticker, exchange: "Binance", currency: quote, timezone: "UTC", kind: "crypto" },
+      mode: since === null ? "replace" : "merge",
+    };
+  },
+
+  /** No search endpoint worth calling: a plausible USDT pair is offered as is. */
+  async search(query) {
+    const ticker = query.trim().toUpperCase();
+    return /^[A-Z0-9]{2,12}USDT$/.test(ticker) ? [{ key: `binance:${ticker}`, name: ticker, exchange: "Binance", kind: "crypto" }] : [];
   },
 };

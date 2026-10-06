@@ -1,9 +1,7 @@
-import type { OverviewStats } from "./stats";
-import type { SymbolMeta } from "./symbols";
+import type { RefSeries } from "@/indicators/formula";
+import type { Source } from "./symbols";
 
-export interface OverviewItem extends SymbolMeta {
-  stats: OverviewStats | null;
-}
+export type { SearchHit } from "./sources/types";
 
 /** Shape expected by KLineChart, plus the aligned benchmark close for the RS indicator. */
 export interface ChartBar {
@@ -16,11 +14,21 @@ export interface ChartBar {
   bench?: number;
 }
 
+export interface BarsSymbol {
+  key: string;
+  name: string;
+  source: Source | "expr";
+  ticker: string;
+  currency: string | null;
+  bench: string | null;
+  syncedAt: number | null;
+  syncError: string | null;
+}
+
 export interface BarsResponse {
-  symbol: SymbolMeta;
-  benchmark: SymbolMeta | null;
+  symbol: BarsSymbol;
   pricePrecision: number;
-  /** Set when the refresh failed and cached bars are served instead */
-  error: string | null;
   bars: ChartBar[];
+  /** Other symbols aligned to `bars`: compare targets, formula references, the benchmark */
+  refs: Record<string, RefSeries>;
 }

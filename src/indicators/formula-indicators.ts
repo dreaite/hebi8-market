@@ -1,32 +1,32 @@
 import type { IndicatorTemplate } from "klinecharts";
-import { compile, evaluate } from "./formula";
-
-/** A user-defined indicator, stored in the browser. */
-export interface FormulaDef {
-  id: string;
-  label: string;
-  source: string;
-  pane: "main" | "sub";
-}
+import type { FormulaDef } from "@/lib/config";
+import { compile, evaluate, FormulaError, type CompileOptions, type Program, type RefSeries } from "./formula";
 
 const PREFIX = "F_";
 export const formulaIndicatorName = (id: string) => `${PREFIX}${id}`;
 export const isFormulaIndicator = (name: string) => name.startsWith(PREFIX);
 
 export function newFormulaId(): string {
-  return Math.random().toString(36).slice(2, 10);
+  return `f${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function describeError(err: unknown): string {
+  if (err instanceof FormulaError) return err.pos === undefined ? err.message : `${err.message}（第 ${err.pos + 1} 个字符）`;
+  return err instanceof Error ? err.message : String(err);
+}
+
+export function compileFormula(source: string, opts: CompileOptions): { program: Program; error: null } | { program: null; error: string } {
+  try {
+    return { program: compile(source, opts), error: null };
+  } catch (err) {
+    return { program: null, error: describeError(err) };
+  }
 }
 
 type Point = Record<string, number | undefined>;
 
-/** KLineChart template for a formula, or null if it no longer compiles. */
-export function formulaTemplate(def: FormulaDef): IndicatorTemplate<Point> | null {
-  let program;
-  try {
-    program = compile(def.source);
-  } catch {
-    return null;
-  }
+/** KLineChart template for a compiled formula; `refs` are the aligned symbols it reads. */
+export function formulaTemplate(def: FormulaDef, program: Program, refs: Record<string, RefSeries>): IndicatorTemplate<Point> {
   return {
     name: formulaIndicatorName(def.id),
     shortName: def.label,
@@ -36,7 +36,7 @@ export function formulaTemplate(def: FormulaDef): IndicatorTemplate<Point> | nul
     calcParams: [],
     figures: program.outputs.map((title, i) => ({ key: `v${i}`, title: `${title}: `, type: "line" })),
     calc: (dataList) => {
-      const lines = evaluate(program, dataList);
+      const lines = evaluate(program, { bars: dataList, refs });
       return dataList.map((_, i) => {
         const point: Point = {};
         lines.forEach((line, j) => {
@@ -49,8 +49,9 @@ export function formulaTemplate(def: FormulaDef): IndicatorTemplate<Point> | nul
 }
 
 export const FORMULA_EXAMPLES: Omit<FormulaDef, "id">[] = [
-  { label: "均线乖离", source: "(close / sma(close, 40) - 1) * 100", pane: "sub" },
-  { label: "双 EMA", source: "fast = ema(close, 10)\nslow = ema(close, 40)", pane: "main" },
-  { label: "相对基准", source: "close / bench", pane: "sub" },
-  { label: "唐奇安通道", source: "upper = highest(high, 20)\nlower = lowest(low, 20)", pane: "main" },
+  { label: "均线乖离", formula: "(close / sma(close, 40) - 1) * 100", pane: "sub" },
+  { label: "双 EMA", formula: "fast = ema(close, 10)\nslow = ema(close, 40)", pane: "main" },
+  { label: "对基准比价", formula: "close / close(bench)", pane: "sub" },
+  { label: "唐奇安通道", formula: "upper = highest(high, 20)\nlower = lowest(low, 20)", pane: "main" },
+  { label: "趋势", formula: "close > sma(close, 40) and sma(close, 10) > sma(close, 40)", pane: "sub" },
 ];

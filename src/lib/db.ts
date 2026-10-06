@@ -2,76 +2,59 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 
-const DB_PATH = process.env.HEBI8_DB ?? path.join(process.cwd(), "data", "hebi8.db");
-
-/** First-run watchlist: one of each market so every data source gets exercised. */
-const SEED_WATCHLIST: [source: string, ticker: string, name: string, benchmark: string | null][] = [
-  ["binance", "BTCUSDT", "Bitcoin", null],
-  ["binance", "ETHUSDT", "Ethereum", "binance:BTCUSDT"],
-  ["yahoo", "SPY", "标普 500 ETF", null],
-  ["yahoo", "QQQ", "纳指 100 ETF", "yahoo:SPY"],
-  ["yahoo", "NVDA", "英伟达", "yahoo:QQQ"],
-  ["yahoo", "0700.HK", "腾讯控股", "yahoo:^HSI"],
-  ["yahoo", "600519.SS", "贵州茅台", "tv:SSE:000300"],
-  ["tv", "TVC:GOLD", "黄金", null],
-  ["tv", "TVC:US10Y", "美债 10 年收益率", null],
-  ["tv", "TVC:DXY", "美元指数", null],
+/** Schema versions, applied in order; `PRAGMA user_version` records how many ran. */
+const MIGRATIONS: ((db: Database.Database) => void)[] = [
+  (db) =>
+    db.exec(`
+      -- The v1 cache mixed user fields into symbols; v2 keeps those in the vault and re-pulls bars.
+      DROP TABLE IF EXISTS symbols;
+      DROP TABLE IF EXISTS bars;
+      CREATE TABLE symbols (
+        key        TEXT PRIMARY KEY,
+        source     TEXT NOT NULL,
+        ticker     TEXT NOT NULL,
+        name       TEXT,
+        exchange   TEXT,
+        currency   TEXT,
+        timezone   TEXT,
+        kind       TEXT,
+        synced_at  INTEGER,
+        sync_error TEXT,
+        first_t    INTEGER,
+        last_t     INTEGER
+      );
+      CREATE TABLE bars (
+        key TEXT    NOT NULL,
+        t   INTEGER NOT NULL,
+        o   REAL    NOT NULL,
+        h   REAL    NOT NULL,
+        l   REAL    NOT NULL,
+        c   REAL    NOT NULL,
+        v   REAL,
+        adj REAL    NOT NULL DEFAULT 1,
+        PRIMARY KEY (key, t)
+      ) WITHOUT ROWID;
+      CREATE TABLE stats (
+        key         TEXT PRIMARY KEY,
+        computed_at INTEGER NOT NULL,
+        json        TEXT NOT NULL
+      );
+    `),
 ];
-
-const SEED_BENCHMARKS: [source: string, ticker: string, name: string][] = [
-  ["yahoo", "^HSI", "恒生指数"],
-  ["tv", "SSE:000300", "沪深 300"],
-];
-
-function migrate(db: Database.Database) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS symbols (
-      key        TEXT PRIMARY KEY,
-      source     TEXT NOT NULL,
-      ticker     TEXT NOT NULL,
-      name       TEXT NOT NULL,
-      benchmark  TEXT,
-      sort       INTEGER NOT NULL DEFAULT 0,
-      watch      INTEGER NOT NULL DEFAULT 1,
-      synced_at  INTEGER,
-      sync_error TEXT
-    );
-    CREATE TABLE IF NOT EXISTS bars (
-      key TEXT    NOT NULL,
-      t   INTEGER NOT NULL,
-      o   REAL    NOT NULL,
-      h   REAL    NOT NULL,
-      l   REAL    NOT NULL,
-      c   REAL    NOT NULL,
-      v   REAL,
-      PRIMARY KEY (key, t)
-    ) WITHOUT ROWID;
-  `);
-}
-
-function seed(db: Database.Database) {
-  const { n } = db.prepare("SELECT count(*) AS n FROM symbols").get() as { n: number };
-  if (n > 0) return;
-  const insert = db.prepare(
-    "INSERT INTO symbols (key, source, ticker, name, benchmark, sort, watch) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  );
-  db.transaction(() => {
-    SEED_WATCHLIST.forEach(([source, ticker, name, benchmark], i) =>
-      insert.run(`${source}:${ticker}`, source, ticker, name, benchmark, i, 1),
-    );
-    for (const [source, ticker, name] of SEED_BENCHMARKS) {
-      insert.run(`${source}:${ticker}`, source, ticker, name, null, 0, 0);
-    }
-  })();
-}
 
 function open(): Database.Database {
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  const db = new Database(DB_PATH);
+  const file = process.env.HEBI8_DB ?? path.join(process.cwd(), "data", "hebi8.db");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const db = new Database(file);
   db.pragma("journal_mode = WAL");
   db.pragma("busy_timeout = 5000");
-  migrate(db);
-  seed(db);
+  const version = db.pragma("user_version", { simple: true }) as number;
+  for (let i = version; i < MIGRATIONS.length; i++) {
+    db.transaction(() => {
+      MIGRATIONS[i](db);
+      db.pragma(`user_version = ${i + 1}`);
+    })();
+  }
   return db;
 }
 

@@ -10,8 +10,12 @@ declare module "@mathieuc/tradingview" {
   }
 
   interface MarketInfos {
+    name?: string;
     description?: string;
+    exchange?: string;
+    currency_code?: string;
     timezone?: string;
+    type?: string;
   }
 
   interface ChartSession {
@@ -31,6 +35,18 @@ declare module "@mathieuc/tradingview" {
     end(): Promise<void>;
   }
 
-  const TradingView: { Client: new (options?: { token?: string; signature?: string }) => Client };
+  interface SearchMarketResult {
+    id: string;
+    exchange: string;
+    fullExchange: string;
+    symbol: string;
+    description: string;
+    type: string;
+  }
+
+  const TradingView: {
+    Client: new (options?: { token?: string; signature?: string }) => Client;
+    searchMarketV3(search: string, filter?: string, offset?: number): Promise<SearchMarketResult[]>;
+  };
   export default TradingView;
 }

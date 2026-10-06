@@ -1,100 +1,72 @@
 import { getDb } from "./db";
 import type { Bar } from "./series";
-import { makeKey, parseKey, type Source, type SymbolMeta } from "./symbols";
+import type { SourceMeta } from "./sources/types";
+import type { Stats } from "./stats";
+import { parseKey, type Source } from "./symbols";
 
-interface SymbolRow {
+/** Cache row: what the source told us plus sync state. Nothing user-editable lives here. */
+export interface SymbolRow {
   key: string;
   source: Source;
   ticker: string;
-  name: string;
-  benchmark: string | null;
-  sort: number;
-  watch: number;
-  synced_at: number | null;
-  sync_error: string | null;
+  name: string | null;
+  exchange: string | null;
+  currency: string | null;
+  timezone: string | null;
+  kind: string | null;
+  syncedAt: number | null;
+  syncError: string | null;
+  firstT: number | null;
+  lastT: number | null;
 }
 
-function toMeta(row: SymbolRow): SymbolMeta {
-  return {
-    key: row.key,
-    source: row.source,
-    ticker: row.ticker,
-    name: row.name,
-    benchmark: row.benchmark,
-    sort: row.sort,
-    watch: row.watch === 1,
-    syncedAt: row.synced_at,
-    syncError: row.sync_error,
-  };
-}
-
-export function listWatchlist(): SymbolMeta[] {
-  const rows = getDb().prepare("SELECT * FROM symbols WHERE watch = 1 ORDER BY sort, key").all() as SymbolRow[];
-  return rows.map(toMeta);
-}
-
-export function getSymbol(key: string): SymbolMeta | null {
-  const row = getDb().prepare("SELECT * FROM symbols WHERE key = ?").get(key) as SymbolRow | undefined;
-  return row ? toMeta(row) : null;
-}
-
-/** Make sure a symbol row exists (hidden from the watchlist), e.g. for a benchmark key. */
-export function ensureSymbol(key: string): SymbolMeta {
-  const existing = getSymbol(key);
-  if (existing) return existing;
-  const { source, ticker } = parseKey(key);
-  getDb()
-    .prepare("INSERT INTO symbols (key, source, ticker, name, watch) VALUES (?, ?, ?, ?, 0)")
-    .run(key, source, ticker, ticker);
-  return getSymbol(key)!;
-}
-
-export function addToWatchlist(input: {
+interface RawRow {
+  key: string;
   source: Source;
   ticker: string;
-  name?: string;
-  benchmark?: string | null;
-}): SymbolMeta {
-  const key = makeKey(input.source, input.ticker);
-  const db = getDb();
-  const { next } = db.prepare("SELECT coalesce(max(sort), -1) + 1 AS next FROM symbols WHERE watch = 1").get() as {
-    next: number;
-  };
-  db.prepare(
-    `INSERT INTO symbols (key, source, ticker, name, benchmark, sort, watch)
-     VALUES (@key, @source, @ticker, @name, @benchmark, @sort, 1)
-     ON CONFLICT (key) DO UPDATE SET
-       name = coalesce(@customName, symbols.name),
-       benchmark = coalesce(@benchmark, symbols.benchmark),
-       sort = CASE WHEN symbols.watch = 1 THEN symbols.sort ELSE @sort END,
-       watch = 1`,
-  ).run({
-    key,
-    source: input.source,
-    ticker: input.ticker,
-    name: input.name || input.ticker,
-    customName: input.name || null,
-    benchmark: input.benchmark || null,
-    sort: next,
-  });
-  return getSymbol(key)!;
+  name: string | null;
+  exchange: string | null;
+  currency: string | null;
+  timezone: string | null;
+  kind: string | null;
+  synced_at: number | null;
+  sync_error: string | null;
+  first_t: number | null;
+  last_t: number | null;
 }
 
-export function removeFromWatchlist(key: string): void {
-  // Keep the row and its bars: the symbol may still serve as another symbol's benchmark.
-  getDb().prepare("UPDATE symbols SET watch = 0 WHERE key = ?").run(key);
+const toRow = (r: RawRow): SymbolRow => ({
+  key: r.key,
+  source: r.source,
+  ticker: r.ticker,
+  name: r.name,
+  exchange: r.exchange,
+  currency: r.currency,
+  timezone: r.timezone,
+  kind: r.kind,
+  syncedAt: r.synced_at,
+  syncError: r.sync_error,
+  firstT: r.first_t,
+  lastT: r.last_t,
+});
+
+export function getSymbol(key: string): SymbolRow | null {
+  const row = getDb().prepare("SELECT * FROM symbols WHERE key = ?").get(key) as RawRow | undefined;
+  return row ? toRow(row) : null;
 }
 
-export function deleteSymbol(key: string): void {
-  const db = getDb();
-  db.transaction(() => {
-    db.prepare("DELETE FROM bars WHERE key = ?").run(key);
-    db.prepare("DELETE FROM symbols WHERE key = ?").run(key);
-  })();
+export function listSymbols(): Record<string, SymbolRow> {
+  const rows = getDb().prepare("SELECT * FROM symbols").all() as RawRow[];
+  return Object.fromEntries(rows.map((r) => [r.key, toRow(r)]));
+}
+
+export function ensureSymbol(key: string): void {
+  const { source, ticker } = parseKey(key);
+  getDb().prepare("INSERT OR IGNORE INTO symbols (key, source, ticker) VALUES (?, ?, ?)").run(key, source, ticker);
 }
 
 export function readDaily(key: string): Bar[] {
-  return getDb().prepare("SELECT t, o, h, l, c, v FROM bars WHERE key = ? ORDER BY t").all(key) as Bar[];
+  return getDb().prepare("SELECT t, o, h, l, c, v, adj FROM bars WHERE key = ? ORDER BY t").all(key) as Bar[];
 }
 
 export function latestBarTime(key: string): number | null {
@@ -104,23 +76,54 @@ export function latestBarTime(key: string): number | null {
 
 export function writeBars(key: string, bars: Bar[], mode: "replace" | "merge"): void {
   const db = getDb();
-  const insert = db.prepare("INSERT OR REPLACE INTO bars (key, t, o, h, l, c, v) VALUES (?, ?, ?, ?, ?, ?, ?)");
+  const insert = db.prepare("INSERT OR REPLACE INTO bars (key, t, o, h, l, c, v, adj) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
   db.transaction(() => {
     if (mode === "replace") db.prepare("DELETE FROM bars WHERE key = ?").run(key);
-    for (const b of bars) insert.run(key, b.t, b.o, b.h, b.l, b.c, b.v);
+    for (const b of bars) insert.run(key, b.t, b.o, b.h, b.l, b.c, b.v, b.adj);
+    db.prepare(
+      "UPDATE symbols SET first_t = (SELECT min(t) FROM bars WHERE key = @key), last_t = (SELECT max(t) FROM bars WHERE key = @key) WHERE key = @key",
+    ).run({ key });
   })();
 }
 
-export function markSynced(key: string, sourceName?: string): void {
+export function markSynced(key: string, meta: SourceMeta): void {
   getDb()
     .prepare(
-      `UPDATE symbols SET synced_at = ?, sync_error = NULL,
-         name = CASE WHEN name = ticker AND ? IS NOT NULL THEN ? ELSE name END
-       WHERE key = ?`,
+      `UPDATE symbols SET synced_at = @now, sync_error = NULL,
+         name = coalesce(@name, name), exchange = coalesce(@exchange, exchange), currency = coalesce(@currency, currency),
+         timezone = coalesce(@timezone, timezone), kind = coalesce(@kind, kind)
+       WHERE key = @key`,
     )
-    .run(Date.now(), sourceName ?? null, sourceName ?? null, key);
+    .run({
+      key,
+      now: Date.now(),
+      name: meta.name ?? null,
+      exchange: meta.exchange ?? null,
+      currency: meta.currency ?? null,
+      timezone: meta.timezone ?? null,
+      kind: meta.kind ?? null,
+    });
 }
 
 export function markSyncError(key: string, message: string): void {
   getDb().prepare("UPDATE symbols SET sync_error = ? WHERE key = ?").run(message, key);
+}
+
+export function writeStats(key: string, stats: Stats | null): void {
+  const db = getDb();
+  if (!stats) db.prepare("DELETE FROM stats WHERE key = ?").run(key);
+  else db.prepare("INSERT OR REPLACE INTO stats (key, computed_at, json) VALUES (?, ?, ?)").run(key, Date.now(), JSON.stringify(stats));
+}
+
+export function readAllStats(): Record<string, Stats> {
+  const rows = getDb().prepare("SELECT key, json FROM stats").all() as { key: string; json: string }[];
+  return Object.fromEntries(rows.map((r) => [r.key, JSON.parse(r.json) as Stats]));
+}
+
+export function maxSyncedAt(): number | null {
+  return (getDb().prepare("SELECT max(synced_at) AS t FROM symbols").get() as { t: number | null }).t;
+}
+
+export function hasBars(): boolean {
+  return getDb().prepare("SELECT 1 FROM bars LIMIT 1").get() !== undefined;
 }
