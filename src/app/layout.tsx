@@ -28,7 +28,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="zh-CN" data-updown={updown === "red-up" ? "red-up" : undefined}>
       <body className="flex min-h-screen flex-col font-sans antialiased">
         <UiProvider ctx={searchCtx}>
-          <header className="border-b border-line">
+          <header className="site-header border-b border-line">
             <div className="mx-auto flex h-12 max-w-[1400px] items-center gap-4 px-5">
               <Link href="/" className="flex shrink-0 items-baseline gap-3" title="hebi（蛇）首尾相衔，七天一个轮回；多出来的第八天，用来观测市场">
                 <span className="font-mono text-sm tracking-tight">hebi8 market</span>

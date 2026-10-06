@@ -74,7 +74,7 @@ export function UiProvider({ ctx, children }: { ctx: SearchContext; children: Re
         openSearch();
         return;
       }
-      if (pathname.startsWith("/chart/") && !mod && !e.altKey && /^[a-zA-Z0-9]$/.test(e.key) && !/^[jk]$/.test(e.key)) {
+      if (pathname.startsWith("/chart/") && !mod && !e.altKey && /^[a-zA-Z0-9]$/.test(e.key)) {
         e.preventDefault();
         openSearch(e.key);
       }

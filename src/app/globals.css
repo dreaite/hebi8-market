@@ -240,6 +240,60 @@ input:focus-visible {
     border-style: dashed;
     opacity: 0.55;
   }
+  /*
+   * Chart toolbars (TradingView layout): icon or icon+short-text buttons with a 30px hit area,
+   * hover tint, and a subtle filled state when pressed or active.
+   */
+  .tb-btn {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    height: 30px;
+    min-width: 30px;
+    padding: 0 6px;
+    border-radius: 4px;
+    font-size: 13px;
+    line-height: 1;
+    white-space: nowrap;
+    color: var(--fg);
+    cursor: pointer;
+  }
+  .tb-btn:hover {
+    background: color-mix(in srgb, var(--fg) 7%, transparent);
+  }
+  .tb-btn[aria-pressed="true"],
+  .tb-btn[aria-expanded="true"] {
+    background: color-mix(in srgb, var(--fg) 11%, transparent);
+  }
+  .tb-btn[aria-pressed="true"] {
+    font-weight: 600;
+  }
+  .tb-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+    background: transparent;
+  }
+  /* Locked on (the % axis while a compare forces it). */
+  .tb-btn[data-locked="true"] {
+    opacity: 0.7;
+    cursor: default;
+  }
+  .tb-sep {
+    flex-shrink: 0;
+    width: 1px;
+    height: 20px;
+    margin: 0 4px;
+    background: var(--line);
+  }
+  .tb-sep-h {
+    flex-shrink: 0;
+    width: 20px;
+    height: 1px;
+    margin: 4px 0;
+    background: var(--line);
+  }
   /* Row menu. */
   .menu {
     position: absolute;
@@ -296,9 +350,21 @@ input:focus-visible {
   }
 }
 
-/* Toolbar folded into the ⋯ menu on narrow screens: the drawing group may wrap. */
-.menu .seg {
-  flex-wrap: wrap;
-  height: auto;
-  gap: 2px;
+/* The site header's height; the chart page fills the rest. Fullscreen hides the header. */
+:root {
+  --site-header-h: 49px;
+}
+:root:fullscreen {
+  --site-header-h: 0px;
+}
+:root:fullscreen .site-header {
+  display: none;
+}
+
+/* A toolbar row that scrolls sideways on narrow screens without showing a scrollbar. */
+.scroll-row {
+  scrollbar-width: none;
+}
+.scroll-row::-webkit-scrollbar {
+  display: none;
 }

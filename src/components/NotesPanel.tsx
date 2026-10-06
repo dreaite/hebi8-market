@@ -4,6 +4,7 @@ import { useState } from "react";
 import { saveNote } from "@/app/actions";
 import { fileKey } from "@/lib/symbols";
 import { draftTime, statusText, useAutosave } from "@/lib/use-autosave";
+import { IconClose } from "./chart-icons";
 
 interface NotesPanelProps {
   symbolKey: string;
@@ -29,8 +30,8 @@ export function NotesPanel({ symbolKey, note, html, savedAt, onClose, closeSeq =
   });
 
   return (
-    <aside className={`flex flex-col rounded-lg border border-line bg-card text-xs ${className}`}>
-      <div className="flex items-center gap-3 border-b border-line px-3 py-1.5">
+    <aside className={`flex flex-col bg-card text-xs ${className}`} aria-label="笔记">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line pr-1 pl-3">
         <span className="font-medium">笔记</span>
         <span className={`flex-1 truncate text-[11px] ${status.state === "error" ? "text-down" : "text-muted"}`}>{editing || status.state !== "saved" ? statusText(status) : ""}</span>
         {editing ? (
@@ -48,8 +49,8 @@ export function NotesPanel({ symbolKey, note, html, savedAt, onClose, closeSeq =
             编辑
           </button>
         )}
-        <button onClick={onClose} className="btn px-1" title="收起" aria-label="收起笔记">
-          ×
+        <button onClick={onClose} className="tb-btn h-7 min-w-7" title="收起" aria-label="收起笔记">
+          <IconClose size={16} />
         </button>
       </div>
       {draft && (
@@ -79,7 +80,7 @@ export function NotesPanel({ symbolKey, note, html, savedAt, onClose, closeSeq =
           className="min-h-[320px] flex-1 resize-none bg-transparent p-3 font-mono text-xs leading-5 outline-none"
         />
       ) : html ? (
-        <div className="md overflow-y-auto p-3" dangerouslySetInnerHTML={{ __html: html }} />
+        <div className="md min-h-0 flex-1 overflow-y-auto p-3" dangerouslySetInnerHTML={{ __html: html }} />
       ) : (
         <button onClick={() => setEditing(true)} className="p-3 text-left text-muted hover:text-fg">
           写下为什么看它
