@@ -227,3 +227,17 @@ export const IconCheck = (p: IconProps) => (
     <path d="m3.5 9.5 3.5 3.5 7.5-8" />
   </Svg>
 );
+
+export const IconHelp = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="9" cy="9" r="7" />
+    <path d="M7 7.2a2 2 0 1 1 2.9 1.8c-.6.3-.9.8-.9 1.4v.4" />
+    <circle cx="9" cy="12.9" r=".5" fill="currentColor" stroke="none" />
+  </Svg>
+);
+
+export const IconExternal = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M10.5 3.5h4v4M14.5 3.5 8 10M12.5 10.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3" />
+  </Svg>
+);

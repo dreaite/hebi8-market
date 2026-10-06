@@ -10,6 +10,7 @@ import { compileFormula, formulaIndicatorName, formulaTemplate, isFormulaIndicat
 import type { BarsResponse } from "@/lib/api-types";
 import { CHART_STYLES, type ChartPrefs, type ChartStyle, type FormulaDef, type ParamOverrides } from "@/lib/config";
 import { fmtAgo } from "@/lib/format";
+import { setChartContext } from "@/lib/page-context";
 import type { Prices } from "@/lib/series";
 import { SOURCE_LABELS, TF_LABELS, TIMEFRAMES, tickerOf, type Timeframe } from "@/lib/symbols";
 import { useLocalStorage } from "@/lib/use-local-storage";
@@ -26,6 +27,7 @@ import {
   IconEye,
   IconFib,
   IconFullscreen,
+  IconHelp,
   IconHollowCandles,
   IconHorizontalLine,
   IconHorizontalRay,
@@ -113,7 +115,7 @@ export function ChartView({
   noteSavedAt,
 }: ChartViewProps) {
   const router = useRouter();
-  const { openSearch, searchCtx } = useUi();
+  const { openSearch, openHelp, searchCtx } = useUi();
   const [tf, setTf] = useState(prefs.tf);
   const [log, setLog] = useState(prefs.log);
   const [chartStyle, setChartStyle] = useState(prefs.style);
@@ -382,6 +384,20 @@ export function ChartView({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // what in-app feedback attaches about this chart
+  useEffect(() => {
+    setChartContext({
+      symbol: symbolKey,
+      tf,
+      style: chartStyle,
+      log,
+      prices,
+      indicators: enabled,
+      compares: compare.map((c) => ({ key: c.key, mode: c.mode })),
+    });
+  }, [symbolKey, tf, chartStyle, log, prices, enabled, compare]);
+  useEffect(() => () => setChartContext(null), []);
+
   const bars = data?.bars;
   const meta = data?.symbol;
   const forcedPercent = compare.some((c) => c.mode === "percent" && !hiddenCompares.includes(c.key));
@@ -538,6 +554,12 @@ export function ChartView({
         <button type="button" onClick={() => setReloadTick((n) => n + 1)} disabled={loading} className="tb-btn" title={`刷新 · ${loading ? "加载中…" : syncText}`} aria-label="刷新">
           <IconRefresh className={loading ? "animate-spin" : ""} />
         </button>
+        {/* the site header (and its "?") is hidden in fullscreen */}
+        {fullscreen && (
+          <button type="button" onClick={() => openHelp()} className="tb-btn" title="帮助与反馈 · ?" aria-label="帮助与反馈">
+            <IconHelp />
+          </button>
+        )}
         <button type="button" onClick={toggleFullscreen} className="tb-btn" title={fullscreen ? "退出全屏" : "全屏"} aria-label={fullscreen ? "退出全屏" : "全屏"}>
           <IconFullscreen exit={fullscreen} />
         </button>

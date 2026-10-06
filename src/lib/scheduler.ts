@@ -30,7 +30,12 @@ export function lastDue(now: Date, at: string[], tz: string): Date {
 
 const log = (msg: string) => console.log(`[hebi8] ${new Date().toISOString()} ${msg}`);
 
-const globalForScheduler = globalThis as unknown as { hebi8Scheduler?: boolean };
+const globalForScheduler = globalThis as unknown as { hebi8Scheduler?: boolean; hebi8NextSync?: number };
+
+/** When the running scheduler fires next (ms), or null if it has not started in this process. */
+export function scheduledNextSync(): number | null {
+  return globalForScheduler.hebi8NextSync ?? null;
+}
 
 export function startScheduler(): void {
   if (globalForScheduler.hebi8Scheduler) return;
@@ -57,6 +62,7 @@ export function startScheduler(): void {
   const schedule = () => {
     const { at, tz } = settings();
     const next = nextRun(new Date(), at, tz);
+    globalForScheduler.hebi8NextSync = next.getTime();
     log(`next sync at ${next.toISOString()} (${at.join(" ")} ${tz})`);
     setTimeout(async () => {
       await runSync("scheduled");

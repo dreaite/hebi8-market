@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { SearchTrigger, UiProvider } from "@/components/UiProvider";
+import { ErrorCapture } from "@/components/ErrorCapture";
+import { HelpButton, SearchTrigger, UiProvider } from "@/components/UiProvider";
 import type { SearchContext } from "@/lib/search";
 import { searchContextFor } from "@/lib/search-context";
 import { ensureVault, readConfigSafe } from "@/lib/vault";
@@ -27,6 +28,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="zh-CN" data-updown={updown === "red-up" ? "red-up" : undefined}>
       <body className="flex min-h-screen flex-col font-sans antialiased">
+        <ErrorCapture />
         <UiProvider ctx={searchCtx}>
           <header className="site-header border-b border-line">
             <div className="mx-auto flex h-12 max-w-[1400px] items-center gap-4 px-5">
@@ -44,6 +46,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
                 <Link href="/review" className="hover:text-fg">
                   复盘
                 </Link>
+                <HelpButton />
               </nav>
             </div>
           </header>
