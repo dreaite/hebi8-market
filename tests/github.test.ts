@@ -1,106 +1,109 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GET as callbackGET } from "@/app/api/github/callback/route";
+import { DELETE as deviceDELETE, POST as devicePOST } from "@/app/api/github/device/route";
+import { POST as pollPOST } from "@/app/api/github/device/poll/route";
 import { GET as issuesGET, POST as issuesPOST } from "@/app/api/github/issues/route";
-import { GET as loginGET } from "@/app/api/github/login/route";
 import { POST as logoutPOST } from "@/app/api/github/logout/route";
-import { GET as manifestGET } from "@/app/api/github/manifest/route";
-import { GET as setupGET } from "@/app/api/github/setup/route";
-import { buildIssueBody, feedbackLabels, parseFeedbackInput, parseIssueContext, type FeedbackContext } from "@/lib/feedback";
-import {
-  COOKIES,
-  GitHubError,
-  appJwt,
-  buildManifest,
-  callbackUrlsFor,
-  resetGitHubCaches,
-  decodeCookie,
-  encodeCookie,
-  manifestFormAction,
-  normalizeCallbackUrls,
-  requestOrigin,
-  sanitizeReturn,
-  userToken,
-  withHelp,
-  type OAuthCookie,
-} from "@/lib/github";
-import { createSession, getSession, readApp, writeApp, type GitHubAppCredentials } from "@/lib/secrets";
+import { GITHUB_APP_CLIENT_ID, feedbackRepo, githubClientId } from "@/lib/app-info";
+import { MAX_WEB_URL, TRUNCATED_NOTE, buildIssueBody, feedbackContext, parseFeedbackInput, parseIssueContext, webIssueUrl, type FeedbackContext, type PageInfo } from "@/lib/feedback";
+import { GitHubError, SESSION_COOKIE, pollDeviceFlow, requestOrigin, resetGitHubCaches, startDeviceFlow, userToken } from "@/lib/github";
+import { createSession, getSession } from "@/lib/secrets";
 
-const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
-const PEM = privateKey.export({ type: "pkcs1", format: "pem" }).toString();
 const ORIGIN = "http://100.92.194.31:8809";
+const CLIENT_ID = "Iv23_test";
 
-const decode = (part: string) => JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+const page: PageInfo = {
+  app: { version: "0.1.0", commit: "abc1234", builtAt: null },
+  page: "/chart/yahoo%3ASPY",
+  chart: { symbol: "yahoo:SPY", tf: "W", style: "candle_solid", log: true, prices: "split", indicators: ["MA"], compares: [{ key: "yahoo:QQQ", mode: "percent" }] },
+  viewport: { width: 1440, height: 900, dpr: 1 },
+  colorScheme: "dark",
+  fullscreen: false,
+  userAgent: "test",
+  errors: [{ t: "2026-10-06T00:00:00.000Z", kind: "error", message: "TypeError: x", source: "/_next/a.js:1:2" }],
+  at: "2026-10-06T00:00:00.000Z",
+};
+const ctx: FeedbackContext = feedbackContext("data", true, page);
 
-describe("appJwt", () => {
-  it("is an RS256 JWT backdated 60s, valid 9 minutes, verifiable with the public key", () => {
-    const jwt = appJwt("Iv1.abc", PEM, 1_700_000_000);
-    const [h, p, sig] = jwt.split(".");
-    expect(decode(h)).toEqual({ alg: "RS256", typ: "JWT" });
-    expect(decode(p)).toEqual({ iat: 1_700_000_000 - 60, exp: 1_700_000_000 + 540, iss: "Iv1.abc" });
-    expect(crypto.verify("RSA-SHA256", Buffer.from(`${h}.${p}`), publicKey, Buffer.from(sig, "base64url"))).toBe(true);
-    expect(crypto.verify("RSA-SHA256", Buffer.from(`${h}.${p}x`), publicKey, Buffer.from(sig, "base64url"))).toBe(false);
-  });
-});
-
-describe("issue body and labels", () => {
-  const ctx: FeedbackContext = {
-    v: 1,
-    type: "data",
-    app: { version: "0.1.0", commit: "abc1234", builtAt: null },
-    page: "/chart/yahoo%3ASPY",
-    chart: { symbol: "yahoo:SPY", tf: "W", style: "candle_solid", log: true, prices: "split", indicators: ["MA"], compares: [{ key: "yahoo:QQQ", mode: "percent" }] },
-    viewport: { width: 1440, height: 900, dpr: 1 },
-    colorScheme: "dark",
-    fullscreen: false,
-    userAgent: "test",
-    errors: [{ t: "2026-10-06T00:00:00.000Z", kind: "error", message: "TypeError: x", source: "/_next/a.js:1:2" }],
-    at: "2026-10-06T00:00:00.000Z",
-  };
-
-  it("puts the description first, then the context block in a details, then the footer", () => {
+describe("issue body", () => {
+  it("puts the description first, then the context block (with type and autoFix) in a details, then the footer", () => {
     const body = buildIssueBody("  周线不对  ", ctx);
-    expect(body.startsWith("周线不对\n\n---\n\n<details><summary>页面信息</summary>\n\n```json hebi8-context\n{")).toBe(true);
+    expect(body.startsWith('周线不对\n\n---\n\n<details><summary>页面信息</summary>\n\n```json hebi8-context\n{\n  "v": 1,\n  "type": "data",\n  "autoFix": true,')).toBe(true);
     expect(body.endsWith("```\n</details>\n\n<sub>来自 hebi8 market 应用内反馈</sub>\n")).toBe(true);
     expect(parseIssueContext(body)).toEqual(ctx);
   });
 
-  it("leaves the context out when not attached", () => {
-    const body = buildIssueBody("", null);
-    expect(body).toBe("（没有描述）\n\n<sub>来自 hebi8 market 应用内反馈</sub>\n");
-    expect(parseIssueContext(body)).toBeNull();
+  it("keeps type and autoFix even without page info", () => {
+    const body = buildIssueBody("", feedbackContext("bug", false, null));
+    expect(body).toContain("<summary>反馈信息</summary>");
+    expect(body.startsWith("（没有描述）")).toBe(true);
+    expect(parseIssueContext(body)).toEqual({ v: 1, type: "bug", autoFix: false });
+    expect(parseIssueContext(buildIssueBody("x", ctx, { compact: true }))).toEqual(ctx);
+    expect(parseIssueContext("no block")).toBeNull();
+    expect(parseIssueContext("```json hebi8-context\n{oops\n```")).toBeNull();
   });
 
-  it("labels: from-app, the type, optionally auto-fix-ok", () => {
-    expect(feedbackLabels("bug", false)).toEqual(["from-app", "bug"]);
-    expect(feedbackLabels("idea", true)).toEqual(["from-app", "idea", "auto-fix-ok"]);
-  });
-
-  it("validates submissions and stamps the type into the context", () => {
+  it("validates submissions and stamps type and autoFix from the form into the context", () => {
     expect(() => parseFeedbackInput({ type: "bug", title: "  " })).toThrow("标题不能为空");
     expect(() => parseFeedbackInput({ type: "nope", title: "x" })).toThrow("反馈类型不对");
-    const input = parseFeedbackInput({ type: "ux", title: " 慢 ", description: "d", context: { ...ctx, type: "bug" }, autoFix: true });
+    const input = parseFeedbackInput({ type: "ux", title: " 慢 ", description: "d", context: { ...ctx, type: "bug", autoFix: false }, autoFix: true });
     expect(input).toMatchObject({ type: "ux", title: "慢", autoFix: true });
-    expect(input.context?.type).toBe("ux");
+    expect(input.context).toMatchObject({ v: 1, type: "ux", autoFix: true, page: "/chart/yahoo%3ASPY" });
+    expect(parseFeedbackInput({ type: "idea", title: "x", context: null }).context).toEqual({ v: 1, type: "idea", autoFix: false });
+    expect(() => parseFeedbackInput({ type: "idea", title: "x", context: { junk: "x".repeat(30000) } })).toThrow("太大");
   });
 });
 
-describe("return paths and origins", () => {
-  it("keeps same-origin relative paths only", () => {
-    expect(sanitizeReturn("/chart/yahoo%3ASPY?x=1#a")).toBe("/chart/yahoo%3ASPY?x=1#a");
-    expect(sanitizeReturn("/review")).toBe("/review");
-    for (const bad of [null, "", "https://evil.example/", "//evil.example/x", "/\\evil.example", "javascript:alert(1)", "review", "/a\nb"]) {
-      expect(sanitizeReturn(bad)).toBe("/");
-    }
+describe("github.com fallback link", () => {
+  const params = (url: string) => new URL(url).searchParams;
+
+  it("prefills title and the same body as the in-app issue", () => {
+    const url = webIssueUrl("dreaite/hebi8-market", "图表空白", "打开就空", ctx);
+    expect(url.startsWith("https://github.com/dreaite/hebi8-market/issues/new?")).toBe(true);
+    expect(params(url).get("title")).toBe("图表空白");
+    expect(params(url).get("body")).toBe(buildIssueBody("打开就空", ctx));
   });
 
-  it("adds help=feedback (and extras) to the return path", () => {
-    expect(withHelp("/chart/x?tf=W")).toBe("/chart/x?tf=W&help=feedback");
-    expect(withHelp("//evil", { error: "坏了" })).toBe(`/?help=feedback&error=${encodeURIComponent("坏了")}`);
+  it("shrinks the context before it touches the description, and stays under the limit", () => {
+    const many = feedbackContext("bug", false, { ...page, errors: Array.from({ length: 10 }, (_, i) => ({ t: "t", kind: "error" as const, message: `E${i} `.repeat(250) })) });
+    const url = webIssueUrl("o/r", "t", "说明", many);
+    expect(url.length).toBeLessThanOrEqual(MAX_WEB_URL);
+    const back = parseIssueContext(params(url).get("body")!)!;
+    expect(back).toMatchObject({ v: 1, type: "bug", autoFix: false, page: page.page });
+    expect(back.errors).toBeUndefined();
+    expect(params(url).get("body")!.startsWith("说明")).toBe(true);
+  });
+
+  it("truncates a huge description last, keeping type and autoFix", () => {
+    const long = "很长的描述".repeat(2000);
+    const url = webIssueUrl("o/r", "t", long, ctx);
+    expect(url.length).toBeLessThanOrEqual(MAX_WEB_URL);
+    expect(url.length).toBeGreaterThan(MAX_WEB_URL - 200);
+    const body = params(url).get("body")!;
+    expect(body).toContain(TRUNCATED_NOTE.trim());
+    expect(parseIssueContext(body)).toEqual({ v: 1, type: "data", autoFix: true });
+  });
+});
+
+describe("configuration", () => {
+  afterEach(() => {
+    delete process.env.HEBI8_GITHUB_CLIENT_ID;
+    delete process.env.HEBI8_FEEDBACK_REPO;
+  });
+
+  it("defaults to the upstream repo and no client id; env overrides when well-formed", () => {
+    delete process.env.HEBI8_GITHUB_CLIENT_ID;
+    expect(feedbackRepo()).toBe("dreaite/hebi8-market");
+    expect(githubClientId()).toBe(GITHUB_APP_CLIENT_ID);
+    process.env.HEBI8_GITHUB_CLIENT_ID = " Iv23_fork ";
+    process.env.HEBI8_FEEDBACK_REPO = "someone/hebi8-fork";
+    expect(githubClientId()).toBe("Iv23_fork");
+    expect(feedbackRepo()).toBe("someone/hebi8-fork");
+    process.env.HEBI8_FEEDBACK_REPO = "../../evil";
+    expect(feedbackRepo()).toBe("dreaite/hebi8-market");
   });
 
   it("derives the origin from Host and X-Forwarded-Proto", () => {
@@ -110,45 +113,9 @@ describe("return paths and origins", () => {
   });
 });
 
-describe("manifest", () => {
-  it("puts the current origin first among the callback URLs, deduplicated, at most 10", () => {
-    const urls = callbackUrlsFor("http://100.92.194.31:8809", ["http://100.92.194.31:8808", "http://100.92.194.31:8809"]);
-    expect(urls).toEqual(["http://100.92.194.31:8809/api/github/callback", "http://100.92.194.31:8808/api/github/callback"]);
-    expect(callbackUrlsFor("http://a", Array.from({ length: 20 }, (_, i) => `http://h${i}`))).toHaveLength(10);
-  });
+// ---------------------------------------------------------------------------- a fake GitHub
 
-  it("validates edited callback URLs", () => {
-    expect(normalizeCallbackUrls(["", " http://a:1/api/github/callback ", "http://a:1/api/github/callback"])).toEqual(["http://a:1/api/github/callback"]);
-    expect(() => normalizeCallbackUrls(["ftp://a/x"])).toThrow();
-    expect(() => normalizeCallbackUrls(["http://a/x?y=1"])).toThrow();
-    expect(() => normalizeCallbackUrls([])).toThrow();
-    expect(() => normalizeCallbackUrls(Array.from({ length: 11 }, (_, i) => `http://h${i}/cb`))).toThrow();
-  });
-
-  it("asks for issues write + metadata read, no events, and points back at this origin", () => {
-    const m = buildManifest({ origin: ORIGIN, callbackUrls: [`${ORIGIN}/api/github/callback`], suffix: "x1y2" });
-    expect(m).toEqual({
-      name: "hebi8-market-x1y2",
-      url: "https://github.com/dreaite/hebi8-market",
-      description: expect.any(String),
-      hook_attributes: { url: `${ORIGIN}/api/github/webhook`, active: false },
-      redirect_url: `${ORIGIN}/api/github/manifest`,
-      callback_urls: [`${ORIGIN}/api/github/callback`],
-      setup_url: `${ORIGIN}/api/github/setup`,
-      setup_on_update: true,
-      request_oauth_on_install: false,
-      public: false,
-      default_permissions: { issues: "write", metadata: "read" },
-      default_events: [],
-    });
-    expect(buildManifest({ origin: ORIGIN, callbackUrls: [] }).name).toMatch(/^hebi8-market-[a-z0-9]{4}$/);
-    expect(manifestFormAction("s t")).toBe("https://github.com/organizations/dreaite/settings/apps/new?state=s%20t");
-  });
-});
-
-// ---------------------------------------------------------------------------- routes with a fake GitHub
-
-type Handler = (url: URL, init: RequestInit) => Response | Promise<Response>;
+type Handler = (url: URL, body: Record<string, string> | unknown) => Response | Promise<Response>;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 let routes: Record<string, Handler>;
@@ -158,6 +125,7 @@ let dir: string;
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "hebi8-secrets-"));
   process.env.HEBI8_SECRETS = path.join(dir, "secrets");
+  process.env.HEBI8_GITHUB_CLIENT_ID = CLIENT_ID;
   resetGitHubCaches();
   routes = {};
   calls = [];
@@ -165,16 +133,19 @@ beforeEach(() => {
     const url = new URL(String(input));
     const method = init.method ?? "GET";
     const headers = new Headers(init.headers);
-    calls.push({ method, url: url.toString(), auth: headers.get("authorization") ?? undefined, body: init.body ? JSON.parse(String(init.body)) : undefined });
+    const raw = init.body ? String(init.body) : undefined;
+    const body = raw === undefined ? undefined : headers.get("content-type")?.includes("x-www-form-urlencoded") ? Object.fromEntries(new URLSearchParams(raw)) : JSON.parse(raw);
+    calls.push({ method, url: url.toString(), auth: headers.get("authorization") ?? undefined, body });
     const handler = routes[`${method} ${url.origin}${url.pathname}`];
     if (!handler) return json({ message: "Not Found" }, 404);
-    return handler(url, init);
+    return handler(url, body);
   });
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.HEBI8_SECRETS;
+  delete process.env.HEBI8_GITHUB_CLIENT_ID;
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -184,222 +155,248 @@ const req = (url: string, init: { method?: string; cookies?: Record<string, stri
   return new NextRequest(`${ORIGIN}${url}`, { method: init.method ?? "GET", headers, body: init.body === undefined ? undefined : JSON.stringify(init.body) });
 };
 
-const APP: GitHubAppCredentials = {
-  id: 42,
-  slug: "hebi8-market-x1y2",
-  client_id: "Iv1.client",
-  client_secret: "secret",
-  pem: PEM,
-  webhook_secret: null,
-  owner: "dreaite",
-  html_url: "https://github.com/apps/hebi8-market-x1y2",
-  callback_urls: [`${ORIGIN}/api/github/callback`],
-  installation_id: null,
-};
+const DEVICE_CODE = "https://github.com/login/device/code";
+const TOKEN = "https://github.com/login/oauth/access_token";
 
-function installGitHub() {
-  routes["GET https://api.github.com/app/installations/7"] = () => json({ id: 7, account: { login: "dreaite" } });
-  routes["POST https://api.github.com/app/installations/7/access_tokens"] = () => json({ token: "ghs_inst", expires_at: new Date(Date.now() + 3600_000).toISOString() });
-  routes["GET https://api.github.com/installation/repositories"] = () => json({ repositories: [{ full_name: "dreaite/hebi8-market" }] });
+function deviceCode(reply: Record<string, unknown> = {}) {
+  routes[`POST ${DEVICE_CODE}`] = () => json({ device_code: "dc_secret", user_code: "WDJB-MJHT", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 5, ...reply });
 }
 
-describe("GET /api/github/manifest", () => {
-  it("rejects a state that does not match the cookie", async () => {
-    const res = await manifestGET(req("/api/github/manifest?code=abc&state=wrong", { cookies: { [COOKIES.manifest]: encodeCookie({ state: "right", callbackUrls: [] }) } }));
-    expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toMatch(/^http:\/\/100\.92\.194\.31:8809\/settings\/github\?error=/);
-    expect(calls).toHaveLength(0);
-    expect(readApp()).toBeNull();
+const tokenReplies = (...replies: Record<string, unknown>[]) => {
+  let i = 0;
+  routes[`POST ${TOKEN}`] = () => json(replies[Math.min(i++, replies.length - 1)]);
+};
+
+const T0 = 1_800_000_000_000;
+
+describe("device flow", () => {
+  it("start asks GitHub with the client id only and keeps the device code on the server", async () => {
+    deviceCode();
+    const start = await startDeviceFlow(CLIENT_ID, T0);
+    expect(start).toEqual({ flowId: expect.stringMatching(/^[A-Za-z0-9_-]{40,}$/), user_code: "WDJB-MJHT", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 5 });
+    expect(JSON.stringify(start)).not.toContain("dc_secret");
+    expect(calls).toEqual([{ method: "POST", url: DEVICE_CODE, auth: undefined, body: { client_id: CLIENT_ID } }]);
   });
 
-  it("converts the code, stores the credentials with mode 600 and goes to the install page", async () => {
-    routes["POST https://api.github.com/app-manifests/abc/conversions"] = () =>
-      json({ id: 42, slug: "hebi8-market-x1y2", client_id: "Iv1.client", client_secret: "secret", pem: PEM, webhook_secret: "wh", html_url: APP.html_url, owner: { login: "dreaite" } }, 201);
-    const cookie = encodeCookie({ state: "right", callbackUrls: APP.callback_urls });
-    const res = await manifestGET(req("/api/github/manifest?code=abc&state=right", { cookies: { [COOKIES.manifest]: cookie } }));
-    expect(res.headers.get("location")).toBe("https://github.com/apps/hebi8-market-x1y2/installations/new");
-    expect(readApp()).toMatchObject({ id: 42, client_id: "Iv1.client", callback_urls: APP.callback_urls, installation_id: null, owner: "dreaite" });
-    const file = path.join(process.env.HEBI8_SECRETS!, "github-app.json");
+  it("never sends people anywhere but github.com", async () => {
+    deviceCode({ verification_uri: "https://evil.example/login" });
+    expect((await startDeviceFlow(CLIENT_ID, T0)).verification_uri).toBe("https://github.com/login/device");
+  });
+
+  it("maps a disabled device flow and an unknown client id", async () => {
+    routes[`POST ${DEVICE_CODE}`] = () => json({ error: "device_flow_disabled", error_description: "Device Flow must be explicitly enabled for this App" }, 400);
+    await expect(startDeviceFlow(CLIENT_ID, T0)).rejects.toThrow("Enable Device Flow");
+    routes[`POST ${DEVICE_CODE}`] = () => json({ error: "Not Found" }, 404);
+    await expect(startDeviceFlow(CLIENT_ID, T0)).rejects.toThrow("GitHub 不认识这个 client id");
+  });
+
+  it("polls at most once per interval, waits on authorization_pending and adds 5 s on slow_down", async () => {
+    deviceCode();
+    const { flowId } = await startDeviceFlow(CLIENT_ID, T0);
+    tokenReplies({ error: "authorization_pending" }, { error: "slow_down", interval: 10 }, { error: "authorization_pending" });
+
+    // too early: no request to GitHub at all
+    expect(await pollDeviceFlow(flowId, T0 + 1000)).toEqual({ status: "pending", interval: 5 });
+    expect(calls.filter((c) => c.url === TOKEN)).toHaveLength(0);
+
+    expect(await pollDeviceFlow(flowId, T0 + 5000)).toEqual({ status: "pending", interval: 5 });
+    const poll = calls.find((c) => c.url === TOKEN)!;
+    expect(poll.body).toEqual({ client_id: CLIENT_ID, device_code: "dc_secret", grant_type: "urn:ietf:params:oauth:grant-type:device_code" });
+    expect(poll.body).not.toHaveProperty("client_secret");
+
+    expect(await pollDeviceFlow(flowId, T0 + 10_000)).toEqual({ status: "pending", interval: 10, slowDown: true });
+    // the new interval holds: 9 s later is still too early
+    expect(await pollDeviceFlow(flowId, T0 + 19_000)).toEqual({ status: "pending", interval: 10 });
+    expect(calls.filter((c) => c.url === TOKEN)).toHaveLength(2);
+    await pollDeviceFlow(flowId, T0 + 20_000);
+    expect(calls.filter((c) => c.url === TOKEN)).toHaveLength(3);
+  });
+
+  it("slow_down without an interval in the reply still adds 5 s", async () => {
+    deviceCode();
+    const { flowId } = await startDeviceFlow(CLIENT_ID, T0);
+    tokenReplies({ error: "slow_down" });
+    expect(await pollDeviceFlow(flowId, T0 + 5000)).toEqual({ status: "pending", interval: 10, slowDown: true });
+  });
+
+  it("ends on expired_token, access_denied, its own expiry and unknown flow ids", async () => {
+    deviceCode();
+    const a = await startDeviceFlow(CLIENT_ID, T0);
+    tokenReplies({ error: "expired_token" });
+    expect(await pollDeviceFlow(a.flowId, T0 + 5000)).toEqual({ status: "expired" });
+    expect(await pollDeviceFlow(a.flowId, T0 + 20_000)).toEqual({ status: "expired" });
+
+    const b = await startDeviceFlow(CLIENT_ID, T0);
+    tokenReplies({ error: "access_denied" });
+    expect(await pollDeviceFlow(b.flowId, T0 + 5000)).toEqual({ status: "denied" });
+
+    const c = await startDeviceFlow(CLIENT_ID, T0);
+    const before = calls.length;
+    expect(await pollDeviceFlow(c.flowId, T0 + 901_000)).toEqual({ status: "expired" });
+    expect(calls).toHaveLength(before);
+    expect(await pollDeviceFlow("nope", T0)).toEqual({ status: "expired" });
+  });
+
+  it("poll route: success looks up the user, writes the session (mode 600) and sets a 30-day HttpOnly cookie", async () => {
+    deviceCode();
+    const start = await devicePOST(req("/api/github/device", { method: "POST", headers: { origin: ORIGIN } }));
+    const { flowId, user_code } = await start.json();
+    expect(user_code).toBe("WDJB-MJHT");
+    tokenReplies({ access_token: "ghu_a", expires_in: 28800, refresh_token: "ghr_r", refresh_token_expires_in: 15897600, token_type: "bearer", scope: "" });
+    routes["GET https://api.github.com/user"] = () => json({ login: "someone", avatar_url: "https://avatars.githubusercontent.com/u/1" });
+
+    // the route enforces the interval with the real clock: pretend 5 s have passed
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5000);
+    const res = await pollPOST(req("/api/github/device/poll", { method: "POST", body: { flowId }, headers: { origin: ORIGIN } }));
+    vi.restoreAllMocks();
+    expect(await res.json()).toEqual({ status: "done", user: { login: "someone", avatarUrl: "https://avatars.githubusercontent.com/u/1" } });
+    expect(calls.find((c) => c.url === "https://api.github.com/user")!.auth).toBe("Bearer ghu_a");
+
+    const cookie = res.cookies.get(SESSION_COOKIE)!;
+    expect(cookie.maxAge).toBe(30 * 86400);
+    expect(cookie.httpOnly).toBe(true);
+    expect(cookie.sameSite).toBe("lax");
+    expect(getSession(cookie.value)).toMatchObject({ login: "someone", access_token: "ghu_a", refresh_token: "ghr_r" });
+    const file = path.join(process.env.HEBI8_SECRETS!, "sessions.json");
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     expect(fs.statSync(process.env.HEBI8_SECRETS!).mode & 0o777).toBe(0o700);
   });
-});
 
-describe("GET /api/github/setup", () => {
-  it("verifies the installation with the App JWT before storing it", async () => {
-    writeApp(APP);
-    installGitHub();
-    const res = await setupGET(req("/api/github/setup?installation_id=7&setup_action=install"));
-    expect(res.headers.get("location")).toBe(`${ORIGIN}/?help=feedback`);
-    expect(readApp()?.installation_id).toBe(7);
-    const jwt = calls.find((c) => c.url.endsWith("/app/installations/7"))!.auth!.slice("Bearer ".length);
-    expect(decode(jwt.split(".")[1]).iss).toBe("Iv1.client");
-  });
+  it("start route: 409 without a client id, 403 cross-site; cancel forgets the flow", async () => {
+    delete process.env.HEBI8_GITHUB_CLIENT_ID;
+    expect((await devicePOST(req("/api/github/device", { method: "POST" }))).status).toBe(409);
+    process.env.HEBI8_GITHUB_CLIENT_ID = CLIENT_ID;
+    expect((await devicePOST(req("/api/github/device", { method: "POST", headers: { origin: "http://evil.example" } }))).status).toBe(403);
 
-  it("refuses an installation that does not include the repo", async () => {
-    writeApp(APP);
-    installGitHub();
-    routes["GET https://api.github.com/installation/repositories"] = () => json({ repositories: [{ full_name: "dreaite/other" }] });
-    const res = await setupGET(req("/api/github/setup?installation_id=7"));
-    expect(res.headers.get("location")).toContain("/settings/github?error=");
-    expect(readApp()?.installation_id).toBeNull();
-  });
-});
-
-describe("login", () => {
-  it("redirects to GitHub with state + PKCE and remembers them in an HttpOnly cookie", async () => {
-    writeApp({ ...APP, installation_id: 7 });
-    const res = await loginGET(req(`/api/github/login?return=${encodeURIComponent("/chart/yahoo%3ASPY")}`));
-    const location = new URL(res.headers.get("location")!);
-    expect(location.origin + location.pathname).toBe("https://github.com/login/oauth/authorize");
-    expect(location.searchParams.get("redirect_uri")).toBe(`${ORIGIN}/api/github/callback`);
-    expect(location.searchParams.get("code_challenge_method")).toBe("S256");
-    const setCookie = res.headers.get("set-cookie")!;
-    expect(setCookie).toMatch(/HttpOnly/i);
-    expect(setCookie).toMatch(/SameSite=lax/i);
-    expect(setCookie).not.toMatch(/Secure/i);
-    const saved = decodeCookie<OAuthCookie>(res.cookies.get(COOKIES.oauth)!.value);
-    expect(saved.state).toBe(location.searchParams.get("state"));
-    expect(crypto.createHash("sha256").update(saved.verifier!).digest("base64url")).toBe(location.searchParams.get("code_challenge"));
-    expect(saved.returnTo).toBe("/chart/yahoo%3ASPY");
-  });
-
-  it("callback trades the code, opens a 30-day session and returns with ?help=feedback", async () => {
-    writeApp({ ...APP, installation_id: 7 });
-    routes["POST https://github.com/login/oauth/access_token"] = () =>
-      json({ access_token: "ghu_a", expires_in: 28800, refresh_token: "ghr_r", refresh_token_expires_in: 15897600, token_type: "bearer", scope: "" });
-    routes["GET https://api.github.com/user"] = () => json({ login: "dreaifekks", avatar_url: "https://avatars.githubusercontent.com/u/1" });
-    const cookie = encodeCookie({ state: "st", verifier: "ver", returnTo: "/review", redirectUri: `${ORIGIN}/api/github/callback` } satisfies OAuthCookie);
-    const res = await callbackGET(req("/api/github/callback?code=c0de&state=st", { cookies: { [COOKIES.oauth]: cookie } }));
-    expect(res.headers.get("location")).toBe(`${ORIGIN}/review?help=feedback`);
-    const exchange = calls.find((c) => c.url === "https://github.com/login/oauth/access_token")!;
-    expect(exchange.body).toMatchObject({ client_id: "Iv1.client", code: "c0de", code_verifier: "ver", redirect_uri: `${ORIGIN}/api/github/callback` });
-    const sessionId = res.cookies.get(COOKIES.session)!.value;
-    expect(getSession(sessionId)).toMatchObject({ login: "dreaifekks", access_token: "ghu_a", refresh_token: "ghr_r" });
-    expect(res.cookies.get(COOKIES.session)!.maxAge).toBe(30 * 86400);
-  });
-
-  it("callback with a mismatched state opens nothing", async () => {
-    writeApp({ ...APP, installation_id: 7 });
-    const cookie = encodeCookie({ state: "st", verifier: "ver", returnTo: "/", redirectUri: "x" });
-    const res = await callbackGET(req("/api/github/callback?code=c&state=other", { cookies: { [COOKIES.oauth]: cookie } }));
-    expect(res.headers.get("location")).toContain("help=feedback&error=");
-    expect(res.cookies.get(COOKIES.session)).toBeUndefined();
-    expect(calls).toHaveLength(0);
-  });
-
-  it("logout forgets the session", async () => {
-    const id = createSession({ login: "u", avatar_url: "", access_token: "t", access_expires_at: null, refresh_token: null, refresh_expires_at: null });
-    const res = await logoutPOST(req("/api/github/logout", { method: "POST", cookies: { [COOKIES.session]: id } }));
-    expect(res.status).toBe(200);
-    expect(getSession(id)).toBeNull();
+    deviceCode();
+    const { flowId } = await (await devicePOST(req("/api/github/device", { method: "POST" }))).json();
+    await deviceDELETE(req("/api/github/device", { method: "DELETE", body: { flowId } }));
+    const res = await pollPOST(req("/api/github/device/poll", { method: "POST", body: { flowId } }));
+    expect(await res.json()).toEqual({ status: "expired" });
   });
 });
 
 describe("user token refresh", () => {
-  it("refreshes an expired token and stores the new pair", async () => {
-    writeApp({ ...APP, installation_id: 7 });
-    const id = createSession({ login: "u", avatar_url: "", access_token: "old", access_expires_at: Date.now() - 1000, refresh_token: "ghr_1", refresh_expires_at: Date.now() + 86400_000 });
-    routes["POST https://github.com/login/oauth/access_token"] = () => json({ access_token: "new", expires_in: 28800, refresh_token: "ghr_2", refresh_token_expires_in: 15897600 });
-    const { token } = await userToken(readApp()!, id);
+  it("refreshes a nearly expired token with the client id alone and stores the new pair", async () => {
+    const id = createSession({ login: "u", avatar_url: "", access_token: "old", access_expires_at: Date.now() + 60_000, refresh_token: "ghr_1", refresh_expires_at: Date.now() + 86400_000 });
+    tokenReplies({ access_token: "new", expires_in: 28800, refresh_token: "ghr_2", refresh_token_expires_in: 15897600 });
+    const { token } = await userToken(CLIENT_ID, id);
     expect(token).toBe("new");
-    expect(calls[0].body).toMatchObject({ grant_type: "refresh_token", refresh_token: "ghr_1", client_id: "Iv1.client" });
+    expect(calls[0].body).toEqual({ client_id: CLIENT_ID, grant_type: "refresh_token", refresh_token: "ghr_1" });
     expect(getSession(id)).toMatchObject({ access_token: "new", refresh_token: "ghr_2" });
   });
 
-  it("a rejected refresh token means logging in again (401)", async () => {
-    writeApp({ ...APP, installation_id: 7 });
+  it("keeps a token that is not close to expiry", async () => {
+    const id = createSession({ login: "u", avatar_url: "", access_token: "fresh", access_expires_at: Date.now() + 3600_000, refresh_token: "ghr_1", refresh_expires_at: null });
+    expect((await userToken(CLIENT_ID, id)).token).toBe("fresh");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a failed refresh means logging in again (401)", async () => {
     const id = createSession({ login: "u", avatar_url: "", access_token: "old", access_expires_at: Date.now() - 1000, refresh_token: "ghr_1", refresh_expires_at: Date.now() + 86400_000 });
-    routes["POST https://github.com/login/oauth/access_token"] = () => json({ error: "bad_refresh_token", error_description: "The refresh token passed is incorrect or expired." });
-    const err = await userToken(readApp()!, id).catch((e) => e);
+    tokenReplies({ error: "bad_refresh_token", error_description: "The refresh token passed is incorrect or expired." });
+    const err = await userToken(CLIENT_ID, id).catch((e) => e);
     expect(err).toBeInstanceOf(GitHubError);
     expect(err.status).toBe(401);
-    expect(err.message).toBe("GitHub 返回 401：登录已过期，请重新登录");
+  });
+
+  it("logout forgets the session", async () => {
+    const id = createSession({ login: "u", avatar_url: "", access_token: "t", access_expires_at: null, refresh_token: null, refresh_expires_at: null });
+    const res = await logoutPOST(req("/api/github/logout", { method: "POST", cookies: { [SESSION_COOKIE]: id } }));
+    expect(res.status).toBe(200);
+    expect(getSession(id)).toBeNull();
   });
 });
 
 describe("issues", () => {
+  const ISSUES = "https://api.github.com/repos/dreaite/hebi8-market/issues";
   const submit = (cookies: Record<string, string>, body: unknown) => issuesPOST(req("/api/github/issues", { method: "POST", cookies, body, headers: { origin: ORIGIN } }));
+  const login = () => createSession({ login: "someone", avatar_url: "", access_token: "ghu_user", access_expires_at: Date.now() + 3600_000, refresh_token: null, refresh_expires_at: null });
 
-  it("creates missing labels with the installation token, then the issue with the user token", async () => {
-    writeApp({ ...APP, installation_id: 7 });
-    installGitHub();
-    const id = createSession({ login: "dreaifekks", avatar_url: "", access_token: "ghu_user", access_expires_at: Date.now() + 3600_000, refresh_token: null, refresh_expires_at: null });
-    routes["GET https://api.github.com/repos/dreaite/hebi8-market/labels/bug"] = () => json({ name: "bug" });
-    routes["POST https://api.github.com/repos/dreaite/hebi8-market/labels"] = () => json({}, 201);
-    routes["POST https://api.github.com/repos/dreaite/hebi8-market/issues"] = () => json({ number: 123, html_url: "https://github.com/dreaite/hebi8-market/issues/123", title: "t" }, 201);
-
-    const res = await submit({ [COOKIES.session]: id }, { type: "bug", title: "图表空白", description: "打开就空", context: null, autoFix: true });
+  it("opens the issue with the user's token, no labels, type and autoFix in the context block", async () => {
+    routes[`POST ${ISSUES}`] = () => json({ number: 123, html_url: "https://github.com/dreaite/hebi8-market/issues/123", title: "t" }, 201);
+    const res = await submit({ [SESSION_COOKIE]: login() }, { type: "bug", title: "图表空白", description: "打开就空", context: null, autoFix: true });
     expect(await res.json()).toEqual({ number: 123, html_url: "https://github.com/dreaite/hebi8-market/issues/123" });
-
-    const created = calls.filter((c) => c.method === "POST" && c.url.endsWith("/labels")).map((c) => (c.body as { name: string }).name);
-    expect(created.sort()).toEqual(["auto-fix-ok", "from-app"]);
-    expect(calls.filter((c) => c.url.endsWith("/labels")).every((c) => c.auth === "Bearer ghs_inst")).toBe(true);
-    const issue = calls.find((c) => c.url.endsWith("/repos/dreaite/hebi8-market/issues") && c.method === "POST")!;
-    expect(issue.auth).toBe("Bearer ghu_user");
-    expect(issue.body).toEqual({ title: "图表空白", body: buildIssueBody("打开就空", null), labels: ["from-app", "bug", "auto-fix-ok"] });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].auth).toBe("Bearer ghu_user");
+    expect(calls[0].body).toEqual({ title: "图表空白", body: buildIssueBody("打开就空", { v: 1, type: "bug", autoFix: true }) });
   });
 
-  it("still opens the issue when label creation fails", async () => {
-    writeApp({ ...APP, installation_id: 7 });
-    installGitHub();
-    const id = createSession({ login: "u", avatar_url: "", access_token: "ghu_user", access_expires_at: null, refresh_token: null, refresh_expires_at: null });
-    routes["POST https://api.github.com/repos/dreaite/hebi8-market/labels"] = () => json({ message: "Resource not accessible by integration" }, 403);
-    routes["POST https://api.github.com/repos/dreaite/hebi8-market/issues"] = () => json({ number: 5, html_url: "u", title: "t" }, 201);
-    const res = await submit({ [COOKIES.session]: id }, { type: "idea", title: "x" });
+  it("goes to HEBI8_FEEDBACK_REPO when a fork sets it", async () => {
+    process.env.HEBI8_FEEDBACK_REPO = "someone/fork";
+    routes["POST https://api.github.com/repos/someone/fork/issues"] = () => json({ number: 1, html_url: "u", title: "t" }, 201);
+    const res = await submit({ [SESSION_COOKIE]: login() }, { type: "idea", title: "x" });
+    delete process.env.HEBI8_FEEDBACK_REPO;
     expect(res.status).toBe(200);
-    expect((await res.json()).number).toBe(5);
   });
 
-  it("without a session answers 401 in Chinese; a cross-site POST is refused", async () => {
-    writeApp({ ...APP, installation_id: 7 });
-    const res = await submit({}, { type: "bug", title: "x" });
-    expect(res.status).toBe(401);
-    expect((await res.json()).error).toBe("还没有登录 GitHub");
-    const cross = await issuesPOST(req("/api/github/issues", { method: "POST", body: { type: "bug", title: "x" }, headers: { origin: "http://evil.example" } }));
-    expect(cross.status).toBe(403);
+  it("maps 403 and 404 to Chinese messages that offer the web form", async () => {
+    const id = login();
+    routes[`POST ${ISSUES}`] = () => json({ message: "Resource not accessible by integration" }, 403);
+    let res = await submit({ [SESSION_COOKIE]: id }, { type: "bug", title: "x" });
+    expect(res.status).toBe(403);
+    let body = await res.json();
+    expect(body.error).toMatch(/^GitHub 返回 403：你的账号不能在 dreaite\/hebi8-market 上开 issue/);
+    expect(body.webFallback).toBe(true);
+
+    routes[`POST ${ISSUES}`] = () => json({ message: "Not Found" }, 404);
+    res = await submit({ [SESSION_COOKIE]: id }, { type: "bug", title: "x" });
+    body = await res.json();
+    expect(res.status).toBe(404);
+    expect(body.error).toMatch(/GitHub App 没有安装到这个仓库/);
+    expect(body.webFallback).toBe(true);
+    // the login itself is fine
+    expect(getSession(id)).not.toBeNull();
   });
 
-  it("maps GitHub failures to Chinese messages", async () => {
-    writeApp({ ...APP, installation_id: 7 });
-    installGitHub();
-    const id = createSession({ login: "u", avatar_url: "", access_token: "ghu_user", access_expires_at: null, refresh_token: null, refresh_expires_at: null });
-    routes["GET https://api.github.com/repos/dreaite/hebi8-market/labels/from-app"] = () => json({});
-    routes["GET https://api.github.com/repos/dreaite/hebi8-market/labels/bug"] = () => json({});
-    routes["POST https://api.github.com/repos/dreaite/hebi8-market/issues"] = () => json({ message: "Bad credentials" }, 401);
-    const res = await submit({ [COOKIES.session]: id }, { type: "bug", title: "x" });
+  it("a 401 drops the session; no session is 401; cross-site is refused; no client id is 409", async () => {
+    const id = login();
+    routes[`POST ${ISSUES}`] = () => json({ message: "Bad credentials" }, 401);
+    const res = await submit({ [SESSION_COOKIE]: id }, { type: "bug", title: "x" });
     expect(res.status).toBe(401);
     expect((await res.json()).error).toBe("GitHub 返回 401：登录已过期，请重新登录");
-    // the dead login is dropped so the panel offers 用 GitHub 登录 again
     expect(getSession(id)).toBeNull();
+
+    const none = await submit({}, { type: "bug", title: "x" });
+    expect(none.status).toBe(401);
+    expect((await none.json()).error).toBe("还没有登录 GitHub");
+
+    const cross = await issuesPOST(req("/api/github/issues", { method: "POST", body: { type: "bug", title: "x" }, headers: { origin: "http://evil.example" } }));
+    expect(cross.status).toBe(403);
+
+    delete process.env.HEBI8_GITHUB_CLIENT_ID;
+    const off = await submit({}, { type: "bug", title: "x" });
+    expect(off.status).toBe(409);
+    expect((await off.json()).webFallback).toBe(true);
   });
 
-  it("a 401 on the App's own credentials is not reported as an expired login", async () => {
-    writeApp({ ...APP, installation_id: 7 });
-    routes["POST https://api.github.com/app/installations/7/access_tokens"] = () => json({ message: "A JSON web token could not be decoded" }, 401);
-    const res = await issuesGET();
-    expect(res.status).toBe(401);
-    expect((await res.json()).error).toMatch(/^GitHub 返回 401：App 的凭据无效/);
-  });
-
-  it("lists the latest from-app issues without pull requests", async () => {
-    writeApp({ ...APP, installation_id: 7 });
-    installGitHub();
-    routes["GET https://api.github.com/repos/dreaite/hebi8-market/issues"] = (url) => {
+  it("lists the latest from-app issues without pull requests, anonymously when logged out, cached 60 s", async () => {
+    routes[`GET ${ISSUES}`] = (url) => {
       expect(url.searchParams.get("labels")).toBe("from-app");
       expect(url.searchParams.get("state")).toBe("all");
       return json([
-        { number: 3, title: "c", state: "open", html_url: "u3", created_at: "t", body: "secret-ish" },
+        { number: 3, title: "c", state: "open", html_url: "u3", created_at: "t", body: "x" },
         { number: 2, title: "pr", state: "open", html_url: "u2", created_at: "t", pull_request: {} },
         { number: 1, title: "a", state: "closed", html_url: "u1", created_at: "t" },
       ]);
     };
-    const res = await issuesGET();
+    const res = await issuesGET(req("/api/github/issues"));
     expect(await res.json()).toEqual({
       issues: [
         { number: 3, title: "c", state: "open", html_url: "u3", created_at: "t" },
         { number: 1, title: "a", state: "closed", html_url: "u1", created_at: "t" },
       ],
     });
+    expect(calls[0].auth).toBeUndefined();
+    await issuesGET(req("/api/github/issues"));
+    expect(calls).toHaveLength(1);
+  });
+
+  it("lists with the user's token when logged in, falling back to anonymous if GitHub refuses it", async () => {
+    let n = 0;
+    routes[`GET ${ISSUES}`] = () => (n++ === 0 ? json({ message: "Forbidden" }, 403) : json([]));
+    const res = await issuesGET(req("/api/github/issues", { cookies: { [SESSION_COOKIE]: login() } }));
+    expect(await res.json()).toEqual({ issues: [] });
+    expect(calls.map((c) => c.auth)).toEqual(["Bearer ghu_user", undefined]);
   });
 });

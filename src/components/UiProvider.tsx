@@ -77,17 +77,15 @@ export function UiProvider({ ctx, children }: { ctx: SearchContext; children: Re
   }, []);
   const closeHelp = useCallback(() => setHelp(null), []);
 
-  // `?help=feedback|project` (and `error=` from the GitHub redirects) opens the drawer, then leaves the URL
+  // `?help=feedback|project` opens the drawer (a link to the feedback form), then leaves the URL
   useEffect(() => {
     const url = new URL(window.location.href);
     const tab = url.searchParams.get("help");
     if (tab !== "feedback" && tab !== "project") return;
-    const notice = url.searchParams.get("error");
     url.searchParams.delete("help");
-    url.searchParams.delete("error");
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the query only exists in the browser URL
-    openHelp(tab, notice);
+    openHelp(tab);
   }, [pathname, openHelp]);
 
   // `/` or Ctrl/Cmd+K anywhere; on a chart, any letter or digit starts a search with it

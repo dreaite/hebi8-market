@@ -1,12 +1,12 @@
 /**
- * Every GitHub HTTP call goes through here: the App manifest flow, the App's JWT and installation
- * token, the user's OAuth login (with refresh) and the issues API. Failures become `GitHubError`
- * with a Chinese message the UI shows as is. Tokens never leave the server and are never logged.
+ * Every GitHub HTTP call goes through here: the device-flow login (with refresh), the user, and
+ * the issues API. Only the public App's client id is needed; there is no client secret, private
+ * key or installation token anywhere. Failures become `GitHubError` with a Chinese message the
+ * UI shows as is. Tokens and device codes never leave the server and are never logged.
  */
 import crypto from "node:crypto";
-import { DEFAULT_ORIGINS, FROM_APP_LABEL, REPO, REPO_FULL_NAME, REPO_URL } from "./app-info";
-import { LABEL_SPECS } from "./feedback";
-import { getSession, updateSession, type GitHubAppCredentials, type Session } from "./secrets";
+import { FROM_APP_LABEL } from "./app-info";
+import { getSession, updateSession, type Session } from "./secrets";
 
 const API = "https://api.github.com";
 const WEB = "https://github.com";
@@ -14,27 +14,31 @@ const WEB = "https://github.com";
 export class GitHubError extends Error {
   /** HTTP status from GitHub, 0 when GitHub could not be reached, 401 when the login is gone */
   status: number;
-  constructor(status: number, message: string) {
+  /** Worth offering 在 GitHub 网页上提交 instead (the in-app route cannot work for this user/repo) */
+  webFallback: boolean;
+  constructor(status: number, message: string, webFallback = false) {
     super(message);
     this.name = "GitHubError";
     this.status = status;
+    this.webFallback = webFallback;
   }
 }
 
-/** The message the UI shows for a failed GitHub response. */
-export function describeFailure(status: number, detail?: string, rateLimited = false, asApp = false): string {
-  const what = detail ? `：${detail}` : "";
+/** The message the UI shows for a failed GitHub API response. */
+export function describeFailure(status: number, { repo, detail, rateLimited = false }: { repo?: string; detail?: string; rateLimited?: boolean } = {}): string {
+  const what = detail ? `（${detail}）` : "";
+  const where = repo ?? "仓库";
   switch (true) {
-    case status === 401 && asApp:
-      return "GitHub 返回 401：App 的凭据无效（App 被删除或私钥被吊销？重新配置 GitHub App）";
     case status === 401:
       return "GitHub 返回 401：登录已过期，请重新登录";
     case status === 403 && rateLimited:
       return "GitHub 返回 403：请求太频繁，稍后再试";
     case status === 403:
-      return `GitHub 返回 403：没有权限（检查 App 的 Issues 权限和安装的仓库）${what}`;
+      return `GitHub 返回 403：你的账号不能在 ${where} 上开 issue（hebi8 的 GitHub App 没装在这个仓库，或账号被仓库限制）${what}。可以改在 GitHub 网页上提交`;
     case status === 404:
-      return `GitHub 返回 404：找不到（App 是否已安装到 ${REPO_FULL_NAME}？）`;
+      return `GitHub 返回 404：找不到 ${where}，或者 hebi8 的 GitHub App 没有安装到这个仓库。可以改在 GitHub 网页上提交`;
+    case status === 410:
+      return `GitHub 返回 410：${where} 关闭了 issue`;
     case status === 422:
       return `GitHub 返回 422：内容没通过校验${what}`;
     case status >= 500:
@@ -42,15 +46,6 @@ export function describeFailure(status: number, detail?: string, rateLimited = f
     default:
       return `GitHub 返回 ${status}${what}`;
   }
-}
-
-interface CallOptions {
-  method?: string;
-  /** Bearer token: an installation token, a user token or the App JWT */
-  token?: string;
-  body?: unknown;
-  /** The token is the App's (JWT or installation token), so a 401 is not about the user's login */
-  asApp?: boolean;
 }
 
 async function send(url: string, init: RequestInit): Promise<Response> {
@@ -61,8 +56,8 @@ async function send(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
-/** REST API call; non-2xx throws `GitHubError`. */
-export async function api<T>(path: string, { method = "GET", token, body, asApp = false }: CallOptions = {}): Promise<T> {
+/** REST API call; non-2xx throws `GitHubError`. `repo` only flavours the error messages. */
+export async function api<T>(path: string, { method = "GET", token, body, repo }: { method?: string; token?: string | null; body?: unknown; repo?: string } = {}): Promise<T> {
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
@@ -82,30 +77,13 @@ export async function api<T>(path: string, { method = "GET", token, body, asApp 
     const detail = (json as { message?: string; errors?: { message?: string; field?: string; code?: string }[] } | null) ?? null;
     const first = detail?.errors?.[0];
     const message = [detail?.message, first?.message ?? (first ? `${first.field ?? ""} ${first.code ?? ""}`.trim() : null)].filter(Boolean).join(" · ");
-    throw new GitHubError(res.status, describeFailure(res.status, message || undefined, res.headers.get("x-ratelimit-remaining") === "0", asApp));
+    const rateLimited = res.headers.get("x-ratelimit-remaining") === "0";
+    throw new GitHubError(res.status, describeFailure(res.status, { repo, detail: message || undefined, rateLimited }), !rateLimited && [403, 404, 410].includes(res.status));
   }
   return json as T;
 }
 
-// ---------------------------------------------------------------------------- pure helpers
-
-const b64url = (data: string | Buffer) => Buffer.from(data).toString("base64url");
-
-/** RS256 JWT that authenticates as the App: issued 60s in the past (clock drift), valid 9 minutes. */
-export function appJwt(issuer: string | number, pem: string, nowSec = Math.floor(Date.now() / 1000)): string {
-  const header = b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-  const payload = b64url(JSON.stringify({ iat: nowSec - 60, exp: nowSec + 9 * 60, iss: String(issuer) }));
-  const signature = crypto.sign("RSA-SHA256", Buffer.from(`${header}.${payload}`), pem);
-  return `${header}.${payload}.${b64url(signature)}`;
-}
-
-export const randomToken = (bytes = 16) => crypto.randomBytes(bytes).toString("base64url");
-
-/** PKCE (S256): the verifier stays in an HttpOnly cookie, the challenge goes to GitHub. */
-export function pkcePair(): { verifier: string; challenge: string } {
-  const verifier = randomToken(32);
-  return { verifier, challenge: crypto.createHash("sha256").update(verifier).digest("base64url") };
-}
+// ---------------------------------------------------------------------------- request helpers
 
 const HOST_RE = /^(?:[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/;
 
@@ -128,211 +106,13 @@ export function crossSite(headers: Headers): boolean {
   }
 }
 
-/** Origins this app is known to be served from: `HEBI8_ORIGINS` or the Tailscale defaults. */
-export function knownOrigins(): string[] {
-  const env = process.env.HEBI8_ORIGINS?.split(",").map((s) => s.trim().replace(/\/+$/, "")).filter(Boolean);
-  return env?.length ? env : DEFAULT_ORIGINS;
-}
-
-export const CALLBACK_PATH = "/api/github/callback";
-export const MAX_CALLBACK_URLS = 10;
-
-/** Login callback URLs: the current origin first, then the other known ones; at most 10 (GitHub's limit). */
-export function callbackUrlsFor(origin: string, others: string[] = knownOrigins()): string[] {
-  return [...new Set([origin, ...others].map((o) => `${o}${CALLBACK_PATH}`))].slice(0, MAX_CALLBACK_URLS);
-}
-
-/** Keep only well-formed http(s) URLs, deduplicated, at most 10. */
-export function normalizeCallbackUrls(lines: string[]): string[] {
-  const out: string[] = [];
-  for (const line of lines) {
-    const s = line.trim();
-    if (!s) continue;
-    let url: URL;
-    try {
-      url = new URL(s);
-    } catch {
-      throw new Error(`不是合法的网址：${s}`);
-    }
-    if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error(`只能用 http 或 https：${s}`);
-    if (url.search || url.hash) throw new Error(`回调地址不能带参数：${s}`);
-    if (!out.includes(url.href)) out.push(url.href);
-  }
-  if (out.length === 0) throw new Error("至少需要一个回调地址");
-  if (out.length > MAX_CALLBACK_URLS) throw new Error(`GitHub 最多允许 ${MAX_CALLBACK_URLS} 个回调地址`);
-  return out;
-}
-
-export interface AppManifest {
-  name: string;
-  url: string;
-  description: string;
-  hook_attributes: { url: string; active: boolean };
-  redirect_url: string;
-  callback_urls: string[];
-  setup_url: string;
-  setup_on_update: boolean;
-  request_oauth_on_install: boolean;
-  public: boolean;
-  default_permissions: Record<string, "read" | "write">;
-  default_events: string[];
-}
-
-/**
- * The manifest posted to github.com: issues write + metadata read on the one repo, no webhook
- * (GitHub wants a hook URL in the manifest, so it is given but left inactive).
- */
-export function buildManifest({ origin, callbackUrls, suffix = randomToken(3).toLowerCase().replace(/[^a-z0-9]/g, "x") }: { origin: string; callbackUrls: string[]; suffix?: string }): AppManifest {
-  return {
-    name: `${REPO.name}-${suffix}`,
-    url: REPO_URL,
-    description: `hebi8 market 的应用内反馈：用你的 GitHub 账号在 ${REPO_FULL_NAME} 上提交 issue。`,
-    hook_attributes: { url: `${origin}/api/github/webhook`, active: false },
-    redirect_url: `${origin}/api/github/manifest`,
-    callback_urls: callbackUrls,
-    setup_url: `${origin}/api/github/setup`,
-    setup_on_update: true,
-    request_oauth_on_install: false,
-    public: false,
-    default_permissions: { issues: "write", metadata: "read" },
-    default_events: [],
-  };
-}
-
-export const manifestFormAction = (state: string) => `${WEB}/organizations/${REPO.owner}/settings/apps/new?state=${encodeURIComponent(state)}`;
-
-/**
- * Where to send the browser after login: only same-origin relative paths survive, anything else
- * (absolute URLs, `//host`, backslashes, control characters) becomes `/`.
- */
-export function sanitizeReturn(raw: string | null | undefined): string {
-  if (!raw || raw.length > 1000 || !raw.startsWith("/") || raw.startsWith("//") || /[\\\u0000-\u001f\u007f]/.test(raw)) return "/";
-  try {
-    const base = "http://hebi8.invalid";
-    const url = new URL(raw, base);
-    if (url.origin !== base) return "/";
-    return `${url.pathname}${url.search}${url.hash}`;
-  } catch {
-    return "/";
-  }
-}
-
-/** `path` with `help=feedback` (and any extra params) so the help drawer opens on the 反馈 tab. */
-export function withHelp(path: string, extra: Record<string, string> = {}): string {
-  const url = new URL(sanitizeReturn(path), "http://hebi8.invalid");
-  url.searchParams.set("help", "feedback");
-  for (const [k, v] of Object.entries(extra)) url.searchParams.set(k, v);
-  return `${url.pathname}${url.search}${url.hash}`;
-}
-
-export function authorizeUrl({ clientId, redirectUri, state, challenge }: { clientId: string; redirectUri: string; state: string; challenge: string }): string {
-  const q = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri, state, code_challenge: challenge, code_challenge_method: "S256", allow_signup: "false" });
-  return `${WEB}/login/oauth/authorize?${q}`;
-}
-
-// ---------------------------------------------------------------------------- cookies
-
-/** No HTTPS on the tailnet, so never `Secure`; HttpOnly + SameSite=Lax survives GitHub's top-level redirects back. */
-export const COOKIES = {
-  /** state of the manifest flow (set by the settings page's server action) */
-  manifest: "hebi8_gh_manifest",
-  /** state + PKCE verifier + return path of a login */
-  oauth: "hebi8_gh_oauth",
-  session: "hebi8_session",
-} as const;
-
+/** No HTTPS on the tailnet, so never `Secure`. */
+export const SESSION_COOKIE = "hebi8_session";
 export const cookieOptions = (maxAgeSec: number) => ({ httpOnly: true, sameSite: "lax" as const, secure: false, path: "/", maxAge: maxAgeSec });
 
-/** Small JSON payloads in a cookie (state, PKCE verifier, return path). */
-export const encodeCookie = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+export const randomToken = (bytes = 16) => crypto.randomBytes(bytes).toString("base64url");
 
-export function decodeCookie<T>(raw: string | undefined): Partial<T> {
-  if (!raw) return {};
-  try {
-    const value = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
-    return value && typeof value === "object" ? (value as Partial<T>) : {};
-  } catch {
-    return {};
-  }
-}
-
-export interface ManifestCookie {
-  state: string;
-  callbackUrls: string[];
-}
-
-export interface OAuthCookie {
-  state: string;
-  verifier: string;
-  returnTo: string;
-  redirectUri: string;
-}
-
-/** Constant-time string comparison for state values. */
-export function sameSecret(a: string | undefined | null, b: string | undefined | null): boolean {
-  if (!a || !b) return false;
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && crypto.timingSafeEqual(x, y);
-}
-
-// ---------------------------------------------------------------------------- the App
-
-export interface ManifestConversion {
-  id: number;
-  slug: string;
-  client_id: string;
-  client_secret: string;
-  pem: string;
-  webhook_secret: string | null;
-  html_url: string;
-  owner: { login: string } | null;
-}
-
-/** Trade the one-hour code from the manifest redirect for the App's credentials. */
-export async function convertManifest(code: string): Promise<ManifestConversion> {
-  if (!/^[A-Za-z0-9_-]{1,200}$/.test(code)) throw new GitHubError(400, "manifest 回调的 code 不合法");
-  return api<ManifestConversion>(`/app-manifests/${code}/conversions`, { method: "POST" });
-}
-
-const jwtFor = (app: GitHubAppCredentials) => appJwt(app.client_id || app.id, app.pem);
-
-/** The installation must belong to the repo owner and include the repo; returns its id. */
-export async function verifyInstallation(app: GitHubAppCredentials, installationId: number): Promise<number> {
-  const inst = await api<{ id: number; account: { login: string } | null }>(`/app/installations/${installationId}`, { token: jwtFor(app), asApp: true });
-  if (inst.account?.login.toLowerCase() !== REPO.owner.toLowerCase()) {
-    throw new GitHubError(403, `这个安装属于 ${inst.account?.login ?? "未知账号"}，不是 ${REPO.owner}`);
-  }
-  const token = await installationToken({ ...app, installation_id: inst.id }, true);
-  const repos = await api<{ repositories: { full_name: string }[] }>(`/installation/repositories?per_page=100`, { token, asApp: true });
-  if (!repos.repositories.some((r) => r.full_name.toLowerCase() === REPO_FULL_NAME.toLowerCase())) {
-    throw new GitHubError(403, `App 已安装，但没有选中 ${REPO_FULL_NAME}；在 GitHub 上把这个仓库加进安装范围`);
-  }
-  return inst.id;
-}
-
-/** Look the installation up from the repo (when the setup redirect never arrived). */
-export async function findInstallation(app: GitHubAppCredentials): Promise<number> {
-  const inst = await api<{ id: number }>(`/repos/${REPO_FULL_NAME}/installation`, { token: jwtFor(app), asApp: true });
-  return verifyInstallation(app, inst.id);
-}
-
-const tokenCache = (globalThis as unknown as { hebi8InstallationTokens?: Map<number, { token: string; expiresAt: number }> }).hebi8InstallationTokens ??
-  ((globalThis as unknown as { hebi8InstallationTokens: Map<number, { token: string; expiresAt: number }> }).hebi8InstallationTokens = new Map());
-
-/** Installation access token, cached in memory until a minute before it expires. */
-export async function installationToken(app: GitHubAppCredentials, fresh = false): Promise<string> {
-  const id = app.installation_id;
-  if (!id) throw new GitHubError(404, `App 还没有安装到 ${REPO_FULL_NAME}`);
-  const hit = tokenCache.get(id);
-  if (!fresh && hit && hit.expiresAt - 60000 > Date.now()) return hit.token;
-  const res = await api<{ token: string; expires_at: string }>(`/app/installations/${id}/access_tokens`, { method: "POST", token: jwtFor(app), asApp: true });
-  tokenCache.set(id, { token: res.token, expiresAt: Date.parse(res.expires_at) });
-  return res.token;
-}
-
-
-// ---------------------------------------------------------------------------- user login
+// ---------------------------------------------------------------------------- OAuth endpoints
 
 export interface UserTokens {
   access_token: string;
@@ -341,119 +121,218 @@ export interface UserTokens {
   refresh_expires_at: number | null;
 }
 
+interface OAuthReply {
+  access_token?: string;
+  expires_in?: number;
+  refresh_token?: string;
+  refresh_token_expires_in?: number;
+  interval?: number;
+  error?: string;
+  error_description?: string;
+}
+
+/** POST a form to github.com/login/…; GitHub reports OAuth errors as 200 (sometimes 4xx) + `error`. */
+async function oauthPost<T extends { error?: string; error_description?: string }>(path: string, params: Record<string, string>): Promise<{ status: number; json: T | null }> {
+  const res = await send(`${WEB}${path}`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "hebi8-market" },
+    body: new URLSearchParams(params).toString(),
+  });
+  const json = (await res.json().catch(() => null)) as T | null;
+  // a known OAuth error is the caller's to interpret (slow_down etc. may come with a 4xx)
+  if (!res.ok && !(json?.error && json.error in OAUTH_ERRORS) && !(json?.error && DEVICE_STATES.has(json.error))) {
+    throw new GitHubError(res.status, res.status === 404 ? UNKNOWN_CLIENT : describeFailure(res.status));
+  }
+  return { status: res.status, json };
+}
+
+const UNKNOWN_CLIENT = "GitHub 不认识这个 client id（检查 app-info.ts 的 GITHUB_APP_CLIENT_ID 或 HEBI8_GITHUB_CLIENT_ID）";
+const DEVICE_STATES = new Set(["authorization_pending", "slow_down", "expired_token", "access_denied"]);
+
 const OAUTH_ERRORS: Record<string, [number, string]> = {
-  bad_verification_code: [400, "授权码已失效，请重新登录"],
+  device_flow_disabled: [400, "GitHub App 没有开启 Device Flow（App 设置 → 勾选 Enable Device Flow）"],
+  incorrect_client_credentials: [400, UNKNOWN_CLIENT],
   bad_refresh_token: [401, "GitHub 返回 401：登录已过期，请重新登录"],
-  redirect_uri_mismatch: [400, "当前地址不在 App 的回调地址（Callback URL）里，在 GitHub App 设置里加上它"],
-  incorrect_client_credentials: [401, "App 的 client secret 不对，重新配置 GitHub App"],
   unverified_user_email: [403, "GitHub 账号的邮箱还没验证"],
+  incorrect_device_code: [400, "登录代码无效，请重新登录"],
+  unsupported_grant_type: [400, "GitHub 不接受这种登录方式"],
 };
 
-/** POST to github.com/login/oauth/access_token; errors there come back as 200 + `error`. */
-async function oauthToken(params: Record<string, string>): Promise<UserTokens> {
-  const res = await send(`${WEB}/login/oauth/access_token`, {
-    method: "POST",
-    headers: { Accept: "application/json", "Content-Type": "application/json", "User-Agent": "hebi8-market" },
-    body: JSON.stringify(params),
-  });
-  const json = (await res.json().catch(() => null)) as {
-    access_token?: string;
-    expires_in?: number;
-    refresh_token?: string;
-    refresh_token_expires_in?: number;
-    error?: string;
-    error_description?: string;
-  } | null;
-  if (!res.ok) throw new GitHubError(res.status, describeFailure(res.status));
-  if (!json?.access_token) {
-    const known = json?.error ? OAUTH_ERRORS[json.error] : undefined;
-    if (known) throw new GitHubError(known[0], known[1]);
-    throw new GitHubError(400, `GitHub 登录失败：${json?.error_description ?? json?.error ?? "没有返回 token"}`);
-  }
-  const now = Date.now();
+const oauthFailure = (reply: { error?: string; error_description?: string } | null) => {
+  const known = reply?.error ? OAUTH_ERRORS[reply.error] : undefined;
+  if (known) return new GitHubError(known[0], known[1]);
+  return new GitHubError(400, `GitHub 登录失败：${reply?.error_description ?? reply?.error ?? "没有返回 token"}`);
+};
+
+function tokensFrom(json: OAuthReply, now: number): UserTokens {
   return {
-    access_token: json.access_token,
+    access_token: json.access_token!,
     access_expires_at: json.expires_in ? now + Number(json.expires_in) * 1000 : null,
     refresh_token: json.refresh_token ?? null,
     refresh_expires_at: json.refresh_token_expires_in ? now + Number(json.refresh_token_expires_in) * 1000 : null,
   };
 }
 
-export function exchangeCode(app: GitHubAppCredentials, code: string, redirectUri: string, verifier: string): Promise<UserTokens> {
-  return oauthToken({ client_id: app.client_id, client_secret: app.client_secret, code, redirect_uri: redirectUri, code_verifier: verifier });
+// ---------------------------------------------------------------------------- device flow
+
+/** A login waiting for the user to enter the code on github.com. Kept in memory only. */
+interface PendingFlow {
+  clientId: string;
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  /** seconds between polls, as GitHub demands (grows by 5 on `slow_down`) */
+  interval: number;
+  /** ms; no GitHub poll before this */
+  nextPollAt: number;
+  /** ms */
+  expiresAt: number;
 }
 
-export function refreshUserToken(app: GitHubAppCredentials, refreshToken: string): Promise<UserTokens> {
-  return oauthToken({ client_id: app.client_id, client_secret: app.client_secret, grant_type: "refresh_token", refresh_token: refreshToken });
+const g = globalThis as unknown as { hebi8DeviceFlows?: Map<string, PendingFlow>; hebi8RecentIssues?: Map<string, { at: number; issues: IssueSummary[] }> };
+const flows = (g.hebi8DeviceFlows ??= new Map());
+const recentCache = (g.hebi8RecentIssues ??= new Map());
+
+/** At most this many logins pending at once (each is one person in front of github.com/login/device). */
+const MAX_FLOWS = 20;
+
+/** Forget pending logins and the cached issue list (tests). */
+export function resetGitHubCaches(): void {
+  flows.clear();
+  recentCache.clear();
 }
+
+function pruneFlows(now: number): void {
+  for (const [id, f] of flows) if (f.expiresAt <= now) flows.delete(id);
+}
+
+export interface DeviceStart {
+  flowId: string;
+  user_code: string;
+  verification_uri: string;
+  /** seconds */
+  expires_in: number;
+  /** seconds */
+  interval: number;
+}
+
+/** Ask GitHub for a user code; the device code stays here, the browser gets a random flow id. */
+export async function startDeviceFlow(clientId: string, now = Date.now()): Promise<DeviceStart> {
+  if (!clientId) throw new GitHubError(400, "反馈未启用：没有配置 GitHub App 的 client id");
+  pruneFlows(now);
+  if (flows.size >= MAX_FLOWS) throw new GitHubError(429, "同时进行的登录太多，稍后再试");
+  const { json } = await oauthPost<{ device_code?: string; user_code?: string; verification_uri?: string; expires_in?: number; interval?: number; error?: string; error_description?: string }>(
+    "/login/device/code",
+    { client_id: clientId },
+  );
+  if (!json?.device_code || !json.user_code) throw oauthFailure(json);
+  // only ever send people to github.com
+  const verificationUri = typeof json.verification_uri === "string" && json.verification_uri.startsWith(`${WEB}/`) ? json.verification_uri : `${WEB}/login/device`;
+  const interval = Math.max(1, Number(json.interval) || 5);
+  const expiresIn = Math.max(1, Number(json.expires_in) || 900);
+  const flowId = randomToken(32);
+  flows.set(flowId, { clientId, deviceCode: json.device_code, userCode: json.user_code, verificationUri, interval, nextPollAt: now + interval * 1000, expiresAt: now + expiresIn * 1000 });
+  return { flowId, user_code: json.user_code, verification_uri: verificationUri, expires_in: expiresIn, interval };
+}
+
+export type DevicePoll =
+  | { status: "pending"; interval: number; slowDown?: boolean }
+  | { status: "expired" }
+  | { status: "denied" }
+  | { status: "done"; tokens: UserTokens };
+
+/**
+ * One step of the login: at most one GitHub poll per call and never before the interval GitHub
+ * asked for (an early call just answers `pending`). `authorization_pending` waits, `slow_down`
+ * adds 5 seconds, `expired_token` / `access_denied` end the flow.
+ */
+export async function pollDeviceFlow(flowId: string, now = Date.now()): Promise<DevicePoll> {
+  const flow = typeof flowId === "string" ? flows.get(flowId) : undefined;
+  if (!flow || flow.expiresAt <= now) {
+    if (flow) flows.delete(flowId);
+    return { status: "expired" };
+  }
+  if (now < flow.nextPollAt) return { status: "pending", interval: flow.interval };
+  // reserve the slot before awaiting so concurrent calls do not poll twice
+  flow.nextPollAt = now + flow.interval * 1000;
+  let json: OAuthReply | null;
+  try {
+    ({ json } = await oauthPost<OAuthReply>("/login/oauth/access_token", {
+      client_id: flow.clientId,
+      device_code: flow.deviceCode,
+      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+    }));
+  } catch (err) {
+    // network trouble: keep the flow, try again next interval
+    if (err instanceof GitHubError && err.status === 0) return { status: "pending", interval: flow.interval };
+    flows.delete(flowId);
+    throw err;
+  }
+  if (json?.access_token) {
+    flows.delete(flowId);
+    return { status: "done", tokens: tokensFrom(json, now) };
+  }
+  switch (json?.error) {
+    case "authorization_pending":
+      return { status: "pending", interval: flow.interval };
+    case "slow_down":
+      flow.interval = Math.max(flow.interval + 5, Number(json.interval) || 0);
+      flow.nextPollAt = now + flow.interval * 1000;
+      return { status: "pending", interval: flow.interval, slowDown: true };
+    case "expired_token":
+      flows.delete(flowId);
+      return { status: "expired" };
+    case "access_denied":
+      flows.delete(flowId);
+      return { status: "denied" };
+    default:
+      flows.delete(flowId);
+      throw oauthFailure(json);
+  }
+}
+
+/** 取消: forget the pending login. */
+export function cancelDeviceFlow(flowId: unknown): void {
+  if (typeof flowId === "string") flows.delete(flowId);
+}
+
+// ---------------------------------------------------------------------------- user token
 
 export function getUser(token: string): Promise<{ login: string; avatar_url: string }> {
   return api<{ login: string; avatar_url: string }>("/user", { token });
+}
+
+/** Device-flow tokens refresh with the client id alone (no client secret). */
+export async function refreshUserToken(clientId: string, refreshToken: string, now = Date.now()): Promise<UserTokens> {
+  const { json } = await oauthPost<OAuthReply>("/login/oauth/access_token", { client_id: clientId, grant_type: "refresh_token", refresh_token: refreshToken });
+  if (!json?.access_token) throw oauthFailure(json);
+  return tokensFrom(json, now);
 }
 
 /** Refresh this long before the 8-hour user token actually expires. */
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 /** The session's user token, refreshed when (nearly) expired; 401 when the login cannot be kept. */
-export async function userToken(app: GitHubAppCredentials, sessionId: string | undefined): Promise<{ token: string; session: Session }> {
+export async function userToken(clientId: string, sessionId: string | undefined): Promise<{ token: string; session: Session }> {
   const session = getSession(sessionId);
   if (!session || !sessionId) throw new GitHubError(401, "还没有登录 GitHub");
   if (!session.access_expires_at || session.access_expires_at - REFRESH_MARGIN_MS > Date.now()) return { token: session.access_token, session };
   if (!session.refresh_token || (session.refresh_expires_at && session.refresh_expires_at < Date.now())) {
     throw new GitHubError(401, "GitHub 返回 401：登录已过期，请重新登录");
   }
-  const next = await refreshUserToken(app, session.refresh_token);
+  let next: UserTokens;
+  try {
+    next = await refreshUserToken(clientId, session.refresh_token);
+  } catch (err) {
+    // anything but a network hiccup means this login is over
+    if (err instanceof GitHubError && err.status === 0) throw err;
+    throw new GitHubError(401, "登录已过期，请重新登录");
+  }
   updateSession(sessionId, next);
   return { token: next.access_token, session: { ...session, ...next } };
 }
 
 // ---------------------------------------------------------------------------- issues
-
-const ensuredLabels = new Set<string>();
-
-/** Forget cached installation tokens and known labels (tests; after reinstalling the App). */
-export function resetGitHubCaches(): void {
-  tokenCache.clear();
-  ensuredLabels.clear();
-}
-
-/**
- * Create the custom labels the repo lacks (installation token). Best effort: returns the labels
- * known to exist afterwards and never throws, so a label problem cannot block the report.
- */
-export async function ensureLabels(app: GitHubAppCredentials, names: string[]): Promise<string[]> {
-  const ok: string[] = [];
-  let token: string;
-  try {
-    token = await installationToken(app);
-  } catch {
-    return names.filter((n) => ensuredLabels.has(n));
-  }
-  for (const name of names) {
-    if (ensuredLabels.has(name)) {
-      ok.push(name);
-      continue;
-    }
-    try {
-      await api(`/repos/${REPO_FULL_NAME}/labels/${encodeURIComponent(name)}`, { token, asApp: true });
-    } catch (err) {
-      if (!(err instanceof GitHubError) || err.status !== 404) continue;
-      const spec = LABEL_SPECS[name] ?? { color: "ededed", description: "" };
-      try {
-        await api(`/repos/${REPO_FULL_NAME}/labels`, { method: "POST", token, body: { name, ...spec }, asApp: true });
-      } catch (createErr) {
-        // 422 = someone created it in the meantime
-        if (!(createErr instanceof GitHubError) || createErr.status !== 422) {
-          console.warn(`[hebi8] could not create label ${name}: ${createErr instanceof Error ? createErr.message : createErr}`);
-          continue;
-        }
-      }
-    }
-    ensuredLabels.add(name);
-    ok.push(name);
-  }
-  return ok;
-}
 
 export interface CreatedIssue {
   number: number;
@@ -461,20 +340,9 @@ export interface CreatedIssue {
   title: string;
 }
 
-/**
- * Open the issue as the logged-in user (so the owner is the author). Labels that could not be
- * ensured are still sent; if GitHub rejects them the issue is created without labels.
- */
-export async function createIssue(token: string, issue: { title: string; body: string; labels: string[] }): Promise<CreatedIssue> {
-  const path = `/repos/${REPO_FULL_NAME}/issues`;
-  try {
-    return await api<CreatedIssue>(path, { method: "POST", token, body: issue });
-  } catch (err) {
-    if (err instanceof GitHubError && err.status === 422 && issue.labels.length) {
-      return api<CreatedIssue>(path, { method: "POST", token, body: { title: issue.title, body: issue.body } });
-    }
-    throw err;
-  }
+/** Open the issue as the logged-in user (they are the author). No labels: the repo's workflow adds them. */
+export function createIssue(token: string, repo: string, issue: { title: string; body: string }): Promise<CreatedIssue> {
+  return api<CreatedIssue>(`/repos/${repo}/issues`, { method: "POST", token, body: { title: issue.title, body: issue.body }, repo });
 }
 
 export interface IssueSummary {
@@ -485,15 +353,33 @@ export interface IssueSummary {
   created_at: string;
 }
 
-/** The latest in-app reports (installation token), newest first, pull requests excluded. */
-export async function recentFromAppIssues(app: GitHubAppCredentials, count = 5): Promise<IssueSummary[]> {
-  const token = await installationToken(app);
-  const list = await api<(IssueSummary & { pull_request?: unknown })[]>(
-    `/repos/${REPO_FULL_NAME}/issues?labels=${encodeURIComponent(FROM_APP_LABEL)}&state=all&sort=created&direction=desc&per_page=${count + 5}`,
-    { token, asApp: true },
-  );
-  return list
+const RECENT_TTL_MS = 60 * 1000;
+
+/**
+ * The latest in-app reports, newest first, pull requests excluded; with the user's token when
+ * there is one (higher rate limit), else anonymously (public repo). Cached 60 s per repo.
+ */
+export async function recentFromAppIssues(repo: string, token: string | null, count = 5, now = Date.now()): Promise<IssueSummary[]> {
+  const hit = recentCache.get(repo);
+  if (hit && now - hit.at < RECENT_TTL_MS) return hit.issues;
+  const path = `/repos/${repo}/issues?labels=${encodeURIComponent(FROM_APP_LABEL)}&state=all&sort=created&direction=desc&per_page=${count + 5}`;
+  let list: (IssueSummary & { pull_request?: unknown })[];
+  try {
+    list = await api(path, { token, repo });
+  } catch (err) {
+    // a user token the App cannot use here: the list is public anyway
+    if (!token || !(err instanceof GitHubError) || err.status === 0) throw err;
+    list = await api(path, { repo });
+  }
+  const issues = list
     .filter((i) => !i.pull_request)
     .slice(0, count)
     .map(({ number, title, state, html_url, created_at }) => ({ number, title, state, html_url, created_at }));
+  recentCache.set(repo, { at: now, issues });
+  return issues;
+}
+
+/** A new issue makes the cached list stale. */
+export function forgetRecentIssues(repo: string): void {
+  recentCache.delete(repo);
 }

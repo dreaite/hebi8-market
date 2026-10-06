@@ -1,7 +1,7 @@
 /**
- * Credentials live outside the repo, the vault and the data dir: `HEBI8_SECRETS` or
- * `~/.config/hebi8` (mode 700), each file written atomically with mode 600. Nothing in here is
- * ever logged or sent to the browser.
+ * GitHub login sessions (the only secrets this app keeps) live outside the repo, the vault and
+ * the data dir: `sessions.json` in `HEBI8_SECRETS` or `~/.config/hebi8` (mode 700), written
+ * atomically with mode 600. Nothing in here is ever logged or sent to the browser.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -35,41 +35,13 @@ function writeJson(name: string, value: unknown): void {
   fs.renameSync(tmp, file);
 }
 
-// ---------------------------------------------------------------------------- the GitHub App
-
-/** What the manifest conversion returns, plus where the app got installed. */
-export interface GitHubAppCredentials {
-  id: number;
-  slug: string;
-  client_id: string;
-  client_secret: string;
-  pem: string;
-  webhook_secret: string | null;
-  owner: string;
-  html_url: string;
-  /** The callback URLs the app was registered with; login is only offered from these origins */
-  callback_urls: string[];
-  installation_id: number | null;
-}
-
-const APP_FILE = "github-app.json";
-
-export function readApp(): GitHubAppCredentials | null {
-  const app = readJson<GitHubAppCredentials>(APP_FILE);
-  return app && app.id && app.pem && app.client_id ? app : null;
-}
-
-export function writeApp(app: GitHubAppCredentials): void {
-  writeJson(APP_FILE, app);
-}
-
 // ---------------------------------------------------------------------------- user sessions
 
 export interface Session {
   login: string;
   avatar_url: string;
   access_token: string;
-  /** ms; null when the app does not expire user tokens */
+  /** ms; null when the App does not expire user tokens */
   access_expires_at: number | null;
   refresh_token: string | null;
   refresh_expires_at: number | null;

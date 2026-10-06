@@ -1,15 +1,12 @@
-/** What the help panel shows: project facts, data status and the GitHub setup state. Local reads only. */
+/** What the help panel shows: project facts, data status and the feedback / login state. Local reads only. */
 import path from "node:path";
-import { APP_INFO, DESIGN_DOC_URL, FROM_APP_ISSUES_URL, REPO_FULL_NAME, REPO_URL } from "./app-info";
+import { APP_INFO, DESIGN_DOC_URL, REPO_FULL_NAME, REPO_URL, feedbackRepo, fromAppIssuesUrl, githubAppSlug, githubClientId } from "./app-info";
 import { allItems } from "./config";
-import { CALLBACK_PATH } from "./github";
 import { nameOf } from "./names";
 import { nextRun, scheduledNextSync } from "./scheduler";
-import { getSession, readApp } from "./secrets";
+import { getSession } from "./secrets";
 import { listSymbols, maxSyncedAt } from "./store";
 import { ensureVault, readConfigSafe, vaultDir } from "./vault";
-
-export type GitHubSetup = "none" | "created" | "installed";
 
 export interface HelpInfo {
   app: typeof APP_INFO;
@@ -25,16 +22,17 @@ export interface HelpInfo {
     configError: string | null;
   };
   github: {
-    setup: GitHubSetup;
-    appName: string | null;
-    appUrl: string | null;
+    /** A GitHub App client id is configured, so 用 GitHub 登录 (device flow) is offered */
+    enabled: boolean;
+    /** Where feedback goes (`owner/name`) */
+    feedbackRepo: string;
+    /** github.com/apps/<slug> */
+    appUrl: string;
     user: { login: string; avatarUrl: string } | null;
-    /** Why login would fail from this origin (its callback URL is not registered) */
-    loginProblem: string | null;
   };
 }
 
-export function helpInfo(origin: string, sessionId: string | undefined): HelpInfo {
+export function helpInfo(sessionId: string | undefined): HelpInfo {
   let config = null;
   let configError: string | null = null;
   try {
@@ -58,12 +56,12 @@ export function helpInfo(origin: string, sessionId: string | undefined): HelpInf
     .filter((s) => s.syncError)
     .map((s) => ({ key: s.key, name: config ? nameOf(config, s.key, s.name) : (s.name ?? s.key), error: s.syncError! }));
 
-  const app = readApp();
-  const session = app ? getSession(sessionId) : null;
-  const callback = `${origin}${CALLBACK_PATH}`;
+  const enabled = Boolean(githubClientId());
+  const session = enabled ? getSession(sessionId) : null;
+  const repo = feedbackRepo();
   return {
     app: APP_INFO,
-    repo: { fullName: REPO_FULL_NAME, url: REPO_URL, designUrl: DESIGN_DOC_URL, issuesUrl: FROM_APP_ISSUES_URL },
+    repo: { fullName: REPO_FULL_NAME, url: REPO_URL, designUrl: DESIGN_DOC_URL, issuesUrl: fromAppIssuesUrl(repo) },
     data: {
       watched: watched.length,
       cached: Object.keys(symbols).length,
@@ -75,11 +73,10 @@ export function helpInfo(origin: string, sessionId: string | undefined): HelpInf
       configError,
     },
     github: {
-      setup: !app ? "none" : app.installation_id ? "installed" : "created",
-      appName: app?.slug ?? null,
-      appUrl: app?.html_url ?? null,
+      enabled,
+      feedbackRepo: repo,
+      appUrl: `https://github.com/apps/${githubAppSlug()}`,
       user: session ? { login: session.login, avatarUrl: session.avatar_url } : null,
-      loginProblem: app && app.callback_urls.length && !app.callback_urls.includes(callback) ? `当前地址 ${origin} 不在创建 App 时登记的回调地址里；如果没在 GitHub 上补加 ${callback}，登录会失败` : null,
     },
   };
 }
