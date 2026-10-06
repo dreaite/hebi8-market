@@ -42,3 +42,6 @@ next-env.d.ts
 
 # local market data
 /data/
+
+# user content (notes, journal, chart state, hebi8.yaml)
+/vault/
