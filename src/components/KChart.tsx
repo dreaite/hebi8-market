@@ -691,8 +691,9 @@ export function KChart({
     patchedAxes.current.add(axis);
     const setRange = axis.setRange.bind(axis);
     axis.setRange = (next) => {
-      const base = gestureRef.current;
-      if (!base || !base.range) return setRange(next);
+      // a drag scales from the range it started with, a wheel on the price axis from the current one
+      const base = gestureRef.current ?? axis.getRange();
+      if (!base.range) return setRange(next);
       const realFrom = base.realFrom + ((next.from - base.from) / base.range) * base.realRange;
       const realTo = base.realTo + ((next.to - base.to) / base.range) * base.realRange;
       const from = 10 ** realFrom;
@@ -816,6 +817,8 @@ export function KChart({
     window.addEventListener("mouseup", onUp);
     window.addEventListener("touchend", onUp);
     el.addEventListener("dblclick", checkAuto);
+    // a wheel over the price axis zooms it and so switches auto scale off
+    el.addEventListener("wheel", checkAuto, { passive: true });
 
     const retheme = () => applyTheme(chart, styleRef.current);
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -839,6 +842,7 @@ export function KChart({
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("touchend", onUp);
       el.removeEventListener("dblclick", checkAuto);
+      el.removeEventListener("wheel", checkAuto);
       media.removeEventListener("change", retheme);
       resize.disconnect();
       dispose(el);
