@@ -12,7 +12,7 @@ import "./globals.css";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "hebi8 market",
+  title: "hebi8/market",
   description: "七天一个轮回，第八天观测市场。周度复盘：总览、长期图表、对比、笔记。",
 };
 
@@ -36,7 +36,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
           <header className="site-header border-b border-line">
             <div className="mx-auto flex h-12 max-w-[1400px] items-center gap-3 px-3 sm:gap-4 sm:px-5">
               <Link href="/" className="flex shrink-0 items-baseline gap-3" title="hebi（蛇）首尾相衔，七天一个轮回；多出来的第八天，用来观测市场">
-                <span className="font-mono text-sm tracking-tight">hebi8 market</span>
+                <span className="font-mono text-sm tracking-tight">hebi8/market</span>
                 <span className="hidden text-[11px] text-muted lg:inline">第八天，观测市场</span>
               </Link>
               <div className="flex min-w-0 flex-1 justify-center">

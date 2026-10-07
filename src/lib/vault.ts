@@ -66,13 +66,14 @@ export interface VaultRef {
 }
 
 /** The root vault, plus everyone else's when the instance is shared (`owner` set in the root yaml). */
-export function listVaults(owner: string | null): VaultRef[] {
+export function listVaults(owners: string[]): VaultRef[] {
   const out: VaultRef[] = [{ id: "", dir: vaultDir() }];
   const users = path.join(vaultDir(), "users");
-  if (!owner || !fs.existsSync(users)) return out;
+  if (!owners.length || !fs.existsSync(users)) return out;
+  const skip = new Set(owners.map((o) => o.toLowerCase()));
   for (const id of fs.readdirSync(users).sort()) {
-    // the owner uses the root vault, even if they had a vault of their own before
-    if (id === owner.toLowerCase() || !isLogin(id) || id !== id.toLowerCase()) continue;
+    // owners use the root vault, even if they had a vault of their own before
+    if (skip.has(id) || !isLogin(id) || id !== id.toLowerCase()) continue;
     const dir = path.join(users, id);
     if (fs.existsSync(yamlPath(dir))) out.push({ id, dir });
   }

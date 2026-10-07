@@ -74,10 +74,10 @@ export interface VaultConfig extends VaultRef {
 /** Every vault that syncs, with its config. A broken root yaml throws; a person's broken yaml only leaves them out. */
 export function loadVaults(): VaultConfig[] {
   const root = readConfig(vaultDir());
-  return listVaults(root.owner).flatMap((v) => {
+  return listVaults(root.owners).flatMap((v) => {
     if (v.id === "") return [{ ...v, config: root }];
     const { config, error } = readConfigSafe(v.dir);
-    if (!config) console.warn(`[hebi8] vault ${v.id} skipped: ${error}`);
+    if (!config) console.warn(`[hebi8m] vault ${v.id} skipped: ${error}`);
     return config ? [{ ...v, config }] : [];
   });
 }
@@ -103,7 +103,7 @@ export function recomputeStats(vault: string, cfg: Config): Map<string, Record<s
       results.set(key, conditions);
       writeStats(vault, key, computeStats(daily, { currency: symbols[key]?.currency ?? null, conditions }));
     } catch (err) {
-      console.warn(`[hebi8] stats for ${key} failed: ${message(err)}`);
+      console.warn(`[hebi8m] stats for ${key} failed: ${message(err)}`);
     }
   }
   return results;
@@ -138,7 +138,7 @@ export function syncAll(force = false): Promise<SyncOutcome[]> {
     const conditions = vaults.map((v) => recomputeStats(v.id, v.config));
     const failed = results.filter((r) => !r.ok);
     console.log(
-      `[hebi8] synced ${results.length} symbols in ${((Date.now() - started) / 1000).toFixed(1)}s` +
+      `[hebi8m] synced ${results.length} symbols in ${((Date.now() - started) / 1000).toFixed(1)}s` +
         (failed.length ? `, failed: ${failed.map((r) => `${r.key} (${r.error})`).join(", ")}` : ""),
     );
     for (const [i, v] of vaults.entries()) await runAlerts(v.id, v.config, conditions[i]);

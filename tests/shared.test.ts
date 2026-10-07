@@ -7,7 +7,7 @@ import { ConfigError, normalizeConfig, normalizeUserConfig } from "@/lib/config"
 // Server Actions read the session cookie through next/headers; here it is whatever the test says.
 const request = vi.hoisted(() => ({ session: undefined as string | undefined }));
 vi.mock("next/headers", () => ({
-  cookies: async () => ({ get: (name: string) => (name === "hebi8_session" && request.session ? { name, value: request.session } : undefined) }),
+  cookies: async () => ({ get: (name: string) => (name === "hebi8m_session" && request.session ? { name, value: request.session } : undefined) }),
 }));
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 
@@ -69,6 +69,13 @@ describe("owner in hebi8.yaml", () => {
     expect(() => normalizeConfig({ owner: "a--b" })).toThrow(ConfigError);
   });
 
+  it("can list several logins, e.g. one person's two accounts; the first is the one named", () => {
+    expect(normalizeConfig({ owner: ["dreaife", " dreaifekks "] })).toMatchObject({ owners: ["dreaife", "dreaifekks"], owner: "dreaife" });
+    expect(normalizeConfig({ owner: "dreaife" }).owners).toEqual(["dreaife"]);
+    expect(normalizeConfig({}).owners).toEqual([]);
+    expect(() => normalizeConfig({ owner: ["dreaife", "../x"] })).toThrow(ConfigError);
+  });
+
   it("is ignored in a user's yaml, with sync and datasets, which come from the root", () => {
     const rootCfg = normalizeConfig({ owner: "o", sync: { at: ["06:00"], tz: "UTC" }, datasets: { gpu: "./gpu" } });
     const cfg = normalizeUserConfig({ owner: "me", sync: { tz: "Mars/Olympus" }, datasets: { x: "bad" }, updown: "red-up" }, rootCfg);
@@ -102,6 +109,21 @@ describe("resolveViewer", () => {
   it("shared, the owner (case-insensitive): the root vault with write access", async () => {
     const { resolveViewer } = await import("@/lib/viewer");
     expect(resolveViewer(sessions.owner)).toMatchObject({ vault: "", dir: root, login: "dreaife", canWrite: true, isOwner: true, shared: true });
+  });
+
+  it("shared, any listed owner: the root vault, with notification channels kept under the first owner", async () => {
+    const { resolveViewer } = await import("@/lib/viewer");
+    const { notifyCaller } = await import("@/lib/notify-caller");
+    const { NextRequest } = await import("next/server");
+    writeRoot(ROOT_YAML.replace("owner: Dreaife # 实例主人", "owner: [Dreaife, bob] # 实例主人的两个账号"));
+    try {
+      expect(resolveViewer(sessions.bob)).toMatchObject({ vault: "", dir: root, login: "bob", canWrite: true, isOwner: true, owner: "Dreaife" });
+      expect(fs.existsSync(path.join(users, "bob"))).toBe(false);
+      const caller = notifyCaller(new NextRequest("http://h/api/notify", { headers: { cookie: `hebi8m_session=${sessions.bob}` } }));
+      expect(caller).toMatchObject({ login: "Dreaife", vault: "" });
+    } finally {
+      writeRoot(ROOT_YAML);
+    }
   });
 
   it("shared, anyone else: their own lower-case vault, started from the root yaml", async () => {
@@ -276,7 +298,7 @@ describe("stats and alerts per vault", () => {
     const { NextRequest } = await import("next/server");
     const { GET } = await import("@/app/api/bars/route");
     const get = (session?: string) =>
-      GET(new NextRequest(`http://h/api/bars?key=${encodeURIComponent(KEY)}&tf=D`, { headers: { ...(session ? { cookie: `hebi8_session=${session}` } : {}), "if-none-match": '"x"' } }));
+      GET(new NextRequest(`http://h/api/bars?key=${encodeURIComponent(KEY)}&tf=D`, { headers: { ...(session ? { cookie: `hebi8m_session=${session}` } : {}), "if-none-match": '"x"' } }));
     for (const res of [await get(), await get(sessions.alice)]) {
       expect(res.status).toBe(200);
       expect(res.headers.get("cache-control")).toBe("no-store");

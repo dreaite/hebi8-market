@@ -37,7 +37,7 @@ vault.example/hebi8.yaml      首次运行时若 vault/ 不存在，复制为 va
 ### 1.1 `hebi8.yaml`
 
 ```yaml
-owner: dreaife                 # 可省；写了就是共用实例，这个 GitHub 账号是根 vault 的主人（§1.6）
+owner: [dreaife, dreaifekks]   # 可省；写了就是共用实例，这些 GitHub 账号共用根 vault（§1.6），也可以只写一个字符串
 sync:
   at: ["07:30", "17:30"]       # 本地时间，按 tz 解释；美股收盘后、亚洲收盘后各一次
   tz: Asia/Tokyo
@@ -171,7 +171,7 @@ CREATE TABLE alert_state (                  -- §2.5；删库后第一次同步�
 
 `symbols` 和 `bars` 里只有缓存和元数据，**没有任何用户字段**（名字、分组、基准、排序都在 yaml），所有人共用；`stats` 和 `alert_state` 按 vault 分开。两表加 `vault` 列的迁移直接删表重建，下次同步重算。
 
-### 1.5 用户配置目录（`HEBI8_SECRETS`，默认 `~/.config/hebi8`，目录 700、文件 600）
+### 1.5 用户配置目录（`HEBI8_SECRETS`，默认 `~/.config/hebi8/market`，目录 700、文件 600）
 
 不在 vault、不在 data、不进 git：`sessions.json`（GitHub 登录，§5.8）、`notify.json`（实例的通知设置，§2.5）、`notify-users.json`（每个人绑定的通道，§2.5）。
 
@@ -179,9 +179,11 @@ CREATE TABLE alert_state (                  -- §2.5；删库后第一次同步�
 
 局域网里几个人共用一台 hebi8：K 线缓存、同步、数据集是共享的；**自选、别名、公式指标、条件、告警、图表偏好、笔记、复盘、画线和通知都是各人的**。
 
-**开关**：根 vault 的 `hebi8.yaml` 写 `owner: <GitHub login>`。没写就是单用户模式，行为和现在完全一样（不用登录，谁都能改根 vault）。
+**开关**：根 vault 的 `hebi8.yaml` 写 `owner: <GitHub login>`，或者一个列表 `owner: [dreaife, dreaifekks]`（同一个人的几个账号）。列表里任何一个账号登录都用根 vault，页面上称呼第一个。没写就是单用户模式，行为和现在完全一样（不用登录，谁都能改根 vault）。
 
-**谁看哪个 vault**（每个请求从 `hebi8_session` cookie 解析出 viewer，`src/lib/viewer.ts`）：
+**命名**：`hebi8` 以后是一组东西的总名，这个应用对外叫 **hebi8/market**（页面标题、通知标题、Telegram 确认消息、webhook 的 `Title` 头），不能带斜杠的地方用 **hebi8m**（会话 cookie `hebi8m_session`、日志前缀 `[hebi8m]`）。cookie 不分端口，同一台机器上别的 hebi8 应用不会和它抢；配置目录也放在 `~/.config/hebi8/market/` 下。
+
+**谁看哪个 vault**（每个请求从 `hebi8m_session` cookie 解析出 viewer，`src/lib/viewer.ts`）：
 
 | 访问者 | 看到 | 能改 |
 |---|---|---|
@@ -292,6 +294,7 @@ date,open,high,low,close,volume
 ```
 
 - `notify.json` 是**实例**的设置，由部署的人手写：bot 的 `token`、`api`，以及 `link`。其中 `telegram.chat` 和 `webhook` 是根 vault（单用户模式或 owner）的通道，和以前兼容。
+- owner 有几个账号时，根 vault 的通道记在第一个 owner 名下，用哪个账号登录绑定都是同一份。
 - 其他人的通道在 `notify-users.json`：`{ "<login>": { "telegram": { "chat": "..." }, "webhook": { "url": "...", "format": "text" } } }`，由页面写入（原子写、600），不手改。owner 也可以在页面上绑定，写进这里时优先于 `notify.json` 里的 chat / webhook。
 - `telegram.api` 可省，指向自建 Bot API 服务时改它。
 - `webhook.format`：`text`（默认，正文就是摘要，带 `Title` 头，适合 ntfy）或 `json`（`{ title, text, events }`）。
@@ -456,7 +459,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 ### 5.5 设置
 
-不做单独页面。周期选择、涨跌色、图表偏好由各处 UI 写回 yaml；分组、名称、基准由总览行菜单写回；其余（同步时间、别名、条件、告警、数据集）直接改 yaml，页面上给出 vault 相对路径提示。通知通道写在 `~/.config/hebi8/notify.json`（§2.5）。反馈用的 GitHub App 只有一个 client id，写在源码里（§5.8），不需要设置页。
+不做单独页面。周期选择、涨跌色、图表偏好由各处 UI 写回 yaml；分组、名称、基准由总览行菜单写回；其余（同步时间、别名、条件、告警、数据集）直接改 yaml，页面上给出 vault 相对路径提示。通知通道写在 `~/.config/hebi8/market/notify.json`（§2.5）。反馈用的 GitHub App 只有一个 client id，写在源码里（§5.8），不需要设置页。
 
 ### 5.6 自动保存（笔记与复盘日志）
 
@@ -501,7 +504,7 @@ client id 不是秘密（device flow 的设计就是给拿不住密钥的客户�
 
 1. `POST /api/github/device` → 服务端 `POST https://github.com/login/device/code`（只带 `client_id`）→ device code 留在服务端内存（`globalThis` 上的 Map，键是 32 字节随机 flowId，按 `expires_in` 过期，最多 20 个并发）→ 返回 `{ flowId, user_code, verification_uri, expires_in, interval }`。`device_flow_disabled` → 「GitHub App 没有开启 Device Flow」；不认识的 client id（GitHub 回 404）→ 「GitHub 不认识这个 client id」。
 2. 面板每 `interval` 秒 `POST /api/github/device/poll { flowId }`。服务端每次最多向 GitHub 发一次 `POST https://github.com/login/oauth/access_token`（`client_id`、`device_code`、`grant_type=urn:ietf:params:oauth:grant-type:device_code`，没有 client_secret），且自己也卡住间隔：没到时间直接回 `pending`。`authorization_pending` → 继续；`slow_down` → 间隔 +5 秒（GitHub 给了新 `interval` 就取较大者）；`expired_token` / 超时 → `expired`；`access_denied` → `denied`；其它错误结束本次登录。
-3. 拿到 token → `GET /user` → 建会话（32 字节随机 id，cookie `hebi8_session` HttpOnly、SameSite=Lax、30 天；内网没有 HTTPS，所以不设 Secure）。
+3. 拿到 token → `GET /user` → 建会话（32 字节随机 id，cookie `hebi8m_session` HttpOnly、SameSite=Lax、30 天；内网没有 HTTPS，所以不设 Secure）。
 4. 用户 token 8 小时过期；离过期不到 5 分钟时用 `grant_type=refresh_token` + `client_id` + `refresh_token` 续（device flow 拿到的 token 续期不需要 client_secret）。续不上（或 GitHub 对用户 token 返回 401）就删会话，面板显示原因和登录按钮。`POST /api/github/logout` 删会话。
 5. 写操作的接口都拒绝跨站 `Origin`。
 
@@ -509,7 +512,7 @@ client id 不是秘密（device flow 的设计就是给拿不住密钥的客户�
 
 **网页版**（`webIssueUrl()`，纯函数，浏览器里算）：`https://github.com/<repo>/issues/new?title=…&body=…`，body 与应用内提交的完全一样（含 context 块）。URL 上限 7000 字符（GitHub 约 8 KB 起报 414）：超了先把 JSON 压成一行，再去掉 `errors`、`userAgent`，再只留 `{ v, type, autoFix }`，最后才从尾部截断描述并注明「网页版已截断」。
 
-**会话存储**：不在仓库、vault、data 里。目录 `HEBI8_SECRETS`（默认 `~/.config/hebi8`，权限 700），只有 `sessions.json`（原子写入，权限 600）：会话 id → login、avatar_url、access_token、access_expires_at、refresh_token、refresh_expires_at、created_at。超过 30 天或 refresh token 也过期的会话在每次写入时清掉。
+**会话存储**：不在仓库、vault、data 里。目录 `HEBI8_SECRETS`（默认 `~/.config/hebi8/market`，权限 700），只有 `sessions.json`（原子写入，权限 600）：会话 id → login、avatar_url、access_token、access_expires_at、refresh_token、refresh_expires_at、created_at。超过 30 天或 refresh token 也过期的会话在每次写入时清掉。
 
 **issue 格式**：标题是用户填的；正文
 

@@ -28,7 +28,7 @@ export function lastDue(now: Date, at: string[], tz: string): Date {
   return new Date(Math.max(...occurrences(now, at, tz, [0, -1, -2]).filter((x) => x <= t)));
 }
 
-const log = (msg: string) => console.log(`[hebi8] ${new Date().toISOString()} ${msg}`);
+const log = (msg: string) => console.log(`[hebi8m] ${new Date().toISOString()} ${msg}`);
 
 const globalForScheduler = globalThis as unknown as { hebi8Scheduler?: boolean; hebi8NextSync?: number };
 

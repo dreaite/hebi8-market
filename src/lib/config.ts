@@ -65,7 +65,11 @@ export interface ChartPrefs {
 }
 
 export interface Config {
-  /** GitHub login that owns the root vault; set means the instance is shared (root vault only) */
+  /**
+   * GitHub logins that own the root vault, e.g. one person's two accounts; any set means the
+   * instance is shared (root vault only). The first is the one named on the page.
+   */
+  owners: string[];
   owner: string | null;
   sync: { at: string[]; tz: string };
   prices: Prices;
@@ -153,8 +157,8 @@ export const isLogin = (v: unknown): v is string => typeof v === "string" && /^[
 export function normalizeConfig(raw: unknown): Config {
   const root = obj(raw);
 
-  const owner = root.owner == null ? null : text(root.owner);
-  if (root.owner != null && !isLogin(owner)) throw new ConfigError(`owner：「${String(root.owner)}」不是 GitHub 用户名`);
+  const owners = root.owner == null ? [] : (Array.isArray(root.owner) ? root.owner : [root.owner]).map((o) => (typeof o === "string" ? o.trim() : o));
+  for (const o of owners) if (!isLogin(o)) throw new ConfigError(`owner：「${String(o)}」不是 GitHub 用户名`);
 
   const sync = obj(root.sync);
   const at = list(sync.at)
@@ -238,7 +242,8 @@ export function normalizeConfig(raw: unknown): Config {
   if (typeof style !== "string" || !(style in CHART_STYLES)) throw new ConfigError(`chart.style：未知样式「${String(style)}」`);
 
   return {
-    owner,
+    owners: owners as string[],
+    owner: (owners[0] as string | undefined) ?? null,
     sync: { at: at.length ? at : ["07:30", "17:30"], tz },
     prices,
     periods: periods.length ? periods : DEFAULT_PERIODS,
@@ -268,7 +273,7 @@ export function normalizeUserConfig(raw: unknown, root: Config): Config {
   const own = { ...obj(raw) };
   const ignored = INSTANCE_KEYS.filter((k) => k in own);
   for (const k of INSTANCE_KEYS) delete own[k];
-  return { ...normalizeConfig(own), owner: root.owner, sync: root.sync, datasets: root.datasets, ignored };
+  return { ...normalizeConfig(own), owners: root.owners, owner: root.owner, sync: root.sync, datasets: root.datasets, ignored };
 }
 
 /** Remote repos are cloned into the cache; anything path-like is read in place. */

@@ -45,7 +45,7 @@ interface State {
 const g = globalThis as unknown as { hebi8Telegram?: State };
 const state: State = (g.hebi8Telegram ??= { bindings: new Map(), polling: false, botNames: new Map(), lastError: null });
 
-const log = (msg: string) => console.log(`[hebi8] telegram: ${msg}`);
+const log = (msg: string) => console.log(`[hebi8m] telegram: ${msg}`);
 
 async function call<T>(bot: Bot, method: string, body: Record<string, unknown>, timeoutMs = 15_000): Promise<T> {
   let res: Response;
@@ -82,7 +82,7 @@ async function botName(bot: Bot): Promise<string> {
 /** A new code for this login (replacing any earlier one) and the link that sends it to the bot. */
 export async function startBinding(login: string, now = Date.now()): Promise<{ url: string; expiresAt: number }> {
   const bot = instanceBot();
-  if (!bot) throw new Error("这台 hebi8 没有配置 Telegram bot（notify.json 的 telegram.token），请找部署的人");
+  if (!bot) throw new Error("这台 hebi8/market 没有配置 Telegram bot（notify.json 的 telegram.token），请找部署的人");
   const name = await botName(bot);
   const code = crypto.randomBytes(9).toString("base64url");
   const expiresAt = now + CODE_TTL_MS;
@@ -166,7 +166,7 @@ async function receive(bot: Bot, u: Update): Promise<void> {
   const id = String(chat.id);
   setUserChannel(binding.login, "telegram", { chat: id });
   log(`bound ${binding.login}`);
-  await sendTelegram({ ...bot, chat: id }, `已绑定 hebi8：${binding.login}`).catch((err) => log(`confirmation failed: ${err instanceof Error ? err.message : String(err)}`));
+  await sendTelegram({ ...bot, chat: id }, `已绑定 hebi8/market：${binding.login}`).catch((err) => log(`confirmation failed: ${err instanceof Error ? err.message : String(err)}`));
   // only now does the panel hear about it, so the confirmation is already in the chat
   binding.chat = id;
 }

@@ -1,6 +1,6 @@
 /**
  * Secrets live outside the repo, the vault and the data dir, in `HEBI8_SECRETS` or
- * `~/.config/hebi8` (mode 700): GitHub login sessions in `sessions.json` and each person's
+ * `~/.config/hebi8/market` (mode 700): GitHub login sessions in `sessions.json` and each person's
  * notification channels in `notify-users.json`, written atomically with mode 600, and the
  * instance's notification settings in `notify.json`, written by hand. Nothing in here is ever
  * logged or sent to the browser.
@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 
 export function secretsDir(): string {
-  return process.env.HEBI8_SECRETS ?? path.join(os.homedir(), ".config", "hebi8");
+  return process.env.HEBI8_SECRETS ?? path.join(os.homedir(), ".config", "hebi8", "market");
 }
 
 function ensureDir(): string {

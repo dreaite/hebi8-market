@@ -64,7 +64,7 @@ export type FeedbackContext = { v: 1; type: FeedbackType; autoFix: boolean } & P
 export const CONTEXT_FENCE = "json hebi8-context";
 const MAX_DESCRIPTION = 20000;
 const MAX_CONTEXT = 20000;
-export const FOOTER = "<sub>来自 hebi8 market 应用内反馈</sub>";
+export const FOOTER = "<sub>来自 hebi8/market 应用内反馈</sub>";
 
 export function feedbackContext(type: FeedbackType, autoFix: boolean, page: PageInfo | null): FeedbackContext {
   return { v: 1, type, autoFix, ...(page ?? {}) };

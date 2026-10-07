@@ -59,7 +59,7 @@ describe("feedback-labels.js", () => {
     const context = { repo: { owner: "dreaite", repo: "hebi8-market" }, payload: { issue: { number: 7, body: body("bug", true), author_association: "NONE" } } };
     expect(await labels.run({ github, context, core })).toEqual(["from-app", "bug", "auto-fix-requested"]);
     expect(github.rest.issues.createLabel.mock.calls.map((c: unknown[]) => (c[0] as { name: string }).name)).toEqual(["from-app", "auto-fix-requested"]);
-    expect(github.rest.issues.createLabel).toHaveBeenCalledWith({ owner: "dreaite", repo: "hebi8-market", name: "from-app", color: "5319e7", description: "Reported from inside hebi8 market" });
+    expect(github.rest.issues.createLabel).toHaveBeenCalledWith({ owner: "dreaite", repo: "hebi8-market", name: "from-app", color: "5319e7", description: "Reported from inside hebi8/market" });
     expect(github.rest.issues.addLabels).toHaveBeenCalledWith({ owner: "dreaite", repo: "hebi8-market", issue_number: 7, labels: ["from-app", "bug", "auto-fix-requested"] });
 
     github.rest.issues.addLabels.mockClear();

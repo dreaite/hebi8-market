@@ -393,7 +393,7 @@ function FeedbackTab({
         <div className="mb-3 rounded border border-line px-3 py-2 leading-relaxed">
           <p className="mb-1 font-medium">反馈未启用</p>
           <p className="text-muted">
-            这个 hebi8 没有配置 GitHub App（app-info.ts 的 GITHUB_APP_CLIENT_ID 或环境变量 HEBI8_GITHUB_CLIENT_ID），不能在应用里直接提交。填好下面的内容，点「在 GitHub
+            这个 hebi8/market 没有配置 GitHub App（app-info.ts 的 GITHUB_APP_CLIENT_ID 或环境变量 HEBI8_GITHUB_CLIENT_ID），不能在应用里直接提交。填好下面的内容，点「在 GitHub
             网页上提交」，会在 github.com 打开预填好的 issue。
           </p>
         </div>
@@ -407,7 +407,7 @@ function FeedbackTab({
           intro={
             <>
               用你的 GitHub 账号登录，反馈会以你的名义提交到 <span className="font-mono">{gh.feedbackRepo}</span>。
-              {info.shared && "共用这台 hebi8 时，登录后用的是你自己的自选、笔记和通知。"}
+              {info.shared && "共用这台 hebi8/market 时，登录后用的是你自己的自选、笔记和通知。"}
             </>
           }
           aside="不想登录也可以在 GitHub 网页上提交（表单下方）"
@@ -564,7 +564,7 @@ function NotifyTab({
   toast: (message: string, opts?: ToastOptions) => void;
 }) {
   if (!info) return <p className="text-muted">读取中…</p>;
-  const notifyJson = <code className="font-mono">~/.config/hebi8/notify.json</code>;
+  const notifyJson = <code className="font-mono">~/.config/hebi8/market/notify.json</code>;
   if (!info.shared) {
     return (
       <Section title="通知">
@@ -577,7 +577,7 @@ function NotifyTab({
     );
   }
   if (!info.github.enabled) {
-    return <p className="leading-relaxed text-muted">这台 hebi8 没有配置 GitHub App，不能登录，也就不能按人设置通知；通道写在 {notifyJson}。</p>;
+    return <p className="leading-relaxed text-muted">这台 hebi8/market 没有配置 GitHub App，不能登录，也就不能按人设置通知；通道写在 {notifyJson}。</p>;
   }
   const user = info.github.user;
   return (
@@ -706,7 +706,7 @@ function NotifySettings({ toast }: { toast: (message: string, opts?: ToastOption
 
       <Section title="Telegram">
         {!summary.bot ? (
-          <p className="leading-relaxed text-muted">这台 hebi8 没有配置 Telegram bot（notify.json 的 telegram.token），请找部署的人。</p>
+          <p className="leading-relaxed text-muted">这台 hebi8/market 没有配置 Telegram bot（notify.json 的 telegram.token），请找部署的人。</p>
         ) : binding ? (
           <div className="flex flex-col gap-2" aria-live="polite">
             <p className="leading-relaxed">在 Telegram 里打开 bot，点 Start，这里会自动完成绑定（10 分钟内有效）。</p>
@@ -894,7 +894,7 @@ function DeviceLogin({
       <p className="leading-relaxed">
         {shared
           ? "在 GitHub 上输入下面的代码登录。登录后用你自己的列表、画线、笔记和通知，反馈也会以你的名义提交："
-          : "在 GitHub 上输入下面的代码，授权 hebi8 以你的名义提交 issue："}
+          : "在 GitHub 上输入下面的代码，授权 hebi8/market 以你的名义提交 issue："}
       </p>
       <div className="flex items-center gap-2">
         <code className="rounded bg-fg/5 px-2 py-1 font-mono text-xl tracking-widest select-all" aria-label="登录代码">

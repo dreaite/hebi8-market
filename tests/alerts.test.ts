@@ -86,7 +86,7 @@ describe("formatDigest", () => {
   const event = { rule: "cond:below_200w", key: "yahoo:NVDA", name: "英伟达", label: "破200周", tf: "W" as const, close: 182.345 };
 
   it("lists each event with its timeframe and close, and links when a base is set", () => {
-    expect(formatDigest([event])).toEqual({ title: "hebi8 · 1 条新提醒", text: "hebi8 · 1 条新提醒\n\n• 英伟达：破200周（周线）  收 182.35" });
+    expect(formatDigest([event])).toEqual({ title: "hebi8/market · 1 条新提醒", text: "hebi8/market · 1 条新提醒\n\n• 英伟达：破200周（周线）  收 182.35" });
     expect(formatDigest([{ ...event, close: null }], "http://h:8808").text.split("\n").slice(2)).toEqual([
       "• 英伟达：破200周（周线）",
       "  http://h:8808/chart/yahoo%3ANVDA",
@@ -159,7 +159,7 @@ describe("runAlerts", () => {
     expect(retried).toHaveLength(2);
     expect(received).toHaveLength(2);
     expect(received[1].body).toContain("• 比特币：站上 100（日线）  收 102.00");
-    expect(received[1].headers.title).toBe("hebi8");
+    expect(received[1].headers.title).toBe("hebi8/market");
 
     expect(await run()).toEqual([]); // delivered, still true: quiet
     expect(received).toHaveLength(2);

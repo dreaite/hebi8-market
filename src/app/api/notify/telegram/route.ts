@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export async function POST(request: NextRequest) {
   const caller = notifyCaller(request);
   if (caller instanceof NextResponse) return caller;
-  if (!instanceBot()) return NextResponse.json({ error: "这台 hebi8 没有配置 Telegram bot（notify.json 的 telegram.token），请找部署的人" }, { status: 409 });
+  if (!instanceBot()) return NextResponse.json({ error: "这台 hebi8/market 没有配置 Telegram bot（notify.json 的 telegram.token），请找部署的人" }, { status: 409 });
   try {
     return NextResponse.json(await startBinding(caller.login), { headers: { "Cache-Control": "no-store" } });
   } catch (err) {

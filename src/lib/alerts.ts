@@ -87,7 +87,7 @@ function writeState(vault: string, updates: { rule: string; key: string; row: St
   })();
 }
 
-const log = (msg: string) => console.log(`[hebi8] ${msg}`);
+const log = (msg: string) => console.log(`[hebi8m] ${msg}`);
 
 /** Run for each vault after `syncAll` has written its stats. Never throws; returns the events it found. */
 export async function runAlerts(vault: string, cfg: Config, conditions: Map<string, Record<string, ConditionResult>>): Promise<AlertEvent[]> {

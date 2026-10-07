@@ -181,7 +181,7 @@ describe("Telegram binding", () => {
     expect(status).toEqual({ status: "bound", chat: "777" });
     expect(readNotifyUsers()).toEqual({ alice: { telegram: { chat: "777" } } });
     expect(calls.filter((c) => c.method === "sendMessage").map((c) => c.body)).toEqual([
-      { chat_id: "777", text: "已绑定 hebi8：Alice", disable_web_page_preview: true },
+      { chat_id: "777", text: "已绑定 hebi8/market：Alice", disable_web_page_preview: true },
     ]);
     // reported once; the code cannot be used again
     expect(bindingStatus("alice")).toEqual({ status: "expired" });
@@ -273,7 +273,7 @@ describe("Telegram binding", () => {
 
 const req = (url: string, init: { method?: string; session?: string; body?: unknown; origin?: string } = {}) => {
   const headers = new Headers({ host: "100.92.194.31:8808" });
-  if (init.session) headers.set("cookie", `hebi8_session=${init.session}`);
+  if (init.session) headers.set("cookie", `hebi8m_session=${init.session}`);
   if (init.origin) headers.set("origin", init.origin);
   return new NextRequest(`${ORIGIN}${url}`, { method: init.method ?? "GET", headers, body: init.body === undefined ? undefined : JSON.stringify(init.body) });
 };

@@ -32,7 +32,7 @@ describe("issue body", () => {
   it("puts the description first, then the context block (with type and autoFix) in a details, then the footer", () => {
     const body = buildIssueBody("  周线不对  ", ctx);
     expect(body.startsWith('周线不对\n\n---\n\n<details><summary>页面信息</summary>\n\n```json hebi8-context\n{\n  "v": 1,\n  "type": "data",\n  "autoFix": true,')).toBe(true);
-    expect(body.endsWith("```\n</details>\n\n<sub>来自 hebi8 market 应用内反馈</sub>\n")).toBe(true);
+    expect(body.endsWith("```\n</details>\n\n<sub>来自 hebi8/market 应用内反馈</sub>\n")).toBe(true);
     expect(parseIssueContext(body)).toEqual(ctx);
   });
 

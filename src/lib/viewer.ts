@@ -18,7 +18,7 @@ export interface Viewer {
   login: string | null;
   avatarUrl: string | null;
   canWrite: boolean;
-  /** Logged in as the root yaml's `owner` */
+  /** Logged in as one of the root yaml's `owner` logins */
   isOwner: boolean;
   /** The root yaml names an owner, so people log in to get their own vault */
   shared: boolean;
@@ -39,7 +39,7 @@ export function resolveViewer(sessionId: string | undefined): Viewer {
   if (!owner) return { ...base, vault: "", dir: root, canWrite: true, isOwner: false, shared: false, owner: null };
   const shared = { ...base, shared: true, owner };
   if (!user) return { ...shared, vault: "", dir: root, canWrite: false, isOwner: false };
-  if (user.login.toLowerCase() === owner.toLowerCase()) return { ...shared, vault: "", dir: root, canWrite: true, isOwner: true };
+  if (config.owners.some((o) => o.toLowerCase() === user.login.toLowerCase())) return { ...shared, vault: "", dir: root, canWrite: true, isOwner: true };
   return { ...shared, vault: user.login.toLowerCase(), dir: ensureUserVault(user.login), canWrite: true, isOwner: false };
 }
 

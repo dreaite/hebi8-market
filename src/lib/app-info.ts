@@ -61,7 +61,7 @@ export function githubAppSlug(): string {
 export const fromAppIssuesUrl = (repo: string) => `https://github.com/${repo}/issues?q=${encodeURIComponent(`is:issue label:${FROM_APP_LABEL}`)}`;
 
 export const APP_INFO = {
-  name: "hebi8 market",
+  name: "hebi8/market",
   meaning: "hebi（蛇）首尾相衔，七天一个轮回；多出来的第八天，用来观测市场。",
   version: process.env.HEBI8_VERSION ?? "0.0.0",
   commit: process.env.HEBI8_COMMIT ?? "unknown",

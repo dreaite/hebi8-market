@@ -34,9 +34,9 @@ export function describeFailure(status: number, { repo, detail, rateLimited = fa
     case status === 403 && rateLimited:
       return "GitHub 返回 403：请求太频繁，稍后再试";
     case status === 403:
-      return `GitHub 返回 403：你的账号不能在 ${where} 上开 issue（hebi8 的 GitHub App 没装在这个仓库，或账号被仓库限制）${what}。可以改在 GitHub 网页上提交`;
+      return `GitHub 返回 403：你的账号不能在 ${where} 上开 issue（hebi8/market 的 GitHub App 没装在这个仓库，或账号被仓库限制）${what}。可以改在 GitHub 网页上提交`;
     case status === 404:
-      return `GitHub 返回 404：找不到 ${where}，或者 hebi8 的 GitHub App 没有安装到这个仓库。可以改在 GitHub 网页上提交`;
+      return `GitHub 返回 404：找不到 ${where}，或者 hebi8/market 的 GitHub App 没有安装到这个仓库。可以改在 GitHub 网页上提交`;
     case status === 410:
       return `GitHub 返回 410：${where} 关闭了 issue`;
     case status === 422:
@@ -107,7 +107,7 @@ export function crossSite(headers: Headers): boolean {
 }
 
 /** No HTTPS on the tailnet, so never `Secure`. */
-export const SESSION_COOKIE = "hebi8_session";
+export const SESSION_COOKIE = "hebi8m_session";
 export const cookieOptions = (maxAgeSec: number) => ({ httpOnly: true, sameSite: "lax" as const, secure: false, path: "/", maxAge: maxAgeSec });
 
 export const randomToken = (bytes = 16) => crypto.randomBytes(bytes).toString("base64url");

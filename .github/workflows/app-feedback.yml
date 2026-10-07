@@ -1,4 +1,4 @@
-# Labels issues filed from inside hebi8 market (the app itself cannot: GitHub drops labels set by
+# Labels issues filed from inside hebi8/market (the app itself cannot: GitHub drops labels set by
 # non-collaborators). The logic lives in .github/scripts/feedback-labels.js; the issue body is
 # only parsed as JSON data, never executed. auto-fix-ok is gated by the author's association.
 name: App feedback labels

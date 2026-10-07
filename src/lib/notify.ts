@@ -176,7 +176,7 @@ export const chartLink = (base: string, key: string) => `${base}/chart/${encodeU
 
 /** One plain-text digest for every event of a sync. */
 export function formatDigest(events: AlertEvent[], link?: string): { title: string; text: string } {
-  const title = `hebi8 · ${events.length} 条新提醒`;
+  const title = `hebi8/market · ${events.length} 条新提醒`;
   const lines = events.flatMap((e) => {
     const close = e.close === null ? "" : `  收 ${fmtPrice(e.close)}`;
     const head = `• ${e.name}：${e.label}（${TF_LABELS[e.tf]}线）${close}`;
@@ -212,7 +212,7 @@ async function sendWebhook(cfg: NonNullable<NotifyConfig["webhook"]>, title: str
   const init: RequestInit =
     cfg.format === "json"
       ? { headers: { "content-type": "application/json" }, body: JSON.stringify({ title, text, events }) }
-      : { headers: { "content-type": "text/plain; charset=utf-8", Title: "hebi8" }, body: text };
+      : { headers: { "content-type": "text/plain; charset=utf-8", Title: "hebi8/market" }, body: text };
   let res: Response;
   try {
     res = await fetch(cfg.url, { method: "POST", ...init, signal: AbortSignal.timeout(TIMEOUT) });

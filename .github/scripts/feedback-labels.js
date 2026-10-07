@@ -17,7 +17,7 @@ const TYPES = ["bug", "ux", "data", "idea"];
 const TRUSTED_ASSOCIATIONS = ["OWNER", "MEMBER", "COLLABORATOR"];
 
 const LABELS = {
-  "from-app": { color: "5319e7", description: "Reported from inside hebi8 market" },
+  "from-app": { color: "5319e7", description: "Reported from inside hebi8/market" },
   bug: { color: "d73a4a", description: "Something isn't working" },
   ux: { color: "0e8a16", description: "Feels wrong or awkward to use" },
   data: { color: "fbca04", description: "Market data, sync or calculation looks off" },

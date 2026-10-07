@@ -18,5 +18,6 @@ export function notifyCaller(request: NextRequest): NotifyCaller | NextResponse 
   const viewer = resolveViewer(request.cookies.get(SESSION_COOKIE)?.value);
   if (!viewer.login) return NextResponse.json({ error: "请先登录" }, { status: 401 });
   if (!viewer.shared) return NextResponse.json({ error: "单用户模式下通知通道写在 notify.json" }, { status: 409 });
-  return { login: viewer.login, vault: viewer.vault, owner: viewer.owner };
+  // owners share the root vault, so its channels live under the first owner whichever account binds
+  return { login: viewer.isOwner ? viewer.owner! : viewer.login, vault: viewer.vault, owner: viewer.owner };
 }
