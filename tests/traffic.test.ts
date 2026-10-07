@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { cookieOptions } from "@/lib/github";
 import { DAY } from "@/lib/time";
-import { clientIp, isRateLimited, kindOf, originOf, visitorId, type Hit } from "@/lib/traffic";
-import { fillDays, passedLimits, trafficRows, upstreamRows, usageMessage } from "@/lib/usage";
+import fs from "node:fs";
+import path from "node:path";
+import { ANY_CHART, OTHER, ROUTES, clientIp, isRateLimited, kindOf, originOf, routeOf, visitorId, type Hit } from "@/lib/traffic";
+import { capVisitors, fillDays, passedLimits, pathRows, upstreamRows, usageMessage, visitorRows } from "@/lib/usage";
 
 const h = (init: Record<string, string>) => new Headers(init);
 
@@ -23,6 +25,28 @@ describe("where a request comes from", () => {
     expect(kindOf("/chart/x", h({ rsc: "1", "next-router-prefetch": "1" }))).toBe("prefetch");
     expect(kindOf("/chart/x", h({ rsc: "1" }))).toBe("page");
     expect(kindOf("/review", h({}))).toBe("page");
+  });
+
+  it("paths become routes of this app; anything else is one bucket", () => {
+    expect(routeOf("/")).toBe("/");
+    expect(routeOf("/review/")).toBe("/review");
+    expect(routeOf("/api/notify/telegram/poll")).toBe("/api/notify/telegram/poll");
+    for (const p of ["/random-1", "/random-2", "/wp-login.php", "/.env", "/api/nope", "/chart", "/chart/a/b", "/review/x"]) expect(routeOf(p)).toBe(OTHER);
+    // one spelling per chart key; the flush decides whether the key is anyone's
+    expect(routeOf("/chart/binance:BTCUSDT")).toBe("/chart/binance%3ABTCUSDT");
+    expect(routeOf("/chart/binance%3ABTCUSDT")).toBe("/chart/binance%3ABTCUSDT");
+    expect(routeOf("/chart/%E0%A4%A")).toBe(ANY_CHART);
+    expect(routeOf(`/chart/${"x".repeat(101)}`)).toBe(ANY_CHART);
+  });
+
+  it("knows every page and route handler under src/app", () => {
+    const app = path.join(__dirname, "..", "src", "app");
+    const found = (fs.readdirSync(app, { recursive: true }) as string[])
+      .filter((f) => /(^|\/)(page\.tsx|route\.ts)$/.test(f))
+      .map((f) => "/" + path.dirname(f).replace(/^\.$/, ""))
+      .map((r) => (r === "/" ? r : r.replace(/\/$/, "")))
+      .sort();
+    expect(found).toEqual([...ROUTES, "/chart/[key]"].sort());
   });
 
   it("takes CF-Connecting-IP behind the tunnel and the socket address on the tailnet", () => {
@@ -62,30 +86,68 @@ describe("upstream rate limits", () => {
 describe("aggregation", () => {
   // 2026-10-06 15:00 UTC is midnight in Tokyo
   const midnight = Date.UTC(2026, 9, 6, 15) / 60000;
+  const oct6 = Date.UTC(2026, 9, 6) / 1000;
+  const oct7 = oct6 + DAY;
   const hit = (over: Partial<Hit>): Hit => ({ minute: midnight, origin: "public", kind: "page", path: "/", visitor: "v1", session: "", n: 1, last: midnight * 60, ...over });
 
-  it("minutes become local days, sessions become logins, equal rows add up", () => {
-    const rows = trafficRows(
+  it("paths: minutes become local days, charts of keys nobody has become one route", () => {
+    const rows = pathRows(
       [
         hit({ minute: midnight - 1, n: 2 }),
+        hit({ n: 3, visitor: "v2" }),
+        hit({ path: "/chart/binance%3ABTCUSDT" }),
+        hit({ path: "/chart/random-1" }),
+        hit({ path: "/chart/random-2", n: 4 }),
+        hit({ path: OTHER, kind: "api" }),
+      ],
+      "Asia/Tokyo",
+      (key) => key === "binance:BTCUSDT",
+    );
+    expect(rows).toEqual([
+      { day: oct6, origin: "public", kind: "page", path: "/", n: 2 },
+      { day: oct7, origin: "public", kind: "page", path: "/", n: 3 },
+      { day: oct7, origin: "public", kind: "page", path: "/chart/binance%3ABTCUSDT", n: 1 },
+      { day: oct7, origin: "public", kind: "page", path: "/chart/[key]", n: 5 },
+      { day: oct7, origin: "public", kind: "api", path: OTHER, n: 1 },
+    ]);
+    // the same minutes in UTC are one day
+    expect(new Set(pathRows([hit({ minute: midnight - 1 }), hit({})], "UTC", () => true).map((r) => r.day)).size).toBe(1);
+  });
+
+  it("visitors: sessions become logins, equal rows add up across paths", () => {
+    const rows = visitorRows(
+      [
         hit({ n: 3, last: midnight * 60 + 5 }),
-        hit({ session: "s-alice", n: 1, last: midnight * 60 + 9 }),
-        // a session that has expired is nobody
-        hit({ session: "s-gone", n: 4, last: midnight * 60 + 1 }),
+        hit({ path: "/review", session: "s-alice", last: midnight * 60 + 9 }),
+        // a session that has expired, or was made up, is nobody
+        hit({ path: "/usage", session: "s-gone", n: 4, last: midnight * 60 + 1 }),
         hit({ session: "s-alice", n: 2, last: midnight * 60 + 30 }),
       ],
       "Asia/Tokyo",
-      (s) => ({ "s-alice": "alice" })[s] ?? "",
+      (s: string) => (s === "s-alice" ? "alice" : ""),
     );
-    const oct6 = Date.UTC(2026, 9, 6) / 1000;
-    const oct7 = oct6 + DAY;
     expect(rows).toEqual([
-      { day: oct6, origin: "public", kind: "page", path: "/", visitor: "v1", login: "", n: 2, last: midnight * 60 },
-      { day: oct7, origin: "public", kind: "page", path: "/", visitor: "v1", login: "", n: 7, last: midnight * 60 + 5 },
-      { day: oct7, origin: "public", kind: "page", path: "/", visitor: "v1", login: "alice", n: 3, last: midnight * 60 + 30 },
+      { day: oct7, origin: "public", visitor: "v1", login: "", n: 7, last: midnight * 60 + 5 },
+      { day: oct7, origin: "public", visitor: "v1", login: "alice", n: 3, last: midnight * 60 + 30 },
     ]);
-    // the same minutes in UTC are one day
-    expect(new Set(trafficRows([hit({ minute: midnight - 1 }), hit({})], "UTC", () => "").map((r) => r.day)).size).toBe(1);
+  });
+
+  it("caps the distinct visitors of a day and origin; the rest add up in one row", () => {
+    const row = (visitor: string, origin: "public" | "tailnet" = "public", day = oct7) => ({ day, origin, visitor, login: "", n: 1, last: 1 });
+    const stored = new Set(["a"]);
+    const capped = capVisitors(
+      [row("a"), row("b"), row("c"), row("d"), row("b"), row("x", "tailnet"), row("e", "public", oct6)],
+      (_day, origin, v) => origin === "public" && stored.has(v),
+      (day, origin) => (day === oct7 && origin === "public" ? 1 : 0),
+      2,
+    );
+    expect(capped.map((r) => [r.day === oct7 ? "oct7" : "oct6", r.origin, r.visitor, r.n])).toEqual([
+      ["oct7", "public", "a", 1],
+      ["oct7", "public", "b", 2],
+      ["oct7", "public", OTHER, 2],
+      ["oct7", "tailnet", "x", 1],
+      ["oct6", "public", "e", 1],
+    ]);
   });
 
   it("upstream calls add up per local day and source", () => {
@@ -97,7 +159,6 @@ describe("aggregation", () => {
       ],
       "Asia/Tokyo",
     );
-    const oct7 = Date.UTC(2026, 9, 7) / 1000;
     expect(rows).toEqual([
       { day: oct7, source: "yahoo", requests: 5, failures: 3, limited: 1 },
       { day: oct7, source: "tv", requests: 1, failures: 0, limited: 0 },
@@ -116,23 +177,26 @@ describe("aggregation", () => {
 });
 
 describe("usage limits", () => {
+  const today = Date.UTC(2026, 9, 7) / 1000;
+
   it("only limits that are set and strictly passed", () => {
-    expect(passedLimits({ visitors: null, limited: null }, { visitors: 1e6, limited: 1e6 })).toEqual([]);
-    expect(passedLimits({ visitors: 100, limited: 20 }, { visitors: 100, limited: 21 })).toEqual([{ kind: "limited", value: 21, limit: 20 }]);
-    expect(passedLimits({ visitors: 100, limited: null }, { visitors: 101, limited: 50 })).toEqual([{ kind: "visitors", value: 101, limit: 100 }]);
+    expect(passedLimits({ visitors: null, limited: null }, { visitors: 1e6, limited: 1e6 }, today)).toEqual([]);
+    expect(passedLimits({ visitors: 100, limited: 20 }, { visitors: 100, limited: 21 }, today)).toEqual([{ day: today, kind: "limited", value: 21, limit: 20 }]);
+    expect(passedLimits({ visitors: 100, limited: null }, { visitors: 101, limited: 50 }, today)).toEqual([{ day: today, kind: "visitors", value: 101, limit: 100 }]);
   });
 
-  it("one message for everything passed, with the page link when there is one", () => {
+  it("one message for everything passed, saying which day, with the page link when there is one", () => {
     const { title, text } = usageMessage(
       [
-        { kind: "visitors", value: 235, limit: 200 },
-        { kind: "limited", value: 25, limit: 20 },
+        { day: today - DAY, kind: "limited", value: 25, limit: 20 },
+        { day: today, kind: "visitors", value: 235, limit: 200 },
       ],
+      today,
       "https://market-hebi8.dreaife.tokyo",
     );
     expect(title).toBe("hebi8/market · 使用量提醒");
     expect(text).toContain("今天公网独立访客 235，超过 200");
-    expect(text).toContain("今天上游疑似限流次数 25，超过 20");
+    expect(text).toContain("昨天（10-06）上游疑似限流次数 25，超过 20");
     expect(text).toContain("https://market-hebi8.dreaife.tokyo/usage");
   });
 });

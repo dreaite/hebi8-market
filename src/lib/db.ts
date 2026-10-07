@@ -119,6 +119,29 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
         PRIMARY KEY (kind, day)
       ) WITHOUT ROWID;
     `),
+  (db) =>
+    db.exec(`
+      -- Bounded rows: paths are routes (src/lib/traffic.ts routeOf), and visitors are their own
+      -- table with at most MAX_VISITORS per day and origin (src/lib/usage.ts); the rest is '(其他)'.
+      DROP TABLE traffic;
+      CREATE TABLE traffic (
+        day    INTEGER NOT NULL,
+        origin TEXT    NOT NULL,
+        kind   TEXT    NOT NULL,
+        path   TEXT    NOT NULL,
+        n      INTEGER NOT NULL,
+        PRIMARY KEY (day, origin, kind, path)
+      ) WITHOUT ROWID;
+      CREATE TABLE visitors (
+        day     INTEGER NOT NULL,
+        origin  TEXT    NOT NULL,
+        visitor TEXT    NOT NULL,
+        login   TEXT    NOT NULL,
+        n       INTEGER NOT NULL,
+        last    INTEGER NOT NULL,
+        PRIMARY KEY (day, origin, visitor, login)
+      ) WITHOUT ROWID;
+    `),
 ];
 
 const dbFile = () => process.env.HEBI8_DB ?? path.join(process.cwd(), "data", "hebi8.db");

@@ -68,6 +68,9 @@ function live(all: Record<string, Session>, now = Date.now()): Record<string, Se
   );
 }
 
+/** Every live session in one read of the file, for looking many ids up at once. */
+export const liveSessions = (): Record<string, Session> => live(readSessions());
+
 export function getSession(id: string | undefined): Session | null {
   if (!id || !/^[A-Za-z0-9_-]{20,100}$/.test(id)) return null;
   const s = readSessions()[id];

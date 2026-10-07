@@ -1,4 +1,5 @@
 import { DAY } from "../time";
+import { countUpstream } from "../traffic";
 import type { Bar } from "../series";
 import type { Quote, SourceAdapter } from "./types";
 
@@ -85,9 +86,12 @@ async function usdtBases(): Promise<string[] | null> {
   if (tickers && Date.now() - tickers.at < TICKER_TTL) return tickers.bases;
   loading ??= (async () => {
     try {
-      const res = await fetch(`${BASE_URL}/api/v3/ticker/price`, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
-      if (!res.ok) throw new Error(`Binance ${res.status}`);
-      const rows = (await res.json()) as { symbol: string }[];
+      // counted here, not around search(): a cached list is no request, and a failure falls back below
+      const rows = await countUpstream("binance", async () => {
+        const res = await fetch(`${BASE_URL}/api/v3/ticker/price`, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
+        if (!res.ok) throw new Error(`Binance ${res.status}`);
+        return (await res.json()) as { symbol: string }[];
+      });
       const bases = rows.map((r) => r.symbol).filter((s) => s.endsWith("USDT")).map((s) => s.slice(0, -4));
       tickers = { at: Date.now(), bases };
       return bases;

@@ -179,15 +179,20 @@ CREATE TABLE quotes (                       -- §2.6：盘中轮询拿到的最�
   session TEXT NOT NULL,                                -- open | closed | pre | post | always
   fetched_at INTEGER NOT NULL
 );
-CREATE TABLE traffic (                      -- §1.7：按天聚合的请求计数，保留 90 天
+CREATE TABLE traffic (                      -- §1.7：按天聚合的请求计数，保留 90 天；行数有上限
   day INTEGER NOT NULL,                     -- 实例时区（sync.tz）的日期，UTC 零点的 unix 秒，同 bars.t
   origin TEXT NOT NULL,                     -- public（隧道）| tailnet
   kind TEXT NOT NULL,                       -- page | prefetch | action | api
-  path TEXT NOT NULL,                       -- 不含查询串，最长 200
+  path TEXT NOT NULL,                       -- 路由：本应用的路由、/chart/<有人有的 key>、/chart/[key] 或 (其他)
+  n INTEGER NOT NULL,
+  PRIMARY KEY (day, origin, kind, path)
+) WITHOUT ROWID;
+CREATE TABLE visitors (                     -- §1.7：每天每个 origin 最多 2000 个访客，之后的合进 visitor = '(其他)'
+  day INTEGER NOT NULL, origin TEXT NOT NULL,
   visitor TEXT NOT NULL,                    -- 客户端 IP 的加盐 HMAC 前 16 位，不存明文 IP
   login TEXT NOT NULL,                      -- 有会话时的 GitHub login（小写），否则 ''
   n INTEGER NOT NULL, last INTEGER NOT NULL,-- 请求数；最近一次的 unix 秒
-  PRIMARY KEY (day, origin, kind, path, visitor, login)
+  PRIMARY KEY (day, origin, visitor, login)
 ) WITHOUT ROWID;
 CREATE TABLE upstream (                     -- §1.7：按天、按源的上游调用
   day INTEGER NOT NULL, source TEXT NOT NULL,
@@ -235,11 +240,12 @@ CREATE TABLE usage_alerts (kind TEXT NOT NULL, day INTEGER NOT NULL, PRIMARY KEY
 
 - **记录挂在 proxy**（`src/proxy.ts`）。这版 Next 的 proxy 默认跑 Node.js runtime，在同一个进程里 `require`，路由之前执行，所以页面、Server Action（对页面的 POST，带 `Next-Action` 头）和 API 路由都经过它；matcher 排除 `_next/static`、`_next/image`、favicon、`icon.svg` 和带静态扩展名的文件。proxy 只往 `globalThis` 上的内存表里加计数（`src/lib/traffic.ts`），不碰数据库。
 - **来源**按 Host 判断：公网域名是隧道（`public`）；IP、单标签名、`localhost`、`*.ts.net` 是 Tailscale（`tailnet`）。**类型**：`/api/*` 是 api，带 `Next-Action` 是 action，带 `Next-Router-Prefetch` 是 prefetch（路由预取，不算浏览，热门路径里不列），其余是 page。
-- **访客**：公网取 `CF-Connecting-IP`，Tailscale 取 Next 填进 `X-Forwarded-For` 的 socket 地址；存 `HMAC-SHA256(盐, IP)` 的前 16 位，盐在配置目录的 `traffic-salt.json`。**登录名**：proxy 只记会话 cookie，落库时换成 login。
-- **落库**（`src/lib/usage.ts`，从 `instrumentation` 启动，`globalThis` 防重复）：每 30 秒一次，或内存里攒到 5000 个不同的键时提前；同一天、同一组维度的行累加。进程退出丢最后几十秒的计数，可以接受。每小时删一次 90 天以前的行。监控数据只在 `data/hebi8.db`，不进 vault。
-- **上游压力**：`src/lib/sources/index.ts` 把 yahoo、binance、tv 三个适配器的 `fetchDaily` / `search` / `quotes` 包一层，每次调用记一次请求；抛错记失败，错误里有 HTTP 429 / 403 / 418、Too Many Requests、rate limit 的另记「疑似限流」。`data` 源平时读本地文件，只在真正 `git fetch` / `clone` 远端数据集时记一次。按调用计数：Binance 全量拉取的分页、搜索命中本地缓存都算一次。
+- **路径归一**（行数不能被扫描器撑大）：proxy 把路径换成本应用真实存在的路由（`traffic.ts` 的 `ROUTES`，测试对照 `src/app` 下的文件保持同步）；`/chart/<key>` 统一成一种编码，落库时只有 `symbols` 或 `stats` 表里有的 key（也就是有人在看、在同步的品种，含合成标的）才保留，其他归到 `/chart/[key]`；匹配不到任何路由的一律是 `(其他)`。所以 `traffic` 每天的行数 ≤ 2 个 origin × 4 种类型 ×（路由数 + 已有品种数 + 2）。
+- **访客**：公网取 `CF-Connecting-IP`，Tailscale 取 Next 填进 `X-Forwarded-For` 的 socket 地址；存 `HMAC-SHA256(盐, IP)` 的前 16 位，盐在配置目录的 `traffic-salt.json`。访客单独一张表（`visitors`），不和路径交叉：每天每个 origin 最多 `MAX_VISITORS = 2000` 个不同访客，已存的照常累加，新来的超出上限就合进 `(其他)` 这一行，页面上那天的访客数显示成「2000+」。代价是热门路径不再有「每个路径多少访客」。**登录名**：proxy 只记会话 cookie，落库时整批只读一次 `sessions.json`，在内存里查；伪造的 cookie 查不到就是未登录。
+- **落库**（`src/lib/usage.ts`，从 `instrumentation` 启动，`globalThis` 防重复）：每 30 秒一次，或内存里攒到 5000 个不同的键时提前；同一天、同一组维度的行累加。写库失败（锁超时、磁盘满）时这一批合并回内存缓冲，下次再写。进程退出丢最后几十秒的计数，可以接受。每小时删一次 90 天以前的行。监控数据只在 `data/hebi8.db`，不进 vault。
+- **上游压力**：`src/lib/sources/index.ts` 把 yahoo、binance、tv 三个适配器的 `fetchDaily` / `search` / `quotes` 包一层，每次调用记一次请求（Binance 的 `search` 除外：它读缓存一天的交易对列表，由 `usdtBases()` 在真正去取列表时自己记，失败时照样回退到旧列表）；抛错记失败，错误里有 HTTP 429 / 403 / 418、Too Many Requests、rate limit 的另记「疑似限流」。`data` 源平时读本地文件，只在真正 `git fetch` / `clone` 远端数据集时记一次。按调用计数：Binance 全量拉取的分页算一次。
 - **页面 `/usage`**：只有 `viewer.isOwner` 能看，其他人（包括单用户模式）404；入口是页头账号菜单里的「使用情况」。最近 30 天每天的请求数（页面 / 预取 / Action / API）、公网和 Tailscale 的独立访客、登录用户数；今天的热门路径；最近 30 天访客按请求量排行（只显示哈希前 8 位）；各 vault 的品种数、告警数、最近活跃时间；各数据源每天的请求 / 失败 / 疑似限流。打开页面时先落一次库。
-- **阈值提醒**：根 yaml 的 `usage.visitors`（每日公网独立访客）、`usage.limited`（每日上游疑似限流次数），正整数，可省；`/usage` 页面上也能改（Server Action `setUsageLimits`，parseDocument 写回）。每 5 分钟落库后检查一次，超过（严格大于）的种类合成一条消息，发到根 vault 的通道（§2.5 的 `channelsFor('')`）；有通道发送成功才记进 `usage_alerts`，全部失败下次再试；没有通道只打日志。每天每种最多一次。
+- **阈值提醒**：根 yaml 的 `usage.visitors`（每日公网独立访客）、`usage.limited`（每日上游疑似限流次数），正整数，可省；`/usage` 页面上也能改（Server Action `setUsageLimits`，parseDocument 写回）。每 5 分钟落库后检查一次，查今天和昨天（午夜前最后几分钟超过的，过了午夜照样补发，消息里写「昨天（10-06）」），超过（严格大于）且还没提醒过的合成一条消息，发到根 vault 的通道（§2.5 的 `channelsFor('')`）；有通道发送成功才按那一天记进 `usage_alerts`；全部失败或没有通道时只打日志、不记，下次检查再试，当天补好通道也能收到。每天每种最多一次。
 
 ---
 

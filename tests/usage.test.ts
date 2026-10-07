@@ -67,7 +67,7 @@ beforeEach(async () => {
   posts.length = 0;
   failing = false;
   const { getDb } = await import("@/lib/db");
-  getDb().exec("DELETE FROM traffic; DELETE FROM upstream; DELETE FROM usage_alerts;");
+  getDb().exec("DELETE FROM traffic; DELETE FROM visitors; DELETE FROM upstream; DELETE FROM usage_alerts; DELETE FROM symbols;");
   (await import("@/lib/traffic")).drainCounters();
 });
 
@@ -102,12 +102,13 @@ describe("request counting", () => {
 
     const today = usageDay();
     const [day] = dailyTraffic(today, 30);
-    expect(day).toEqual({ day: today, requests: 7, page: 4, prefetch: 1, action: 1, api: 1, publicVisitors: 2, tailnetVisitors: 1, logins: 1 });
+    expect(day).toEqual({ day: today, requests: 7, page: 4, prefetch: 1, action: 1, api: 1, publicVisitors: 2, tailnetVisitors: 1, publicFull: 0, tailnetFull: 0, logins: 1 });
+    // no symbol is synced in this vault, so the chart key is not kept
     expect(topPaths(today)).toEqual([
-      { path: "/", kind: "page", requests: 3, visitors: 2 },
-      { path: "/api/bars", kind: "api", requests: 1, visitors: 1 },
-      { path: "/chart/binance%3ABTCUSDT", kind: "action", requests: 1, visitors: 1 },
-      { path: "/chart/binance%3ABTCUSDT", kind: "page", requests: 1, visitors: 1 },
+      { path: "/", kind: "page", requests: 3 },
+      { path: "/api/bars", kind: "api", requests: 1 },
+      { path: "/chart/[key]", kind: "action", requests: 1 },
+      { path: "/chart/[key]", kind: "page", requests: 1 },
     ]);
     const visitors = topVisitors(today, 30);
     expect(visitors.map((v) => [v.origin, v.requests, v.logins])).toEqual([
@@ -118,7 +119,7 @@ describe("request counting", () => {
     expect(lastSeen().has("alice")).toBe(true);
 
     // no address anywhere in the table, and the salt is a secret
-    const dump = JSON.stringify(getDb().prepare("SELECT * FROM traffic").all());
+    const dump = JSON.stringify([getDb().prepare("SELECT * FROM traffic").all(), getDb().prepare("SELECT * FROM visitors").all()]);
     for (const ip of ["203.0.113.9", "198.51.100.4", "100.64.0.7"]) expect(dump).not.toContain(ip);
     expect(fs.statSync(path.join(secrets, "traffic-salt.json")).mode & 0o777).toBe(0o600);
 
@@ -126,6 +127,67 @@ describe("request counting", () => {
     proxy(tunnel("/", "203.0.113.9"));
     flushUsage();
     expect(dailyTraffic(today, 1)[0].requests).toBe(8);
+  });
+
+  it("a scanner with random paths and changing addresses adds a bounded number of rows", async () => {
+    const { proxy } = await import("@/proxy");
+    const { flushUsage, MAX_VISITORS, topPaths, usageDay, dailyTraffic } = await import("@/lib/usage");
+    const { getDb } = await import("@/lib/db");
+    getDb().prepare("INSERT INTO symbols (key, source, ticker) VALUES ('binance:BTCUSDT', 'binance', 'BTCUSDT')").run();
+    for (let i = 0; i < 10_000; i++) {
+      const ip = `10.${(i >> 16) & 255}.${(i >> 8) & 255}.${i & 255}`;
+      proxy(tunnel(i % 2 ? `/random-${i}` : `/chart/random-${i}`, ip));
+      if (i % 1000 === 0) flushUsage();
+    }
+    proxy(tunnel("/chart/binance%3ABTCUSDT", "203.0.113.9"));
+    flushUsage();
+    const count = (table: string) => (getDb().prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+    expect(count("traffic")).toBe(3);
+    expect(topPaths(usageDay())).toEqual([
+      { path: "(其他)", kind: "page", requests: 5000 },
+      { path: "/chart/[key]", kind: "page", requests: 5000 },
+      { path: "/chart/binance%3ABTCUSDT", kind: "page", requests: 1 },
+    ]);
+    expect(count("visitors")).toBe(MAX_VISITORS + 1);
+    const [day] = dailyTraffic(usageDay(), 1);
+    expect([day.requests, day.publicVisitors, day.publicFull]).toEqual([10_001, MAX_VISITORS, 1]);
+    const other = getDb().prepare("SELECT n FROM visitors WHERE visitor = '(其他)'").get() as { n: number };
+    expect(other.n).toBe(10_001 - MAX_VISITORS);
+  });
+
+  it("reads the sessions file once per flush, however many made-up cookies come in", async () => {
+    const { proxy } = await import("@/proxy");
+    const { flushUsage, topVisitors, usageDay } = await import("@/lib/usage");
+    for (let i = 0; i < 1000; i++) proxy(tunnel("/", "203.0.113.9", { session: `fake-session-cookie-${String(i).padStart(8, "0")}` }));
+    proxy(tunnel("/", "203.0.113.9", { session: sessions.alice }));
+    const read = vi.spyOn(fs, "readFileSync");
+    try {
+      flushUsage();
+      expect(read.mock.calls.filter(([file]) => String(file).endsWith("sessions.json"))).toHaveLength(1);
+    } finally {
+      read.mockRestore();
+    }
+    expect(topVisitors(usageDay(), 1).map((v) => [v.requests, v.logins])).toEqual([[1001, "alice"]]);
+  });
+
+  it("a flush that cannot write keeps its counts for the next one", async () => {
+    const { proxy } = await import("@/proxy");
+    const { recordUpstream } = await import("@/lib/traffic");
+    const { flushUsage, dailyTraffic, dailyUpstream, usageDay } = await import("@/lib/usage");
+    const { getDb } = await import("@/lib/db");
+    proxy(tunnel("/", "203.0.113.9"));
+    recordUpstream("yahoo", "limited");
+    getDb().exec("ALTER TABLE upstream RENAME TO upstream_away");
+    try {
+      expect(() => flushUsage()).toThrow();
+    } finally {
+      getDb().exec("ALTER TABLE upstream_away RENAME TO upstream");
+    }
+    // came in while the database was down
+    proxy(tunnel("/", "203.0.113.9"));
+    flushUsage();
+    expect(dailyTraffic(usageDay(), 1)[0].requests).toBe(2);
+    expect(dailyUpstream(usageDay(), 1)).toEqual([{ day: usageDay(), source: "yahoo", requests: 1, failures: 1, limited: 1 }]);
   });
 
   it("calls to sources count requests, failures and suspected rate limits", async () => {
@@ -140,6 +202,19 @@ describe("request counting", () => {
       { day: usageDay(), source: "binance", requests: 3, failures: 2, limited: 1 },
       { day: usageDay(), source: "tv", requests: 1, failures: 1, limited: 0 },
     ]);
+  });
+
+  it("a Binance search whose pair list gets 429 is a limited request, counted once, and still answers", async () => {
+    const { adapters } = await import("@/lib/sources");
+    const { flushUsage, dailyUpstream, usageDay } = await import("@/lib/usage");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("slow down", { status: 429 }));
+    try {
+      expect((await adapters.binance.search!("ETH")).map((h) => h.key)).toEqual(["binance:ETHUSDT"]);
+    } finally {
+      fetchMock.mockRestore();
+    }
+    flushUsage();
+    expect(dailyUpstream(usageDay(), 1)).toEqual([{ day: usageDay(), source: "binance", requests: 1, failures: 1, limited: 1 }]);
   });
 
   it("keeps 90 days", async () => {
@@ -177,7 +252,7 @@ describe("usage limits", () => {
     expect((await checkLimits()).map((p) => p.kind)).toEqual(["visitors"]);
     expect(posts).toEqual([]);
     failing = false;
-    expect(await checkLimits()).toEqual([{ kind: "visitors", value: 3, limit: 2 }]);
+    expect(await checkLimits()).toEqual([{ day: (await import("@/lib/usage")).usageDay(), kind: "visitors", value: 3, limit: 2 }]);
     expect(posts).toHaveLength(1);
     expect(posts[0]).toContain("今天公网独立访客 3，超过 2");
     expect(posts[0]).toContain("https://market-hebi8.dreaife.tokyo/usage");
@@ -189,6 +264,49 @@ describe("usage limits", () => {
     expect((await checkLimits()).map((p) => p.kind)).toEqual(["limited"]);
     expect(await checkLimits()).toEqual([]);
     expect(posts).toHaveLength(2);
+  });
+
+  it("a limit passed just before midnight is still told after it, as that day's", async () => {
+    const { checkLimits } = await import("@/lib/usage");
+    const { getDb } = await import("@/lib/db");
+    fs.writeFileSync(yamlFile, ROOT_YAML + "usage:\n  visitors: 2\n");
+    // 23:59 in Tokyo on 10-07: two visitors, nothing passed yet
+    const oct7 = Date.UTC(2026, 9, 7) / 1000;
+    const before = Date.UTC(2026, 9, 7, 14, 59);
+    const add = getDb().prepare("INSERT INTO visitors (day, origin, visitor, login, n, last) VALUES (?, 'public', ?, '', 1, 0)");
+    add.run(oct7, "v1");
+    add.run(oct7, "v2");
+    expect(await checkLimits(before)).toEqual([]);
+    // a third arrives in the last minute; the next check is 00:04 on 10-08
+    add.run(oct7, "v3");
+    expect(await checkLimits(before + 5 * 60_000)).toEqual([{ day: oct7, kind: "visitors", value: 3, limit: 2 }]);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toContain("昨天（10-07）公网独立访客 3，超过 2");
+    expect(getDb().prepare("SELECT kind, day FROM usage_alerts").all()).toEqual([{ kind: "visitors", day: oct7 }]);
+    expect(await checkLimits(before + 10 * 60_000)).toEqual([]);
+  });
+
+  it("without a channel nothing is marked, so a channel set up later that day still gets it", async () => {
+    const { checkLimits } = await import("@/lib/usage");
+    const { recordUpstream } = await import("@/lib/traffic");
+    const { flushUsage } = await import("@/lib/usage");
+    const { getDb } = await import("@/lib/db");
+    const { readJson, writeJson } = await import("@/lib/secrets");
+    const notify = readJson<Record<string, unknown>>("notify.json")!;
+    fs.writeFileSync(yamlFile, ROOT_YAML + "usage:\n  limited: 1\n");
+    recordUpstream("tv", "limited");
+    recordUpstream("tv", "limited");
+    flushUsage();
+    writeJson("notify.json", {});
+    try {
+      expect((await checkLimits()).map((p) => p.kind)).toEqual(["limited"]);
+      expect(getDb().prepare("SELECT COUNT(*) AS n FROM usage_alerts").get()).toEqual({ n: 0 });
+    } finally {
+      writeJson("notify.json", notify);
+    }
+    expect((await checkLimits()).map((p) => p.kind)).toEqual(["limited"]);
+    expect(posts).toHaveLength(1);
+    expect(await checkLimits()).toEqual([]);
   });
 
   it("the owner sets them from the page, in the root yaml, keeping comments", async () => {

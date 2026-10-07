@@ -2,8 +2,8 @@ import { notFound } from "next/navigation";
 import { UsageLimitsForm } from "@/components/UsageLimitsForm";
 import { allItems } from "@/lib/config";
 import type { Source } from "@/lib/symbols";
-import type { Kind } from "@/lib/traffic";
-import { dailyTraffic, dailyUpstream, flushUsage, KEEP_DAYS, lastSeen, topPaths, topVisitors, usageDay, type UpstreamRow } from "@/lib/usage";
+import { OTHER, type Kind } from "@/lib/traffic";
+import { dailyTraffic, dailyUpstream, flushUsage, KEEP_DAYS, MAX_VISITORS, lastSeen, topPaths, topVisitors, usageDay, type UpstreamRow } from "@/lib/usage";
 import { listVaults, readConfigSafe } from "@/lib/vault";
 import { getViewer } from "@/lib/viewer";
 
@@ -106,8 +106,14 @@ export default async function UsagePage() {
                   <td className={tdr}>{num(d.prefetch)}</td>
                   <td className={tdr}>{num(d.action)}</td>
                   <td className={tdr}>{num(d.api)}</td>
-                  <td className={tdr}>{num(d.publicVisitors)}</td>
-                  <td className={tdr}>{num(d.tailnetVisitors)}</td>
+                  <td className={tdr} title={d.publicFull ? `到了每天 ${MAX_VISITORS} 个的上限，之后的访客合在一起计` : undefined}>
+                    {num(d.publicVisitors)}
+                    {d.publicFull ? "+" : ""}
+                  </td>
+                  <td className={tdr} title={d.tailnetFull ? `到了每天 ${MAX_VISITORS} 个的上限，之后的访客合在一起计` : undefined}>
+                    {num(d.tailnetVisitors)}
+                    {d.tailnetFull ? "+" : ""}
+                  </td>
                   <td className={tdr}>{num(d.logins)}</td>
                 </tr>
               ))}
@@ -128,7 +134,6 @@ export default async function UsagePage() {
                   <th className={th}>路径</th>
                   <th className={`${th} w-16`}>类型</th>
                   <th className={`${thr} w-16`}>请求</th>
-                  <th className={`${thr} w-16`}>访客</th>
                 </tr>
               </thead>
               <tbody>
@@ -139,7 +144,6 @@ export default async function UsagePage() {
                     </td>
                     <td className={`${td} text-muted`}>{KIND_LABELS[p.kind]}</td>
                     <td className={tdr}>{num(p.requests)}</td>
-                    <td className={tdr}>{num(p.visitors)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -166,7 +170,7 @@ export default async function UsagePage() {
               <tbody>
                 {visitors.map((v) => (
                   <tr key={`${v.origin}:${v.visitor}`}>
-                    <td className={`${td} font-mono`}>{v.visitor.slice(0, 8)}</td>
+                    <td className={`${td} font-mono`}>{v.visitor === OTHER ? "(上限外)" : v.visitor.slice(0, 8)}</td>
                     <td className={`${td} text-muted`}>{v.origin === "public" ? "公网" : "Tailscale"}</td>
                     <td className={tdr}>{num(v.requests)}</td>
                     <td className={tdr}>{v.days}</td>

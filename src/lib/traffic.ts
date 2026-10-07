@@ -48,7 +48,6 @@ interface Counters {
 }
 
 const FLUSH_AT = 5000;
-const MAX_PATH = 200;
 const SALT_FILE = "traffic-salt.json";
 
 const g = globalThis as unknown as { hebi8mTraffic?: Counters };
@@ -59,6 +58,46 @@ export function originOf(host: string | null): Origin {
   const name = (host ?? "").toLowerCase().replace(/:\d+$/, "");
   if (!name || name.startsWith("[") || name === "localhost" || !name.includes(".") || name.endsWith(".ts.net")) return "tailnet";
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(name) ? "tailnet" : "public";
+}
+
+/** Every page and route handler under `src/app` except `/chart/[key]`; tests/traffic.test.ts keeps this in step with the files. */
+export const ROUTES = new Set([
+  "/",
+  "/review",
+  "/usage",
+  "/api/bars",
+  "/api/search",
+  "/api/help",
+  "/api/github/device",
+  "/api/github/device/poll",
+  "/api/github/issues",
+  "/api/github/logout",
+  "/api/notify",
+  "/api/notify/bot",
+  "/api/notify/telegram",
+  "/api/notify/telegram/cancel",
+  "/api/notify/telegram/poll",
+  "/api/notify/test",
+  "/api/notify/webhook",
+]);
+/** Where every path that is no route of this app goes, so scanners cannot add rows */
+export const OTHER = "(其他)";
+/** A chart whose key is no symbol anyone has; the flush decides, it can see the database */
+export const ANY_CHART = "/chart/[key]";
+const MAX_KEY = 100;
+
+/** The route a path belongs to; a chart keeps its key (in one spelling) until the flush checks it. */
+export function routeOf(pathname: string): string {
+  const p = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  if (ROUTES.has(p)) return p;
+  const chart = /^\/chart\/([^/]+)$/.exec(p);
+  if (!chart) return OTHER;
+  try {
+    const key = decodeURIComponent(chart[1]);
+    return key.length > MAX_KEY ? ANY_CHART : `/chart/${encodeURIComponent(key)}`;
+  } catch {
+    return ANY_CHART;
+  }
 }
 
 /** Server Actions are POSTs to a page with `Next-Action`; router prefetches are counted apart from views. */
@@ -104,17 +143,21 @@ export function recordRequest(req: RequestInfo, now = Date.now()): void {
     minute: Math.floor(now / 60000),
     origin,
     kind: kindOf(req.pathname, req.headers),
-    path: req.pathname.slice(0, MAX_PATH),
+    path: routeOf(req.pathname),
     visitor: visitorId(clientIp(origin, req.headers), salt()),
     session: req.session ?? "",
   };
+  addHit({ ...hit, n: 1, last: Math.floor(now / 1000) });
+}
+
+function addHit(hit: Hit): void {
   const key = [hit.minute, hit.origin, hit.kind, hit.path, hit.visitor, hit.session].join("\t");
   const seen = counters.hits.get(key);
   if (seen) {
-    seen.n++;
-    seen.last = Math.floor(now / 1000);
+    seen.n += hit.n;
+    seen.last = Math.max(seen.last, hit.last);
   } else {
-    counters.hits.set(key, { ...hit, n: 1, last: Math.floor(now / 1000) });
+    counters.hits.set(key, { ...hit });
     if (counters.hits.size >= FLUSH_AT) counters.flushSoon?.();
   }
 }
@@ -128,12 +171,15 @@ export function isRateLimited(err: unknown): boolean {
 }
 
 export function recordUpstream(source: Source, outcome: Outcome, now = Date.now()): void {
-  const minute = Math.floor(now / 60000);
-  const key = `${minute}\t${source}`;
-  const row = counters.upstream.get(key) ?? { minute, source, requests: 0, failures: 0, limited: 0 };
-  row.requests++;
-  if (outcome !== "ok") row.failures++;
-  if (outcome === "limited") row.limited++;
+  addUpstream({ minute: Math.floor(now / 60000), source, requests: 1, failures: outcome === "ok" ? 0 : 1, limited: outcome === "limited" ? 1 : 0 });
+}
+
+function addUpstream(hit: UpstreamHit): void {
+  const key = `${hit.minute}\t${hit.source}`;
+  const row = counters.upstream.get(key) ?? { minute: hit.minute, source: hit.source, requests: 0, failures: 0, limited: 0 };
+  row.requests += hit.requests;
+  row.failures += hit.failures;
+  row.limited += hit.limited;
   counters.upstream.set(key, row);
 }
 
@@ -155,6 +201,12 @@ export function drainCounters(): { hits: Hit[]; upstream: UpstreamHit[] } {
   counters.hits.clear();
   counters.upstream.clear();
   return out;
+}
+
+/** A drained batch that could not be written goes back, added to whatever came in meanwhile. */
+export function restoreCounters(batch: { hits: Hit[]; upstream: UpstreamHit[] }): void {
+  batch.hits.forEach(addHit);
+  batch.upstream.forEach(addUpstream);
 }
 
 export function onBufferFull(flush: (() => void) | undefined): void {
