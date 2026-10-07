@@ -1,9 +1,9 @@
 /** Typed view of `vault/hebi8.yaml`; pure so it can be tested without a file system. */
 import { compile } from "@/indicators/formula";
-import { describeCondition, parseCondition, type AlertCondition, type AlertTrigger } from "./alert-conds";
+import { ALERT_CONDS, describeCondition, parseCondition, type AlertCondition, type AlertTrigger } from "./alert-conds";
 import { CHANGE_PERIODS, DEFAULT_PERIODS, MAX_PERIODS, type ChangePeriod } from "./periods";
 import type { Prices } from "./series";
-import { DATA_ID, hash6, isSynthetic, isTimeframe, isValidKey, tickerOf, type Timeframe } from "./symbols";
+import { DATA_ID, TF_LABELS, hash6, isSynthetic, isTimeframe, isValidKey, tickerOf, type Timeframe } from "./symbols";
 import { parseSynth } from "./synth";
 
 export type UpDown = "green-up" | "red-up";
@@ -35,20 +35,15 @@ export interface FormulaDef {
   formula: string;
 }
 
-export interface ConditionDef {
-  id: string;
-  label: string;
-  formula: string;
-  tf: Timeframe;
-  /** Push a message after a sync when this condition newly holds for a watched symbol */
-  notify: boolean;
-}
-
-/** A price alert on one symbol (§2.6): a TradingView-style condition or a formula. */
+/**
+ * An alert (§2.6): a TradingView-style condition or a formula, on one symbol or, without a key,
+ * on every watched symbol. The overview shows each one under its name.
+ */
 export interface AlertDef {
   /** `alert:<id>` when given in the yaml, else a hash of the key and the condition (or formula and timeframe) */
   id: string;
-  key: string;
+  /** Null: every watched symbol, judged after each daily sync */
+  key: string | null;
   /** As written, or generated: 「BTC 上穿 130,000」 */
   label: string;
   /** What a message says after the symbol's name: the written label, else the condition or formula */
@@ -60,8 +55,11 @@ export interface AlertDef {
   when: string | null;
   /** Always D for conditions */
   tf: Timeframe;
+  /** Always `bar` for the whole watchlist: each symbol fires at most once per bar */
   trigger: AlertTrigger;
   enabled: boolean;
+  /** False: only shown on the overview, never pushed */
+  notify: boolean;
 }
 
 export type ParamOverrides = Partial<Record<Timeframe, Record<string, number[]>>>;
@@ -89,7 +87,7 @@ export interface Config {
   aliases: Record<string, string>;
   groups: Group[];
   indicators: FormulaDef[];
-  conditions: ConditionDef[];
+  /** Including the old `conditions` list, read as alerts on the whole watchlist */
   alerts: AlertDef[];
   /** Dataset name → git URL or local directory (absolute, `~/`, or relative to the vault) */
   datasets: Record<string, string>;
@@ -223,18 +221,13 @@ export function normalizeConfig(raw: unknown): Config {
     return [{ id, label: text(d.label) ?? id, pane: d.pane === "main" ? ("main" as const) : ("sub" as const), formula }];
   });
 
-  const conditions = list(root.conditions).flatMap((raw, i) => {
-    const d = obj(raw);
-    const id = text(d.id);
-    const formula = text(d.formula);
-    if (!id || !formula) throw new ConfigError(`conditions[${i}]：需要 id 和 formula`);
-    return [{ id, label: text(d.label) ?? id, formula, tf: isTimeframe(d.tf) ? d.tf : ("W" as const), notify: d.notify === true }];
-  });
-
-  const alerts = list(root.alerts).map((raw, i) => parseAlert(raw, i, aliases));
+  const alerts = [
+    ...list(root.alerts).map((raw, i) => parseAlert(raw, i, aliases)),
+    ...list(root.conditions).map((raw, i) => parseAlert(conditionAsAlert(raw), i, aliases, "conditions")),
+  ];
   const ids = new Set<string>();
   for (const a of alerts) {
-    if (ids.has(a.id)) throw new ConfigError(`alerts：重复的规则「${a.id.slice(6)}」，同一标的同一条件只写一次，或给每条写不同的 id`);
+    if (ids.has(a.id)) throw new ConfigError(`alerts：重复的规则「${a.id.slice(6)}」，同一条件只写一次，或给每条写不同的 id`);
     ids.add(a.id);
   }
 
@@ -271,7 +264,6 @@ export function normalizeConfig(raw: unknown): Config {
     aliases,
     groups: parseGroups(root.groups, aliases),
     indicators,
-    conditions,
     alerts,
     datasets,
     chart: {
@@ -300,14 +292,30 @@ export function normalizeUserConfig(raw: unknown, root: Config): Config {
 /** The short name an alert's generated label uses: the alias, else the ticker. */
 const shortName = (key: string, aliases: Record<string, string>) => Object.entries(aliases).find(([, k]) => k === key)?.[0] ?? tickerOf(key);
 
-/** One entry of `alerts`; exported so a write-back can find an entry by its id. */
-export function parseAlert(raw: unknown, i: number, aliases: Record<string, string>): AlertDef {
+/**
+ * An entry of the old `conditions` list (`{ id, label, formula, tf: W by default, notify }`) as the
+ * alert on the whole watchlist it now is; the first alert edit in the UI moves them into `alerts`.
+ */
+export function conditionAsAlert(raw: unknown): Record<string, unknown> {
   const d = obj(raw);
-  const where = `alerts[${i}]`;
+  // condition ids were free text; one an alert id cannot be is dropped, which only resets its state
+  const id = typeof d.id === "string" && /^[A-Za-z0-9_-]+$/.test(d.id.trim()) ? d.id : undefined;
+  return { id, label: d.label ?? d.id, when: d.formula, tf: d.tf ?? "W", notify: d.notify === true };
+}
+
+/** 「收盘价上穿 130,000」, 「5 根 K 线内上涨 3%」, or the formula with its timeframe. */
+export function describeAlert(a: Pick<AlertDef, "condition" | "when" | "tf">): string {
+  if (a.condition) return a.condition.cond.startsWith("moving_") ? describeCondition(a.condition) : `收盘价${describeCondition(a.condition)}`;
+  return `${TF_LABELS[a.tf]}线公式 ${a.when}`;
+}
+
+/** One entry of `alerts`; exported so a write-back can find an entry by its id. */
+export function parseAlert(raw: unknown, i: number, aliases: Record<string, string>, list = "alerts"): AlertDef {
+  const d = obj(raw);
+  const where = `${list}[${i}]`;
   const ref = text(d.key);
-  if (!ref) throw new ConfigError(`${where}：需要 key`);
-  const key = resolveKey(ref, aliases);
-  checkKey(key, aliases, `${where}.key`);
+  const key = ref ? resolveKey(ref, aliases) : null;
+  if (key) checkKey(key, aliases, `${where}.key`);
   const when = text(d.when);
   if (when && d.cond !== undefined) throw new ConfigError(`${where}：when 和 cond 只能写一个`);
   if (!when && d.cond === undefined) throw new ConfigError(`${where}：需要 cond + value，或 when 公式`);
@@ -318,21 +326,25 @@ export function parseAlert(raw: unknown, i: number, aliases: Record<string, stri
     } catch (err) {
       throw new ConfigError(`${where}：${err instanceof Error ? err.message : String(err)}`);
     }
+    if (!key && ALERT_CONDS[condition.cond].value !== "move") throw new ConfigError(`${where}：价格和通道条件要写 key；不写 key 的警报对全部自选生效，只能用涨跌 % 或 when 公式`);
   }
-  const trigger = d.trigger ?? "once";
+  const trigger = key ? (d.trigger ?? "once") : "bar";
   if (trigger !== "once" && trigger !== "bar") throw new ConfigError(`${where}：trigger 应为 once 或 bar`);
-  if (d.enabled !== undefined && typeof d.enabled !== "boolean") throw new ConfigError(`${where}：enabled 应为 true 或 false`);
+  for (const flag of ["enabled", "notify"]) {
+    if (d[flag] !== undefined && typeof d[flag] !== "boolean") throw new ConfigError(`${where}：${flag} 应为 true 或 false`);
+  }
   const tf = when && isTimeframe(d.tf) ? d.tf : ("D" as const);
   const own = text(d.id);
   if (own && !/^[A-Za-z0-9_-]+$/.test(own)) throw new ConfigError(`${where}：id「${own}」只能用字母、数字、下划线、横线`);
   // pausing or switching the trigger keeps the id, so the alert keeps its state
-  const identity = condition ? `${key}|${condition.cond}|${JSON.stringify(condition.value)}` : `${key}|${when}|${tf}`;
+  const scope = key ?? "*";
+  const identity = condition ? `${scope}|${condition.cond}|${JSON.stringify(condition.value)}` : `${scope}|${when}|${tf}`;
   const label = text(d.label);
   const what = condition ? describeCondition(condition) : when!;
   return {
     id: `alert:${own ?? hash6(identity)}`,
     key,
-    label: label ?? (condition ? `${shortName(key, aliases)} ${what}` : what),
+    label: label ?? (condition && key ? `${shortName(key, aliases)} ${what}` : what),
     text: label ?? what,
     ownLabel: label,
     condition,
@@ -340,6 +352,7 @@ export function parseAlert(raw: unknown, i: number, aliases: Record<string, stri
     tf,
     trigger,
     enabled: d.enabled !== false,
+    notify: d.notify !== false,
   };
 }
 
@@ -374,7 +387,7 @@ export function syncKeys(cfg: Config, extra: string[] = []): string[] {
     add(item.key);
     if (item.bench) add(item.bench);
   }
-  for (const formula of [...cfg.indicators, ...cfg.conditions].map((d) => d.formula).concat(cfg.alerts.flatMap((a) => (a.when ? [a.when] : [])))) {
+  for (const formula of cfg.indicators.map((d) => d.formula).concat(cfg.alerts.flatMap((a) => (a.when ? [a.when] : [])))) {
     try {
       compile(formula, { aliases: cfg.aliases }).refs.forEach(add);
     } catch {
@@ -382,6 +395,7 @@ export function syncKeys(cfg: Config, extra: string[] = []): string[] {
     }
   }
   for (const alert of cfg.alerts) {
+    if (!alert.key) continue;
     add(alert.key);
     const bench = findItem(cfg, alert.key)?.bench;
     if (bench) add(bench);

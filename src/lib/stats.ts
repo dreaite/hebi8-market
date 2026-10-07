@@ -2,8 +2,9 @@ import { CHANGE_PERIODS, type ChangePeriod } from "./periods";
 import { aggregate, closeAtOrBefore, type Bar } from "./series";
 import { DAY } from "./time";
 
+/** A boolean formula on one symbol (an alert's `when`). */
 export interface ConditionResult {
-  /** Last weekly bar (the unfinished current week) and the one before it; null when undefined */
+  /** Last bar of the formula's timeframe (the unfinished one) and the one before it; null when undefined */
   now: boolean | null;
   prev: boolean | null;
   /** Time of the last bar the result is about; absent when the formula failed */
@@ -23,17 +24,13 @@ export interface Stats {
   pos52: number | null;
   /** Weekly closes for the last two years */
   spark: number[];
-  conditions: Record<string, ConditionResult>;
 }
 
 function change(last: number, prev: number | undefined): number | null {
   return prev ? last / prev - 1 : null;
 }
 
-export function computeStats(
-  daily: Bar[],
-  extra: { currency?: string | null; conditions?: Record<string, ConditionResult> } = {},
-): Stats | null {
+export function computeStats(daily: Bar[], extra: { currency?: string | null } = {}): Stats | null {
   const lastBar = daily.at(-1);
   if (!lastBar) return null;
   const { c: last, t } = lastBar;
@@ -65,7 +62,6 @@ export function computeStats(
     ddAth: last / ath - 1,
     pos52: hi > lo ? (last - lo) / (hi - lo) : null,
     spark: aggregate(daily.slice(-800), "W").slice(-104).map((bar) => bar.c),
-    conditions: extra.conditions ?? {},
   };
 }
 

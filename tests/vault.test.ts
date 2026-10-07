@@ -47,7 +47,7 @@ describe("normalizeConfig", () => {
     expect(cfg.groups[4].symbols[0].key).toBe("=BTC/GOLD");
     expect(cfg.periods).toEqual(["1W", "1M", "1Y"]);
     expect(cfg.chart).toEqual({ tf: "W", log: true, style: "candle_solid", indicators: ["MA", "VOL"], params: { W: { MA: [10, 40, 200] } } });
-    expect(cfg.conditions[3]).toEqual({ id: "rs_high", label: "RS新高", formula: "rs = close / close(bench); rs >= highest(rs, 26)", tf: "W", notify: false });
+    // nothing is assigned: alerts are each person's own
     expect(cfg.alerts).toEqual([]);
   });
 

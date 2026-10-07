@@ -132,11 +132,11 @@ describe("resolveViewer", () => {
     expect(alice).toMatchObject({ vault: "alice", dir: path.join(users, "alice"), login: "Alice", canWrite: true, isOwner: false, shared: true });
 
     const text = read(users, "alice", "hebi8.yaml");
-    for (const gone of ["owner:", "sync:", "datasets:", "alerts:", "站上 100"]) expect(text).not.toContain(gone);
+    // nothing is assigned: neither the owner's alerts nor the old conditions come along
+    for (const gone of ["owner:", "sync:", "datasets:", "alerts:", "站上 100", "conditions:", "上涨"]) expect(text).not.toContain(gone);
     expect(text.startsWith("# 共用实例的根 vault\n")).toBe(true);
     expect(text).toContain("# 比特币");
     expect(text).toContain("# 先看币");
-    expect(text).toContain("{ id: up, label: 上涨");
     expect(fs.existsSync(path.join(users, "alice", "notes"))).toBe(false);
 
     const { readConfig } = await import("@/lib/vault");
@@ -256,17 +256,15 @@ describe("stats and alerts per vault", () => {
     conditions: [{ id: "down", label: "下跌", formula: "close < ref(close, 1)", tf: "D", notify: true }],
   });
 
-  it("keeps each vault's conditions in its own stats rows", async () => {
+  it("keeps each vault's stats in its own rows", async () => {
     const { recomputeStats } = await import("@/lib/sync");
     const { ensureSymbol, readAllStats, writeBars } = await import("@/lib/store");
     ensureSymbol(KEY);
     writeBars(KEY, bars([90, 95, 101]), "replace");
     recomputeStats("", rootCfg);
     recomputeStats("alice", aliceCfg);
-    expect(Object.keys(readAllStats("")[KEY].conditions)).toEqual(["up"]);
-    expect(Object.keys(readAllStats("alice")[KEY].conditions)).toEqual(["down"]);
-    expect(readAllStats("")[KEY].conditions.up.now).toBe(true);
-    expect(readAllStats("alice")[KEY].conditions.down.now).toBe(false);
+    expect(readAllStats("")[KEY].last).toBe(101);
+    expect(readAllStats("alice")[KEY].last).toBe(101);
     expect(readAllStats("bob")).toEqual({});
   });
 
@@ -290,7 +288,7 @@ describe("stats and alerts per vault", () => {
     const { statsFor } = await import("@/lib/sync");
     const { readAllStats } = await import("@/lib/store");
     expect(readAllStats("carol")).toEqual({});
-    expect(statsFor("carol", aliceCfg)[KEY].conditions.down.now).toBe(false);
+    expect(statsFor("carol", aliceCfg)[KEY].last).toBe(101);
     expect(Object.keys(readAllStats("carol"))).toEqual([KEY]);
   });
 
@@ -310,19 +308,20 @@ describe("stats and alerts per vault", () => {
     const { runAlerts } = await import("@/lib/alerts");
     const { writeBars } = await import("@/lib/store");
     const { getDb } = await import("@/lib/db");
-    const run = async () => ({ root: (await runAlerts({ id: "", dir: root }, () => rootCfg, new Map())).map((e) => e.rule), alice: (await runAlerts({ id: "alice", dir: path.join(users, "alice") }, () => aliceCfg, new Map())).map((e) => e.rule) });
+    const run = async () => ({ root: (await runAlerts({ id: "", dir: root }, () => rootCfg)).map((e) => e.rule), alice: (await runAlerts({ id: "alice", dir: path.join(users, "alice") }, () => aliceCfg)).map((e) => e.rule) });
 
     writeBars(KEY, bars([90, 95, 101]), "replace");
     expect(await run()).toEqual({ root: [], alice: [] }); // first sighting everywhere
-    const rows = getDb().prepare("SELECT vault, rule FROM alert_state ORDER BY vault").all();
+    const rows = getDb().prepare("SELECT vault, rule FROM alert_state ORDER BY vault, rule").all();
+    // the old conditions are alerts on the whole watchlist now
     expect(rows).toEqual([
-      { vault: "", rule: rootCfg.alerts[0].id },
-      { vault: "alice", rule: "cond:down" },
+      ...[rootCfg.alerts[0].id, "alert:up"].sort().map((rule) => ({ vault: "", rule })),
+      { vault: "alice", rule: "alert:down" },
     ]);
 
     writeBars(KEY, bars([90, 95, 101, 99]), "replace");
-    expect(await run()).toEqual({ root: [], alice: ["cond:down"] });
-    // the root rule's row survived Alice's run, so its turn is noticed
+    expect(await run()).toEqual({ root: [], alice: ["alert:down"] });
+    // the root rule's row survived Alice's run, so its turn is noticed; 上涨 turns too but was never pushed
     writeBars(KEY, bars([90, 95, 101, 99, 102]), "replace");
     expect(await run()).toEqual({ root: [rootCfg.alerts[0].id], alice: [] });
   });

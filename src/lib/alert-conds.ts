@@ -28,6 +28,9 @@ export type AlertCondition =
 
 export const isAlertCond = (v: unknown): v is AlertCond => typeof v === "string" && v in ALERT_CONDS;
 
+/** What an alert without a key covers: every watched symbol. */
+export const WATCHLIST = "全部自选";
+
 /** `once` disables the alert after it fires; `bar` fires at most once per daily bar. */
 export type AlertTrigger = "once" | "bar";
 

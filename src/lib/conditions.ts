@@ -31,9 +31,3 @@ export function evalRule(key: string, formula: string, tf: Timeframe, cfg: Confi
     return { now: null, prev: null, error: describeError(err) };
   }
 }
-
-/** Every condition for one symbol, on the last two bars of the condition's timeframe (weekly by default). */
-export function evalConditions(key: string, cfg: Config): Record<string, ConditionResult> {
-  const cache: SeriesCache = new Map();
-  return Object.fromEntries(cfg.conditions.map((cond) => [cond.id, evalRule(key, cond.formula, cond.tf, cfg, cache)]));
-}

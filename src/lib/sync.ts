@@ -1,9 +1,8 @@
 import { runAlerts } from "./alerts";
 import { loadDaily } from "./bars";
-import { evalConditions } from "./conditions";
 import { allItems, syncKeys, type Config } from "./config";
 import { adapters } from "./sources";
-import { computeStats, type ConditionResult, type Stats } from "./stats";
+import { computeStats, type Stats } from "./stats";
 import { ensureSymbol, getSymbol, hasBars, latestBarTime, listSymbols, markSyncError, markSynced, readAllStats, writeBars, writeStats } from "./store";
 import { parseKey } from "./symbols";
 import { compareKeys, listVaults, readConfig, readConfigSafe, vaultDir, type VaultRef } from "./vault";
@@ -87,26 +86,19 @@ export function unionSyncKeys(vaults: VaultConfig[]): string[] {
   return [...new Set(vaults.flatMap((v) => syncKeys(v.config, compareKeys(v.dir))))];
 }
 
-/**
- * Stats for every watched symbol (synthetic ones included) and benchmark of one vault, from the
- * cache only. Returns the condition results by key so the alerts pass does not evaluate them twice.
- */
-export function recomputeStats(vault: string, cfg: Config): Map<string, Record<string, ConditionResult>> {
-  const results = new Map<string, Record<string, ConditionResult>>();
+/** Stats for every watched symbol (synthetic ones included) and benchmark of one vault, from the cache only. */
+export function recomputeStats(vault: string, cfg: Config): void {
   const symbols = listSymbols();
   const items = allItems(cfg);
   const keys = new Set([...items.map((i) => i.key), ...items.flatMap((i) => (i.bench ? [i.bench] : []))]);
   for (const key of keys) {
     try {
       const daily = loadDaily(key, cfg.prices, cfg);
-      const conditions = daily.length ? evalConditions(key, cfg) : {};
-      results.set(key, conditions);
-      writeStats(vault, key, computeStats(daily, { currency: symbols[key]?.currency ?? null, conditions }));
+      writeStats(vault, key, computeStats(daily, { currency: symbols[key]?.currency ?? null }));
     } catch (err) {
       console.warn(`[hebi8m] stats for ${key} failed: ${message(err)}`);
     }
   }
-  return results;
 }
 
 /**
@@ -135,13 +127,13 @@ export function syncAll(force = false): Promise<SyncOutcome[]> {
     const vaults = loadVaults();
     const started = Date.now();
     const results = await syncMany(unionSyncKeys(vaults), force);
-    const conditions = vaults.map((v) => recomputeStats(v.id, v.config));
+    for (const v of vaults) recomputeStats(v.id, v.config);
     const failed = results.filter((r) => !r.ok);
     console.log(
       `[hebi8m] synced ${results.length} symbols in ${((Date.now() - started) / 1000).toFixed(1)}s` +
         (failed.length ? `, failed: ${failed.map((r) => `${r.key} (${r.error})`).join(", ")}` : ""),
     );
-    for (const [i, v] of vaults.entries()) await runAlerts(v, () => readConfig(v.dir), conditions[i], undefined, v.config.conditions);
+    for (const v of vaults) await runAlerts(v, () => readConfig(v.dir));
     return results;
   })().finally(() => {
     allInFlight = null;

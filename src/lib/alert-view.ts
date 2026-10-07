@@ -1,28 +1,33 @@
-/** What the chart's alert lines and alert list show (§5.2), read from the vault, the cache and the quotes table. No network. */
+/** What the alert lines, the alert list and the overview badges show (§2.6, §5.1, §5.2), read from the vault, the cache and the quotes table. No network. */
 import type { AlertCond, AlertCondition, AlertTrigger } from "./alert-conds";
-import { conditionLevels, describeCondition } from "./alert-conds";
-import { alertFiredAt } from "./alerts";
+import { ALERT_CONDS, WATCHLIST, conditionLevels } from "./alert-conds";
+import { alertFiredAt, alertKeys, readState, stateId } from "./alerts";
 import { loadDaily, type DailyReader } from "./bars";
-import type { Config } from "./config";
+import { describeAlert, type AlertDef, type Config } from "./config";
 import { nameOf } from "./names";
 import { liveReader } from "./quotes";
 import { getSymbol, readQuotes, type SymbolRow } from "./store";
+import type { Timeframe } from "./symbols";
+import { currentWeekId } from "./week";
 
 export interface AlertView {
   id: string;
-  key: string;
-  /** Display name of the symbol */
+  /** Null for an alert on the whole watchlist */
+  key: string | null;
+  /** Display name of the symbol, or 全部自选 */
   name: string;
   label: string;
-  /** The condition and its levels (「大于 1」), or the formula; shown under the name whatever the name is */
+  /** In plain words: 「收盘价大于 1」, or the formula with its timeframe; shown under the name whatever the name is */
   summary: string;
   /** The label as written, null when generated */
   ownLabel: string | null;
   cond: AlertCond | null;
   value: AlertCondition["value"] | null;
   when: string | null;
+  tf: Timeframe;
   trigger: AlertTrigger;
   enabled: boolean;
+  notify: boolean;
   /** 活动 / 已触发 (a `once` alert that fired) / 已停止 */
   status: "active" | "triggered" | "stopped";
   /** Price lines on the chart: enabled condition alerts with a level */
@@ -50,23 +55,72 @@ export function alertViews(vault: string, cfg: Config, symbols: Record<string, S
   const fired = alertFiredAt(vault);
   const read = liveReader();
   return cfg.alerts.map((a) => {
-    const { price, at } = latestPrice(a.key, cfg, read);
+    const { price, at } = a.key ? latestPrice(a.key, cfg, read) : { price: null, at: null };
     return {
       id: a.id,
       key: a.key,
-      name: nameOf(cfg, a.key, symbols[a.key]?.name),
+      name: a.key ? nameOf(cfg, a.key, symbols[a.key]?.name) : WATCHLIST,
       label: a.label,
-      summary: a.condition ? describeCondition(a.condition) : `公式 ${a.when}`,
+      summary: describeAlert(a),
       ownLabel: a.ownLabel,
       cond: a.condition?.cond ?? null,
       value: a.condition?.value ?? null,
       when: a.when,
+      tf: a.tf,
       trigger: a.trigger,
       enabled: a.enabled,
+      notify: a.notify,
       status: a.enabled ? "active" : a.trigger === "once" && fired.has(a.id) ? "triggered" : "stopped",
       levels: a.enabled && a.condition ? conditionLevels(a.condition) : [],
       price,
       priceAt: at,
     };
   });
+}
+
+/** 本周新触发 · 已触发 or 成立中 · 未触发 · 已停止 */
+export type BadgeState = "fresh" | "on" | "idle" | "stopped";
+
+export interface AlertBadge {
+  id: string;
+  label: string;
+  state: BadgeState;
+  /** Hover text: the name, the definition in plain words, where it applies, and the state */
+  title: string;
+}
+
+/** How an alert fires, in words: 「全部自选 · 每根 K 线最多一次 · 推送」 */
+export function alertScope(a: Pick<AlertDef, "key" | "trigger" | "notify">): string {
+  return [a.key ? null : WATCHLIST, a.trigger === "once" ? "仅一次" : "每根 K 线最多一次", a.notify ? "推送到通知通道" : "只在总览显示"].filter(Boolean).join(" · ");
+}
+
+/**
+ * Each symbol's alert badges, by key, from the alert state the last checks left. An alert on a
+ * symbol always shows; one on the whole watchlist only where it holds or fired this week (the
+ * week by the clock in `sync.tz`), so it reads like a filter.
+ */
+export function alertBadges(vault: string, cfg: Config, now = new Date()): Record<string, AlertBadge[]> {
+  const rows = readState(vault);
+  const week = currentWeekId(cfg.sync.tz, now);
+  const day = new Intl.DateTimeFormat("zh-CN", { timeZone: cfg.sync.tz, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const out: Record<string, AlertBadge[]> = {};
+  for (const a of cfg.alerts) {
+    // an event (a crossing) holds once it fired; a state or formula holds while it is true
+    const event = a.condition !== null && ALERT_CONDS[a.condition.cond].kind === "event";
+    for (const key of alertKeys(a, cfg)) {
+      const row = rows.get(stateId(a.id, key));
+      const firedAt = row?.firedAt ?? null;
+      const last = firedAt === null ? "" : `（上次触发 ${day.format(firedAt)}）`;
+      let state: BadgeState;
+      let status: string;
+      if (firedAt !== null && currentWeekId(cfg.sync.tz, new Date(firedAt)) === week) [state, status] = ["fresh", `本周新触发（${day.format(firedAt)}）`];
+      else if (!a.enabled) [state, status] = a.trigger === "once" && firedAt !== null ? ["on", `已触发${last}`] : ["stopped", "已停止"];
+      else if (event ? firedAt !== null : row?.state === 1) [state, status] = ["on", event ? `已触发${last}` : `成立中${last}`];
+      else [state, status] = ["idle", `未触发${last}`];
+      if (!a.key && (state === "idle" || state === "stopped")) continue;
+      const title = [a.label, describeAlert(a), alertScope(a), `状态：${status}`].filter((line, i) => i !== 1 || line !== a.label).join("\n");
+      (out[key] ??= []).push({ id: a.id, label: a.label, state, title });
+    }
+  }
+  return out;
 }

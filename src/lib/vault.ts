@@ -42,13 +42,14 @@ export function ensureVault(): void {
 
 /**
  * A person's first visit: their yaml starts as a copy of the root one without the instance
- * settings and the owner's alerts; notes, journal and charts start empty. Returns the directory.
+ * settings and the owner's alerts (the old `conditions` included, nothing is assigned to anyone);
+ * notes, journal and charts start empty. Returns the directory.
  */
 export function ensureUserVault(login: string): string {
   const dir = userVaultDir(login);
   if (fs.existsSync(yamlPath(dir))) return dir;
   const doc = parseYaml(fs.readFileSync(yamlPath(vaultDir()), "utf8"));
-  const drop: string[] = [...INSTANCE_KEYS, "alerts"];
+  const drop: string[] = [...INSTANCE_KEYS, "alerts", "conditions"];
   // the yaml library hangs a file's opening comment on the first key; keep it when that key goes
   const first = isMap(doc.contents) ? doc.contents.items[0]?.key : null;
   if (isScalar(first) && first.commentBefore && drop.includes(String(first.value))) {

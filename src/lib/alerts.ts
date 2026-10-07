@@ -1,14 +1,15 @@
 /**
- * Alerts (§2.5, §2.6): conditions marked `notify` on every watched symbol, judged when a daily sync
- * ends, and the `alerts` list, judged then and after every 5-minute quote round on daily bars
- * whose last one is today's unfinished bar. State lives in the `alert_state` table, per vault, so
- * a restart does not repeat a message and event conditions compare with the previous check.
+ * Alerts (§2.5, §2.6): the `alerts` list. One on a symbol is judged when a daily sync ends and after
+ * every 5-minute quote round, on daily bars whose last one is today's unfinished bar; one without a
+ * key covers every watched symbol and is judged when a daily sync ends. State lives in the
+ * `alert_state` table, per vault, so a restart does not repeat a message, event conditions compare
+ * with the previous check, and the overview can tell which alerts fired when.
  */
-import { isMap, isSeq, type Document } from "yaml";
+import { isMap, isSeq, type Document, type YAMLSeq } from "yaml";
 import { crossed, observe, ALERT_CONDS, type AlertCondition, type AlertTrigger } from "./alert-conds";
 import { loadDaily, type DailyReader } from "./bars";
-import { evalRule } from "./conditions";
-import { allItems, parseAlert, type Config } from "./config";
+import { evalRule, type SeriesCache } from "./conditions";
+import { allItems, conditionAsAlert, parseAlert, type AlertDef, type Config } from "./config";
 import { getDb } from "./db";
 import { nameOf } from "./names";
 import { channelNames, channelsFor, deliver, formatDigest, type AlertEvent } from "./notify";
@@ -28,7 +29,7 @@ export interface StateRow {
 type Decision = { fire: boolean; next: StateRow | null };
 
 /**
- * Formula rules (notify conditions and `when` alerts), pure. Unknown results leave the row alone;
+ * Formula alerts (`when`), pure. Unknown results leave the row alone;
  * the first sighting only records; a rule fires when it turns true, at most once per bar (a
  * weekly condition that flickers inside the unfinished week fires once).
  */
@@ -60,58 +61,61 @@ interface Check {
   tf: Timeframe;
   /** Set for `once` alerts, which are switched off after they fire */
   once: boolean;
+  /** Off: a firing is recorded for the overview but not pushed */
+  notify: boolean;
   decide: (row: StateRow | undefined) => Decision;
 }
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const log = (msg: string) => console.log(`[hebi8m] ${msg}`);
 
-/**
- * Every (rule, symbol) pair to judge. Notify conditions only at the end of a daily sync (reusing
- * the stats pass's results); enabled alerts every time, on the bars `read` gives.
- */
-function checks(cfg: Config, conditions: Map<string, Record<string, ConditionResult>>, read: DailyReader | undefined, who: string, computedConditions: Config["conditions"]): Check[] {
+/** Which alerts a run judges: all of them after a daily sync, the ones on a symbol in a quote round, the whole-watchlist ones after one is saved. */
+export type AlertPass = "sync" | "quotes" | "watchlist";
+
+/** The symbols an alert covers: its own, or every watched one. */
+export const alertKeys = (alert: AlertDef, cfg: Config): string[] => (alert.key ? [alert.key] : allItems(cfg).map((i) => i.key));
+
+/** Every (alert, symbol) pair to judge in this pass, on the bars `read` gives. */
+function checks(cfg: Config, pass: AlertPass, read: DailyReader | undefined, who: string): Check[] {
   const out: Check[] = [];
-  if (!read) {
-    const items = allItems(cfg);
-    for (const cond of cfg.conditions) {
-      if (!cond.notify) continue;
-      const computed = computedConditions.find((c) => c.id === cond.id);
-      for (const item of items) {
-        const cached = computed?.formula === cond.formula && computed.tf === cond.tf ? conditions.get(item.key)?.[cond.id] : undefined;
-        const result = cached ?? evalRule(item.key, cond.formula, cond.tf, cfg);
-        if (result.error) log(`condition ${cond.id} on ${item.key}${who}: ${result.error}`);
-        out.push({ rule: `cond:${cond.id}`, key: item.key, text: cond.label, tf: cond.tf, once: false, decide: (row) => decide(row, result) });
-      }
-    }
-  }
+  // formulas on the same symbol and timeframe share the loaded series
+  const caches = new Map<string, SeriesCache>();
   for (const alert of cfg.alerts) {
-    if (!alert.enabled) continue;
-    const base = { rule: alert.id, key: alert.key, text: alert.text, tf: alert.tf, once: alert.trigger === "once" };
-    if (alert.when) {
-      const result = evalRule(alert.key, alert.when, alert.tf, cfg, new Map(), read);
-      if (result.error) log(`alert ${alert.id} on ${alert.key}${who}: ${result.error}`);
-      out.push({ ...base, decide: (row) => decide(row, result) });
-      continue;
+    if (!alert.enabled || (alert.key ? pass === "watchlist" : pass === "quotes")) continue;
+    // on the whole watchlist one line per alert, not per symbol (`bench` on a symbol without one is common)
+    const failed: { key: string; error: string }[] = [];
+    const fail = (key: string, error: string) => (alert.key ? log(`alert ${alert.id} on ${key}${who}: ${error}`) : failed.push({ key, error }));
+    for (const key of alertKeys(alert, cfg)) {
+      const base = { rule: alert.id, key, text: alert.text, tf: alert.tf, once: alert.trigger === "once", notify: alert.notify };
+      if (alert.when) {
+        const cache = caches.get(key) ?? new Map();
+        caches.set(key, cache);
+        const result = evalRule(key, alert.when, alert.tf, cfg, cache, read);
+        if (result.error) fail(key, result.error);
+        out.push({ ...base, decide: (row) => decide(row, result) });
+        continue;
+      }
+      const condition = alert.condition!;
+      let bars;
+      try {
+        bars = loadDaily(key, cfg.prices, cfg, read);
+      } catch (err) {
+        fail(key, message(err));
+        continue;
+      }
+      const seen = observe(condition, bars);
+      const t = bars.at(-1)?.t ?? null;
+      out.push({ ...base, decide: (row) => decideCondition(condition, alert.trigger, row, seen, t) });
     }
-    const condition = alert.condition!;
-    let bars;
-    try {
-      bars = loadDaily(alert.key, cfg.prices, cfg, read);
-    } catch (err) {
-      log(`alert ${alert.id} on ${alert.key}${who}: ${message(err)}`);
-      continue;
-    }
-    const seen = observe(condition, bars);
-    const t = bars.at(-1)?.t ?? null;
-    out.push({ ...base, decide: (row) => decideCondition(condition, alert.trigger, row, seen, t) });
+    if (failed.length) log(`alert ${alert.id} failed on ${failed.length} watched symbol(s)${who}, ${failed[0].key}: ${failed[0].error}`);
   }
   return out;
 }
 
-const id = (rule: string, key: string) => `${rule}\u0000${key}`;
+export const stateId = (rule: string, key: string) => `${rule}\u0000${key}`;
 
-function readState(vault: string): Map<string, StateRow> {
+/** Every (alert, symbol) row of a vault, by `stateId`. */
+export function readState(vault: string): Map<string, StateRow> {
   const rows = getDb().prepare("SELECT rule, key, state, fired_bar, fired_at FROM alert_state WHERE vault = ?").all(vault) as {
     rule: string;
     key: string;
@@ -119,11 +123,11 @@ function readState(vault: string): Map<string, StateRow> {
     fired_bar: number | null;
     fired_at: number | null;
   }[];
-  return new Map(rows.map((r) => [id(r.rule, r.key), { state: r.state ?? 0, firedBar: r.fired_bar, firedAt: r.fired_at }]));
+  return new Map(rows.map((r) => [stateId(r.rule, r.key), { state: r.state ?? 0, firedBar: r.fired_bar, firedAt: r.fired_at }]));
 }
 
-/** Rows whose rule left the yaml (or was switched off) start over; a quote round only prunes alert rows, it never sees the conditions. */
-function writeState(vault: string, updates: { rule: string; key: string; row: StateRow; fired: boolean }[], keep: Set<string>, alertsOnly: boolean): void {
+/** Rows of an alert that left the yaml, or of a symbol it no longer covers, start over (old `cond:` rows included). */
+function writeState(vault: string, updates: { rule: string; key: string; row: StateRow; fired: boolean }[], keep: Set<string>): void {
   const db = getDb();
   const upsert = db.prepare(
     `INSERT INTO alert_state (vault, rule, key, state, fired_bar, fired_at) VALUES (@vault, @rule, @key, @state, @firedBar, @firedAt)
@@ -135,10 +139,7 @@ function writeState(vault: string, updates: { rule: string; key: string; row: St
     for (const u of updates) {
       upsert.run({ vault, rule: u.rule, key: u.key, state: u.row.state, firedBar: u.row.firedBar, firedAt: u.fired ? Date.now() : null });
     }
-    for (const r of all) {
-      if (keep.has(id(r.rule, r.key)) || (alertsOnly && !r.rule.startsWith("alert:"))) continue;
-      remove.run(vault, r.rule, r.key);
-    }
+    for (const r of all) if (!keep.has(stateId(r.rule, r.key))) remove.run(vault, r.rule, r.key);
   })();
 }
 
@@ -167,10 +168,39 @@ export function alertIndex(doc: Document, alertId: string, aliases: Record<strin
   });
 }
 
+/**
+ * The migration of the old `conditions` list: each entry moves to the end of `alerts` as the alert
+ * on the whole watchlist it is read as (same id, so the same state), and `conditions` goes.
+ */
+function adoptConditions(doc: Document, alerts: YAMLSeq): void {
+  const conditions = doc.get("conditions");
+  for (const item of isSeq(conditions) ? conditions.items : []) {
+    const { id, label, when, tf, notify } = conditionAsAlert(isMap(item) ? item.toJSON() : item);
+    alerts.add(doc.createNode({ ...(id ? { id } : {}), label, when, tf, ...(notify ? {} : { notify: false }) }, { flow: true }));
+  }
+  doc.delete("conditions");
+}
+
+/** Every UI edit of the alerts goes through here, so the old conditions become editable alerts first. */
+export function editAlerts(dir: string, mutate: (doc: Document, alerts: YAMLSeq) => void): Config {
+  return updateConfig(dir, (doc) => {
+    let alerts = doc.get("alerts");
+    if (!isSeq(alerts)) {
+      alerts = doc.createNode([]);
+      doc.set("alerts", alerts);
+    }
+    const seq = alerts as YAMLSeq;
+    // `alerts: []` from the example becomes a block list once it has entries
+    seq.flow = false;
+    if (doc.has("conditions")) adoptConditions(doc, seq);
+    mutate(doc, seq);
+  });
+}
+
 /** Switch alerts on or off in a vault's yaml, keeping comments. */
 export function setAlertsEnabled(dir: string, ids: string[], enabled: boolean): void {
   const aliases = readConfig(dir).aliases;
-  updateConfig(dir, (doc) => {
+  editAlerts(dir, (doc) => {
     for (const alertId of ids) {
       const i = alertIndex(doc, alertId, aliases);
       if (i < 0) continue;
@@ -192,36 +222,38 @@ export function serializeAlerts<T>(run: () => T | Promise<T>): Promise<T> {
 }
 
 /**
- * Judge one vault and deliver its events as one digest. `read` makes it a quote round: alerts only,
- * on live bars. The config is loaded when the run starts, not when it is queued, so a `once` alert
- * switched off (or an alert paused) by the run before is seen as off. Never throws; returns the events.
+ * Judge one vault and deliver its events as one digest. `read` gives the bars (a quote round's live
+ * ones; the daily ones by default). The config is loaded when the run starts, not when it is
+ * queued, so a `once` alert switched off (or an alert paused) by the run before is seen as off.
+ * Never throws; returns the events.
  */
-export function runAlerts(vault: VaultRef, loadConfig: () => Config, conditions: Map<string, Record<string, ConditionResult>>, read?: DailyReader, computedConditions: Config["conditions"] = []): Promise<AlertEvent[]> {
-  return serializeAlerts(() => judge(vault, loadConfig, conditions, read, computedConditions));
+export function runAlerts(vault: VaultRef, loadConfig: () => Config, pass: AlertPass = "sync", read?: DailyReader): Promise<AlertEvent[]> {
+  return serializeAlerts(() => judge(vault, loadConfig, pass, read));
 }
 
-async function judge(vault: VaultRef, loadConfig: () => Config, conditions: Map<string, Record<string, ConditionResult>>, read: DailyReader | undefined, computedConditions: Config["conditions"]): Promise<AlertEvent[]> {
+async function judge(vault: VaultRef, loadConfig: () => Config, pass: AlertPass, read: DailyReader | undefined): Promise<AlertEvent[]> {
   const who = vault.id ? ` (${vault.id})` : "";
   try {
     const cfg = loadConfig();
-    const list = checks(cfg, conditions, read, who, computedConditions);
+    const list = checks(cfg, pass, read, who);
     const state = readState(vault.id);
     const symbols = listSymbols();
-    const updates: { rule: string; key: string; row: StateRow; fired: boolean }[] = [];
+    const updates: { rule: string; key: string; row: StateRow; fired: boolean; notify: boolean }[] = [];
     const events: AlertEvent[] = [];
-    const switchOff: string[] = [];
+    const switchOff: { rule: string; notify: boolean }[] = [];
     const retryOff: string[] = [];
     for (const c of list) {
-      const row = state.get(id(c.rule, c.key));
+      const row = state.get(stateId(c.rule, c.key));
       // Delivery already committed: retry the failed yaml switch-off without sending again.
       if (c.once && row?.firedAt != null) {
         retryOff.push(c.rule);
         continue;
       }
       const { fire, next } = c.decide(row);
-      if (next) updates.push({ rule: c.rule, key: c.key, row: next, fired: fire });
+      if (next) updates.push({ rule: c.rule, key: c.key, row: next, fired: fire, notify: c.notify });
       if (!fire) continue;
-      if (c.once) switchOff.push(c.rule);
+      if (c.once) switchOff.push({ rule: c.rule, notify: c.notify });
+      if (!c.notify) continue;
       let close: number | null = null;
       try {
         close = loadDaily(c.key, cfg.prices, cfg, read ?? readDaily).at(-1)?.c ?? null;
@@ -230,12 +262,12 @@ async function judge(vault: VaultRef, loadConfig: () => Config, conditions: Map<
       }
       events.push({ rule: c.rule, key: c.key, name: nameOf(cfg, c.key, symbols[c.key]?.name), label: c.text, tf: c.tf, close });
     }
-    // a switched-off alert keeps its row, so the list can tell 已触发 from 已停止
-    const keep = new Set([...list.map((c) => id(c.rule, c.key)), ...cfg.alerts.map((a) => id(a.id, a.key))]);
+    // every row an alert in the yaml covers stays, so a switched-off alert can tell 已触发 from 已停止
+    const keep = new Set(cfg.alerts.flatMap((a) => alertKeys(a, cfg).map((key) => stateId(a.id, key))));
     const commit = (delivered: boolean) => {
-      // nothing got through: leave the fired rows (and `once` alerts) as they were so the next check tries again
-      writeState(vault.id, delivered ? updates : updates.filter((u) => !u.fired), keep, Boolean(read));
-      const stopped = [...retryOff, ...(delivered ? switchOff : [])];
+      // nothing got through: leave the pushed rows (and their `once` alerts) as they were so the next check tries again
+      writeState(vault.id, delivered ? updates : updates.filter((u) => !(u.fired && u.notify)), keep);
+      const stopped = [...retryOff, ...switchOff.filter((s) => delivered || !s.notify).map((s) => s.rule)];
       if (stopped.length === 0) return;
       try {
         setAlertsEnabled(vault.dir, stopped, false);

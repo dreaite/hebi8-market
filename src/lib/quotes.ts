@@ -62,7 +62,8 @@ export function quoteKeys(configs: Config[]): string[] {
       } else if (parseKey(key).source !== "data") keys.add(key);
     };
     for (const alert of cfg.alerts) {
-      if (!alert.enabled) continue;
+      // an alert on the whole watchlist is judged after the daily sync only
+      if (!alert.enabled || !alert.key) continue;
       add(alert.key);
       if (!alert.when) continue;
       try {
@@ -177,7 +178,7 @@ export async function quoteRound(now = Date.now(), vaults: VaultConfig[] = loadV
   if (rows.length === 0) return rows;
   writeQuotes(rows);
   const read = liveReader();
-  for (const v of vaults) await runAlerts(v, () => readConfig(v.dir), new Map(), read);
+  for (const v of vaults) await runAlerts(v, () => readConfig(v.dir), "quotes", read);
   return rows;
 }
 

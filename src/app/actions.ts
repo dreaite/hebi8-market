@@ -5,14 +5,14 @@ import { isMap, isScalar, isSeq, type Document, type YAMLMap, type YAMLSeq } fro
 import { compile } from "@/indicators/formula";
 import { describeError } from "@/indicators/formula-indicators";
 import type { AlertCond, AlertCondition, AlertTrigger } from "@/lib/alert-conds";
-import { alertIndex, forgetAlerts, serializeAlerts, setAlertsEnabled } from "@/lib/alerts";
-import { CHART_STYLES, USAGE_LIMITS, findItem, parseAlert, resolveKey, type ChartPrefs, type ConditionDef, type FormulaDef, type UsageLimits } from "@/lib/config";
+import { alertIndex, editAlerts, forgetAlerts, runAlerts, serializeAlerts, setAlertsEnabled } from "@/lib/alerts";
+import { CHART_STYLES, USAGE_LIMITS, findItem, parseAlert, resolveKey, type ChartPrefs, type FormulaDef, type UsageLimits } from "@/lib/config";
 import { CHANGE_PERIODS, MAX_PERIODS } from "@/lib/periods";
 import type { Prices } from "@/lib/series";
 import { getSymbol } from "@/lib/store";
 import { wellKnownName } from "@/lib/wellknown";
 import { isCJK } from "@/lib/search";
-import { isSynthetic, isTimeframe, isValidKey } from "@/lib/symbols";
+import { isSynthetic, isTimeframe, isValidKey, type Timeframe } from "@/lib/symbols";
 import { parseSynth } from "@/lib/synth";
 import { recomputeStats, syncAll, syncOne } from "@/lib/sync";
 import {
@@ -283,26 +283,6 @@ export async function deleteIndicator(id: string): Promise<ActionResult> {
   return attempt(({ dir }) => deleteById(dir, "indicators", str(id)));
 }
 
-export async function saveCondition(def: Omit<ConditionDef, "notify"> & { notify?: boolean }): Promise<ActionResult> {
-  return attempt(({ dir, vault }) => {
-    const { id, label, formula } = checkFormula(dir, def);
-    const entry: Record<string, unknown> = { id, label, formula };
-    if (isTimeframe(def.tf) && def.tf !== "W") entry.tf = def.tf;
-    // an editor that does not know about notify keeps whatever the yaml says
-    const notify = typeof def.notify === "boolean" ? def.notify : readConfig(dir).conditions.find((c) => c.id === id)?.notify;
-    if (notify) entry.notify = true;
-    upsertById(dir, "conditions", entry);
-    recomputeStats(vault, readConfig(dir));
-  });
-}
-
-export async function deleteCondition(id: string): Promise<ActionResult> {
-  return attempt(({ dir, vault }) => {
-    deleteById(dir, "conditions", str(id));
-    recomputeStats(vault, readConfig(dir));
-  });
-}
-
 export async function saveChartState(key: string, state: ChartState): Promise<ActionResult> {
   return attempt(async ({ dir }) => {
     if (!isValidKey(key)) throw new Error("无效的 key");
@@ -399,16 +379,22 @@ export async function setUpdown(mode: string): Promise<ActionResult> {
 export interface AlertInput {
   /** The alert being edited; absent for a new one */
   id?: string;
-  key: string;
+  /** Null: every watched symbol */
+  key: string | null;
   /** A TradingView condition, or `formula` for a custom formula in `when` */
   cond: AlertCond | "formula";
   value?: AlertCondition["value"];
   when?: string;
+  /** A formula's timeframe; D when absent */
+  tf?: Timeframe;
+  /** Ignored for the whole watchlist, which fires each symbol at most once per bar */
   trigger: AlertTrigger;
   /** Empty for the generated name */
   label?: string;
   /** Undoing a delete puts a paused alert back paused */
   enabled?: boolean;
+  /** False: shown on the overview, never pushed */
+  notify?: boolean;
 }
 
 /** Set one field of a yaml map; a scalar is changed in place so the comment on its line stays. */
@@ -423,70 +409,78 @@ function setField(doc: Document, map: YAMLMap, field: string, value: unknown): v
   map.set(field, node);
 }
 
-/** Create or edit a price alert in the viewer's yaml; an edited alert starts over (TradingView restarts it too). */
+/**
+ * Create or edit an alert in the viewer's yaml; an edited alert starts over (TradingView restarts it
+ * too). One on the whole watchlist is judged right away on the daily bars, so the overview shows
+ * where it holds without waiting for the next sync.
+ */
 export async function saveAlert(input: AlertInput): Promise<ActionResult> {
-  return attempt(({ dir, vault }) => serializeAlerts(() => {
-    const cfg = readConfig(dir);
-    const key = resolveKey(str(input.key), cfg.aliases);
-    if (!isValidKey(key)) throw new Error("无效的 key");
-    // written the way a person would: the alias when there is one
-    const entry: Record<string, unknown> = { key: Object.entries(cfg.aliases).find(([, k]) => k === key)?.[0] ?? key };
-    if (input.cond === "formula") {
-      const when = str(input.when);
-      if (!when) throw new Error("公式为空");
+  return attempt(async ({ dir, vault }) => {
+    const watchlist = await serializeAlerts(() => {
+      const cfg = readConfig(dir);
+      const key = input.key == null ? null : resolveKey(str(input.key), cfg.aliases);
+      if (key !== null && !isValidKey(key)) throw new Error("无效的 key");
+      // written the way a person would: the alias when there is one
+      const entry: Record<string, unknown> = key ? { key: Object.entries(cfg.aliases).find(([, k]) => k === key)?.[0] ?? key } : {};
+      if (input.cond === "formula") {
+        const when = str(input.when);
+        if (!when) throw new Error("公式为空");
+        try {
+          // on the whole watchlist `bench` is each symbol's own, checked when it is judged
+          compile(when, { aliases: cfg.aliases, bench: key ? (findItem(cfg, key)?.bench ?? null) : undefined });
+        } catch (err) {
+          throw new Error(describeError(err));
+        }
+        entry.when = when;
+        if (isTimeframe(input.tf) && input.tf !== "D") entry.tf = input.tf;
+      } else {
+        entry.cond = input.cond;
+        entry.value = input.value;
+      }
+      if (key) entry.trigger = input.trigger === "bar" ? "bar" : "once";
+      const label = str(input.label);
+      if (label) entry.label = label;
+      if (input.enabled === false) entry.enabled = false;
+      if (input.notify === false) entry.notify = false;
+      let id: string;
       try {
-        compile(when, { aliases: cfg.aliases, bench: findItem(cfg, key)?.bench ?? null });
+        const parsed = parseAlert(entry, 0, cfg.aliases);
+        id = parsed.id;
+        // a channel is written low first, however it was typed
+        if (parsed.condition) entry.value = parsed.condition.value;
       } catch (err) {
-        throw new Error(describeError(err));
+        throw new Error(err instanceof Error ? err.message.replace(/^alerts\[0\]：/, "") : String(err));
       }
-      entry.when = when;
-    } else {
-      entry.cond = input.cond;
-      entry.value = input.value;
-    }
-    entry.trigger = input.trigger === "bar" ? "bar" : "once";
-    const label = str(input.label);
-    if (label) entry.label = label;
-    if (input.enabled === false) entry.enabled = false;
-    let id: string;
-    try {
-      const parsed = parseAlert(entry, 0, cfg.aliases);
-      id = parsed.id;
-      // a channel is written low first, however it was typed
-      if (parsed.condition) entry.value = parsed.condition.value;
-    } catch (err) {
-      throw new Error(err instanceof Error ? err.message.replace(/^alerts\[0\]：/, "") : String(err));
-    }
-    updateConfig(dir, (doc) => {
-      const seq = seqOf(doc.contents as YAMLMap, "alerts", doc);
-      // `alerts: []` from the example becomes a block list once it has entries
-      seq.flow = false;
-      if (!input.id) {
-        seq.add(flowNode(doc, entry));
-        return;
-      }
-      const index = alertIndex(doc, input.id, cfg.aliases);
-      if (index < 0) throw new Error("这条警报已经不在 hebi8.yaml 里了");
-      // field by field on the entry as written, so what the dialog does not offer (an explicit id,
-      // a formula's tf, anything else) and the comments on fields stay
-      const node = seq.items[index] as YAMLMap;
-      if (resolveKey(String(node.get("key")), cfg.aliases) !== key) setField(doc, node, "key", entry.key);
-      for (const field of ["cond", "value", "when", "trigger", "label", "enabled"]) {
-        if (field in entry) setField(doc, node, field, entry[field]);
-        else node.delete(field);
-      }
-      // a TradingView condition is always on daily bars
-      if (entry.cond !== undefined) node.delete("tf");
-      id = parseAlert(node.toJSON(), index, cfg.aliases).id;
+      editAlerts(dir, (doc, seq) => {
+        if (!input.id) {
+          seq.add(flowNode(doc, entry));
+          return;
+        }
+        const index = alertIndex(doc, input.id, cfg.aliases);
+        if (index < 0) throw new Error("这条警报已经不在 hebi8.yaml 里了");
+        // field by field on the entry as written, so what the dialog does not offer (an explicit id,
+        // anything else) and the comments on fields stay
+        const node = seq.items[index] as YAMLMap;
+        const written = node.get("key");
+        if (!key) node.delete("key");
+        else if (typeof written !== "string" || resolveKey(written, cfg.aliases) !== key) setField(doc, node, "key", entry.key);
+        for (const field of ["cond", "value", "when", "tf", "trigger", "label", "enabled", "notify"]) {
+          if (field in entry) setField(doc, node, field, entry[field]);
+          else node.delete(field);
+        }
+        id = parseAlert(node.toJSON(), index, cfg.aliases).id;
+      });
+      forgetAlerts(vault, input.id ? [input.id, id] : [id]);
+      return key === null;
     });
-    forgetAlerts(vault, input.id ? [input.id, id] : [id]);
-  }));
+    if (watchlist) await runAlerts({ id: vault, dir }, () => readConfig(dir), "watchlist");
+  });
 }
 
 export async function deleteAlert(id: string): Promise<ActionResult> {
   return attempt(({ dir, vault }) => serializeAlerts(() => {
     const aliases = readConfig(dir).aliases;
-    updateConfig(dir, (doc) => {
+    editAlerts(dir, (doc) => {
       const index = alertIndex(doc, str(id), aliases);
       if (index >= 0) doc.deleteIn(["alerts", index]);
     });
@@ -494,10 +488,13 @@ export async function deleteAlert(id: string): Promise<ActionResult> {
   }));
 }
 
-/** 暂停 / 恢复; a resumed alert starts over. */
+/** 暂停 / 恢复; a resumed alert starts over, and one on the whole watchlist is judged right away. */
 export async function setAlertEnabled(id: string, enabled: boolean): Promise<ActionResult> {
-  return attempt(({ dir, vault }) => serializeAlerts(() => {
-    setAlertsEnabled(dir, [str(id)], Boolean(enabled));
-    if (enabled) forgetAlerts(vault, [str(id)]);
-  }));
+  return attempt(async ({ dir, vault }) => {
+    await serializeAlerts(() => {
+      setAlertsEnabled(dir, [str(id)], Boolean(enabled));
+      if (enabled) forgetAlerts(vault, [str(id)]);
+    });
+    if (enabled && readConfig(dir).alerts.some((a) => a.id === str(id) && !a.key)) await runAlerts({ id: vault, dir }, () => readConfig(dir), "watchlist");
+  });
 }

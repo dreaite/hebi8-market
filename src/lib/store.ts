@@ -109,7 +109,7 @@ export function markSyncError(key: string, message: string): void {
   getDb().prepare("UPDATE symbols SET sync_error = ? WHERE key = ?").run(message, key);
 }
 
-/** Stats are per vault ('' = root): conditions and the prices mode are each person's own. */
+/** Stats are per vault ('' = root): the watchlist and the prices mode are each person's own. */
 export function writeStats(vault: string, key: string, stats: Stats | null): void {
   const db = getDb();
   if (!stats) db.prepare("DELETE FROM stats WHERE vault = ? AND key = ?").run(vault, key);

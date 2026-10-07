@@ -50,11 +50,6 @@ describe("computeStats", () => {
     expect(stats.spark.at(-1)).toBeCloseTo(173);
   });
 
-  it("carries condition results with their previous value", () => {
-    const withConditions = computeStats(series(), { conditions: { trend: { now: true, prev: false } } })!;
-    expect(withConditions.conditions.trend).toEqual({ now: true, prev: false });
-    expect(stats.conditions).toEqual({});
-  });
 
   it("handles short and empty histories", () => {
     expect(computeStats([])).toBeNull();

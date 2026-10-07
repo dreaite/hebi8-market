@@ -54,6 +54,7 @@ describe("alerts in hebi8.yaml", () => {
       tf: "W",
       trigger: "once",
       enabled: true,
+      notify: true,
     });
   });
 
@@ -67,9 +68,31 @@ describe("alerts in hebi8.yaml", () => {
     expect(() => normalizeConfig({ ...base, alerts: [{ key: "BTC", when: "close > 1" }, { key: "binance:BTCUSDT", when: "close > 1" }] })).toThrow(/重复/);
   });
 
-  it("reads notify on conditions, off by default", () => {
-    const cfg = normalizeConfig({ ...base, conditions: [{ id: "a", formula: "close > 1" }, { id: "b", formula: "close > 2", notify: true }] });
-    expect(cfg.conditions.map((c) => c.notify)).toEqual([false, true]);
+  it("reads an alert without a key as one on the whole watchlist: formulas and moves only, each bar at most once", () => {
+    const cfg = normalizeConfig({
+      ...base,
+      alerts: [
+        { label: "周线多头", when: "close > sma(close, 40)", tf: "W", notify: false, trigger: "once" },
+        { cond: "moving_up_pct", value: { pct: 5, bars: 1 } },
+      ],
+    });
+    expect(cfg.alerts[0]).toMatchObject({ key: null, label: "周线多头", tf: "W", trigger: "bar", notify: false, enabled: true });
+    expect(cfg.alerts[1]).toMatchObject({ key: null, label: "1 根 K 线内上涨 5%", trigger: "bar", notify: true });
+    expect(() => normalizeConfig({ ...base, alerts: [{ cond: "greater", value: 1 }] })).toThrow(/要写 key/);
+    expect(() => normalizeConfig({ ...base, alerts: [{ key: "BTC", when: "close > 1", notify: "yes" }] })).toThrow(/notify/);
+    // the same formula on a symbol and on the watchlist are two alerts
+    expect(normalizeConfig({ ...base, alerts: [{ when: "close > 1" }, { key: "BTC", when: "close > 1" }] }).alerts).toHaveLength(2);
+    expect(syncKeys(cfg)).toEqual(["binance:BTCUSDT"]);
+  });
+
+  it("reads the old conditions as alerts on the whole watchlist, weekly by default, pushed only with notify", () => {
+    const cfg = normalizeConfig({ ...base, conditions: [{ id: "a", label: "甲", formula: "close > 1" }, { id: "b", formula: "close > 2", notify: true, tf: "D" }, { id: "趋势", formula: "close > 3" }] });
+    expect(cfg.alerts.map(({ id, key, label, when, tf, notify }) => ({ id, key, label, when, tf, notify }))).toEqual([
+      { id: "alert:a", key: null, label: "甲", when: "close > 1", tf: "W", notify: false },
+      { id: "alert:b", key: null, label: "b", when: "close > 2", tf: "D", notify: true },
+      // a free-text id cannot be an alert id; the label keeps it
+      { id: expect.stringMatching(/^alert:[0-9a-f]{6}$/), key: null, label: "趋势", when: "close > 3", tf: "W", notify: false },
+    ]);
   });
 });
 
@@ -139,7 +162,7 @@ describe("runAlerts", () => {
   });
 
   it("records silently, fires on the turn, does not repeat, retries after a failed delivery", async () => {
-    const { runAlerts } = await import("@/lib/alerts");
+    const { readState, runAlerts, stateId } = await import("@/lib/alerts");
     const { ensureSymbol, writeBars } = await import("@/lib/store");
     const key = "binance:BTCUSDT";
     const DAY = 86400;
@@ -150,20 +173,27 @@ describe("runAlerts", () => {
       aliases: { BTC: key },
       groups: [{ name: "加密", symbols: [{ key: "BTC", name: "比特币" }] }],
       conditions: [{ id: "up", label: "上涨", formula: "close > ref(close, 1)", tf: "D", notify: true }],
-      alerts: [{ key: "BTC", label: "站上 100", when: "close > 100", trigger: "bar" }],
+      alerts: [
+        { key: "BTC", label: "站上 100", when: "close > 100", trigger: "bar" },
+        { label: "站上 50", when: "close > 50", tf: "D", notify: false },
+        { label: "回落", when: "close < ref(close, 1)", tf: "D", notify: false },
+      ],
     });
-    const run = () => runAlerts({ id: "", dir: dir }, () => cfg, new Map());
+    const run = () => runAlerts({ id: "", dir: dir }, () => cfg);
+    const firedAt = (i: number) => readState("").get(stateId(cfg.alerts[i].id, key))?.firedAt ?? null;
 
     writeBars(key, bars([90, 95, 101]), "replace");
     expect(await run()).toEqual([]); // first sighting: both rules hold, nothing sent
     expect(received).toHaveLength(0);
 
     writeBars(key, bars([90, 95, 101, 99]), "replace");
-    expect(await run()).toEqual([]); // both turn false
+    expect(await run()).toEqual([]); // both turn false; 回落 turns true, recorded but never pushed
+    expect(firedAt(2)).not.toBeNull();
     writeBars(key, bars([90, 95, 101, 99, 102]), "replace");
     fail = true;
-    expect((await run()).map((e) => e.rule).sort()).toEqual([cfg.alerts[0].id, "cond:up"].sort());
+    expect((await run()).map((e) => e.rule).sort()).toEqual([cfg.alerts[0].id, "alert:up"].sort());
     expect(received).toHaveLength(1);
+    expect(firedAt(0)).toBeNull(); // not delivered: tried again next time
 
     fail = false;
     const retried = await run(); // nothing got through last time, so the same events go again

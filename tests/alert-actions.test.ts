@@ -100,7 +100,7 @@ describe("alert Server Actions", () => {
     expect(before).toMatchObject({ id: "alert:nvda-200", tf: "W", trigger: "once" });
 
     // only the name and the trigger change in the dialog
-    expect(await saveAlert({ id: before.id, key: "yahoo:NVDA", cond: "formula", when: before.when!, trigger: "bar", label: "破 200 周" })).toEqual({ ok: true });
+    expect(await saveAlert({ id: before.id, key: "yahoo:NVDA", cond: "formula", when: before.when!, tf: before.tf, trigger: "bar", label: "破 200 周" })).toEqual({ ok: true });
     let text = read();
     for (const kept of ["key: yahoo:NVDA # 英伟达", "id: nvda-200", "tf: W # 周线", 'when: "close < sma(close, 200)" # 200 周', "note: 自己记的", "trigger: bar", "label: 破 200 周"]) {
       expect(text).toContain(kept);
@@ -134,7 +134,7 @@ describe("alert Server Actions", () => {
       release = resolve;
       started();
     }));
-    const job = runAlerts({ id: "", dir: root }, () => readConfig(root), new Map(), () => [{ t: 1, o: 110, h: 110, l: 110, c: 110, v: 1, adj: 1 }]);
+    const job = runAlerts({ id: "", dir: root }, () => readConfig(root), "quotes", () => [{ t: 1, o: 110, h: 110, l: 110, c: 110, v: 1, adj: 1 }]);
     await delivering;
     const edited = saveAlert({ id: alert.id, key: "BTC", cond: "greater", value: 100, trigger: "once", label: "Edited" });
     release(new Response("ok"));
@@ -144,6 +144,49 @@ describe("alert Server Actions", () => {
     expect(getDb().prepare("SELECT count(*) AS n FROM alert_state WHERE vault = '' AND rule = ?").get(alert.id)).toEqual({ n: 0 });
     fetch.mockRestore();
     fs.rmSync(path.join(secrets, "notify.json"));
+  });
+
+  it("a new alert on the whole watchlist is judged at once; the old conditions move into alerts on the first edit", async () => {
+    const { saveAlert, setAlertEnabled } = await import("@/app/actions");
+    const { readConfig } = await import("@/lib/vault");
+    const { readState, stateId } = await import("@/lib/alerts");
+    const { ensureSymbol, writeBars } = await import("@/lib/store");
+    const t0 = Date.UTC(2026, 0, 5) / 1000;
+    ensureSymbol("binance:BTCUSDT");
+    writeBars("binance:BTCUSDT", [100, 110].map((c, i) => ({ t: t0 + i * 7 * 86400, o: c, h: c, l: c, c, v: 1, adj: 1 })), "replace");
+    fs.writeFileSync(
+      yamlFile,
+      YAML.replace(
+        "alerts: [] # 图表上建的写在这里\n",
+        `conditions: # 旧的条件
+  - { id: trend, label: 趋势, formula: "close > 1" }
+  - { id: hot, label: 新高, formula: "close >= highest(close, 52)", notify: true, tf: D }
+alerts: [] # 图表上建的写在这里
+`,
+      ),
+    );
+    // readable as they are
+    expect(readConfig(root).alerts.map((a) => [a.id, a.key, a.notify])).toEqual([
+      ["alert:trend", null, false],
+      ["alert:hot", null, true],
+    ]);
+
+    expect(await saveAlert({ key: null, cond: "formula", when: "close > ref(close, 1)", tf: "W", trigger: "once", label: "周涨", notify: false })).toEqual({ ok: true });
+    const text = read();
+    expect(text).not.toContain("conditions:");
+    expect(text).toContain("# 比特币");
+    expect(text).toContain('- { id: trend, label: 趋势, when: close > 1, tf: W, notify: false }');
+    expect(text).toContain('- { id: hot, label: 新高, when: "close >= highest(close, 52)", tf: D }');
+    expect(text).toContain('- { when: "close > ref(close, 1)", tf: W, label: 周涨, notify: false }');
+    const added = readConfig(root).alerts[2];
+    expect(added).toMatchObject({ key: null, trigger: "bar", tf: "W", notify: false });
+    // judged right away on the daily bars: it holds for BTC, recorded without firing
+    expect(readState("").get(stateId(added.id, "binance:BTCUSDT"))).toMatchObject({ state: 1, firedAt: null });
+
+    expect(await setAlertEnabled("alert:trend", false)).toEqual({ ok: true });
+    expect(readConfig(root).alerts[0]).toMatchObject({ id: "alert:trend", enabled: false });
+    // a price needs a symbol
+    expect(await saveAlert({ key: null, cond: "greater", value: 1, trigger: "once" })).toMatchObject({ ok: false, error: expect.stringContaining("要写 key") });
   });
 
   it("checks the input and the formula", async () => {
@@ -167,6 +210,46 @@ describe("alert Server Actions", () => {
 });
 
 describe("the alert list", () => {
+  it("badges: fired this week, fired or holding, not fired, stopped; the watchlist ones only where they hold", async () => {
+    const { alertBadges } = await import("@/lib/alert-view");
+    const { normalizeConfig } = await import("@/lib/config");
+    const { getDb } = await import("@/lib/db");
+    const BTC = "binance:BTCUSDT";
+    const ETH = "binance:ETHUSDT";
+    const cfg = normalizeConfig({
+      sync: { tz: "Asia/Tokyo" },
+      aliases: { BTC },
+      groups: [{ name: "加密", symbols: ["BTC", ETH] }],
+      alerts: [
+        { key: "BTC", label: "破十三万", cond: "crossing_up", value: 130000 },
+        { key: "BTC", cond: "greater", value: 1, trigger: "bar" },
+        { key: "BTC", cond: "less", value: 1 },
+        { key: "BTC", cond: "less", value: 2, enabled: false },
+        { label: "周线多头", when: "close > sma(close, 40)", tf: "W", notify: false },
+      ],
+    });
+    const now = new Date("2026-10-07T03:00:00Z"); // a Wednesday in Tokyo
+    const lastWeek = Date.parse("2026-10-02T03:00:00Z");
+    const put = (i: number, key: string, state: number, firedAt: number | null) =>
+      getDb().prepare("INSERT OR REPLACE INTO alert_state (vault, rule, key, state, fired_at) VALUES ('badges', ?, ?, ?, ?)").run(cfg.alerts[i].id, key, state, firedAt);
+    put(0, BTC, 1, Date.parse("2026-10-05T01:00:00Z"));
+    put(1, BTC, 1, lastWeek);
+    put(4, BTC, 1, null);
+    put(4, ETH, 0, lastWeek);
+    const badges = alertBadges("badges", cfg, now);
+    expect(badges[BTC].map((b) => [b.label, b.state])).toEqual([
+      ["破十三万", "fresh"],
+      ["BTC 大于 1", "on"],
+      ["BTC 小于 1", "idle"],
+      ["BTC 小于 2", "stopped"],
+      ["周线多头", "on"],
+    ]);
+    expect(badges[ETH]).toBeUndefined();
+    expect(badges[BTC][0].title).toBe("破十三万\n收盘价上穿 130,000\n仅一次 · 推送到通知通道\n状态：本周新触发（10/05 10:00）");
+    expect(badges[BTC][1].title).toContain("状态：成立中（上次触发 10/02 12:00）");
+    expect(badges[BTC][4].title).toBe("周线多头\n周线公式 close > sma(close, 40)\n全部自选 · 每根 K 线最多一次 · 只在总览显示\n状态：成立中");
+  });
+
   it("tells a fired once alert (已触发) from a paused one (已停止) and draws only active levels", async () => {
     const { alertViews } = await import("@/lib/alert-view");
     const { normalizeConfig } = await import("@/lib/config");

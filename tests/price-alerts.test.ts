@@ -326,44 +326,43 @@ describe("quote polling", () => {
       const load = (d: string) => () => readConfig(d);
 
       // a daily sync and a quote round queued together
-      const both = await Promise.all([runAlerts(vaults[0], load(root), new Map()), runAlerts(vaults[0], load(root), new Map())]);
+      const both = await Promise.all([runAlerts(vaults[0], load(root)), runAlerts(vaults[0], load(root))]);
       expect(both.map((events) => events.length)).toEqual([1, 0]);
       expect(readConfig(root).alerts[0].enabled).toBe(false);
 
       // bob pauses his alert while his run waits behind another one
-      const ahead = runAlerts(vaults[0], load(root), new Map());
-      const queued = runAlerts(vaults[1], load(bob), new Map());
+      const ahead = runAlerts(vaults[0], load(root));
+      const queued = runAlerts(vaults[1], load(bob));
       setAlertsEnabled(bob, [vaults[1].config.alerts[0].id], false);
       await ahead;
       expect(await queued).toEqual([]);
       logs.mockRestore();
     });
 
-    it.each([
-      { formula: "close < 100", tf: "D" },
-      { formula: "close > ref(close, 1)", tf: "W" },
-    ])("recomputes a changed condition instead of reusing the old result: %j", async ({ formula, tf }) => {
-      const { runAlerts } = await import("@/lib/alerts");
+    it("judges the whole watchlist after a daily sync only; quote rounds keep its rows, old cond: rows go", async () => {
+      const { runAlerts, readState, stateId } = await import("@/lib/alerts");
+      const { liveReader } = await import("@/lib/quotes");
       const { readConfig, updateConfig } = await import("@/lib/vault");
-      const { recomputeStats } = await import("@/lib/sync");
       const { writeBars } = await import("@/lib/store");
       const { getDb } = await import("@/lib/db");
       writeBars(BTC, closes(100, 101), "replace");
-      const vaults = vaultsWith([]);
+      const vaults = vaultsWith([{ key: "BTC", cond: "greater", value: 1000 }]);
       updateConfig(root, (doc) => {
         doc.set("groups", [{ name: "Crypto", symbols: ["BTC"] }]);
-        doc.set("conditions", [{ id: "gate", label: "Above", formula: "close > ref(close, 1)", tf: "D", notify: true }]);
+        doc.set("conditions", [{ id: "gate", label: "Above", formula: "close > ref(close, 1)", tf: "D" }]);
       });
-      const computedConfig = readConfig(root);
-      const results = recomputeStats("", computedConfig);
-      expect(results.get(BTC)?.gate.now).toBe(true);
       getDb().prepare("INSERT INTO alert_state (vault, rule, key, state) VALUES ('', 'cond:gate', ?, 0)").run(BTC);
-      updateConfig(root, (doc) => {
-        doc.setIn(["conditions", 0, "formula"], formula);
-        doc.setIn(["conditions", 0, "tf"], tf);
-        doc.setIn(["conditions", 0, "label"], "Below100");
-      });
-      expect(await runAlerts(vaults[0], () => readConfig(root), results, undefined, computedConfig.conditions)).toEqual([]);
+      const load = () => readConfig(root);
+      const rules = () => [...readState("").keys()].map((k) => k.split("\u0000")[0]).sort();
+      const [alertId] = vaults[0].config.alerts.map((a) => a.id);
+
+      await runAlerts(vaults[0], load, "quotes", liveReader());
+      expect(rules()).toEqual([alertId]);
+      await runAlerts(vaults[0], load);
+      expect(rules()).toEqual([alertId, "alert:gate"].sort());
+      expect(readState("").get(stateId("alert:gate", BTC))?.state).toBe(1);
+      await runAlerts(vaults[0], load, "quotes", liveReader());
+      expect(rules()).toEqual([alertId, "alert:gate"].sort());
     });
 
     it("a committed once alert only retries its yaml switch-off; unrelated writes and manual enabling do not re-arm it", async () => {
@@ -378,20 +377,20 @@ describe("quote polling", () => {
       const rename = vi.spyOn(fs, "renameSync").mockImplementationOnce(() => {
         throw new Error("ENOSPC");
       });
-      expect(await runAlerts(vaults[0], () => readConfig(root), new Map())).toHaveLength(1);
+      expect(await runAlerts(vaults[0], () => readConfig(root))).toHaveLength(1);
       rename.mockRestore();
       expect(readConfig(root).alerts[0].enabled).toBe(true);
       const firedAt = getDb().prepare("SELECT fired_at FROM alert_state WHERE rule = ?").get(alertId);
       updateConfig(root, (doc) => doc.set("updown", "red-up"));
-      expect(await runAlerts(vaults[0], () => readConfig(root), new Map())).toEqual([]);
+      expect(await runAlerts(vaults[0], () => readConfig(root))).toEqual([]);
       expect(readConfig(root).alerts[0].enabled).toBe(false);
       expect(getDb().prepare("SELECT fired_at FROM alert_state WHERE rule = ?").get(alertId)).toEqual(firedAt);
       setAlertsEnabled(root, [alertId], true); // hand-written enabled: true retains the firing
-      expect(await runAlerts(vaults[0], () => readConfig(root), new Map())).toEqual([]);
+      expect(await runAlerts(vaults[0], () => readConfig(root))).toEqual([]);
       expect(readConfig(root).alerts[0].enabled).toBe(false);
       setAlertsEnabled(root, [alertId], true);
       forgetAlerts("", [alertId]); // the UI's restore starts over
-      expect(await runAlerts(vaults[0], () => readConfig(root), new Map())).toHaveLength(1);
+      expect(await runAlerts(vaults[0], () => readConfig(root))).toHaveLength(1);
       logs.mockRestore();
     });
 
@@ -404,7 +403,6 @@ describe("quote polling", () => {
       writeBars(BTC, closes(100, 101), "replace");
       // root: a state alert that holds now; bob: an event that needs a cross
       const vaults = vaultsWith([{ key: "BTC", cond: "greater", value: 104 }], [{ key: "BTC", cond: "crossing_up", value: 110, trigger: "bar" }]);
-      getDb().prepare("INSERT INTO alert_state (vault, rule, key, state) VALUES ('', 'cond:keep', ?, 0)").run(BTC);
       const logs = vi.spyOn(console, "log").mockImplementation(() => undefined);
       const now = Date.now();
 
@@ -416,17 +414,15 @@ describe("quote polling", () => {
       expect(readConfig(root).alerts[0].enabled).toBe(false);
       expect(readConfig(bob).alerts[0].enabled).toBe(true);
       expect(logs.mock.calls.flat().join("\n")).toMatch(/1 new alert\(s\): binance:BTCUSDT/);
-      // a quote round leaves the notify conditions' rows alone
       expect(getDb().prepare("SELECT vault, rule FROM alert_state ORDER BY vault, rule").all()).toEqual([
         { vault: "", rule: vaults[0].config.alerts[0].id },
-        { vault: "", rule: "cond:keep" },
         { vault: "bob", rule: vaults[1].config.alerts[0].id },
       ]);
 
       // bob's cross: below 110 at the first check, above it now
       prices.BTCUSDT = 111;
       const bobOnly = [{ ...vaults[0], config: readConfig(root) }, vaults[1]];
-      const events = await Promise.all([runAlerts(bobOnly[1], () => bobOnly[1].config, new Map(), (await import("@/lib/quotes")).liveReader())]);
+      const events = await Promise.all([runAlerts(bobOnly[1], () => bobOnly[1].config, "quotes", (await import("@/lib/quotes")).liveReader())]);
       expect(events[0]).toEqual([]); // the stored quote is still 105
       await quoteRound(now + 5 * 60_000, bobOnly);
       expect(logs.mock.calls.flat().join("\n")).toMatch(/1 new alert\(s\) \(bob\): binance:BTCUSDT/);
