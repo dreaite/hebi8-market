@@ -283,6 +283,8 @@ export interface OverlaySpec {
   points: { timestamp: number; value: number }[];
   styles?: unknown;
   lock?: boolean;
+  /** Hidden from the floating toolbar's eye; 显示所有绘图 brings it back */
+  hidden?: boolean;
   extendData?: unknown;
 }
 

@@ -24,30 +24,23 @@ import {
   IconCandles,
   IconCaret,
   IconCursor,
-  IconExtendedLine,
   IconEye,
-  IconFib,
   IconFullscreen,
   IconHelp,
   IconHollowCandles,
-  IconHorizontalLine,
-  IconHorizontalRay,
   IconLock,
   IconMagnet,
   IconNotes,
   IconAlarm,
   IconPencil,
   IconPlus,
-  IconRay,
   IconRefresh,
   IconSearch,
-  IconText,
   IconTrash,
-  IconTrendLine,
-  IconVerticalLine,
   IconWatchlist,
 } from "./chart-icons";
-import { COMPARE_COLORS, DRAW_TOOLS, RANGES, SUB_PANE_HEIGHT, type ChartControl, type IndicatorSpec } from "./chart-types";
+import { COMPARE_COLORS, DRAW_GROUPS, DRAW_TOOLS, OPEN_DRAWINGS, RANGES, SUB_PANE_HEIGHT, type ChartControl, type IndicatorSpec } from "./chart-types";
+import { DrawToolGroups, GroupMenuItems } from "./DrawToolGroups";
 import { AlertDialog, AlertLoginDialog } from "./AlertDialog";
 import { AlertsPanel } from "./AlertsPanel";
 import { CompareDialog } from "./CompareDialog";
@@ -65,17 +58,6 @@ const STYLE_ICONS: Record<ChartStyle, (p: { size?: number }) => ReactNode> = {
   candle_up_stroke: IconHollowCandles,
   ohlc: IconBars,
   area: IconArea,
-};
-
-const TOOL_ICONS: Record<string, (p: { size?: number }) => ReactNode> = {
-  segment: IconTrendLine,
-  rayLine: IconRay,
-  straightLine: IconExtendedLine,
-  horizontalStraightLine: IconHorizontalLine,
-  horizontalRayLine: IconHorizontalRay,
-  verticalStraightLine: IconVerticalLine,
-  fibonacciLine: IconFib,
-  simpleAnnotation: IconText,
 };
 
 type Panel = "watchlist" | "notes" | "alerts";
@@ -151,7 +133,10 @@ export function ChartView({
   const [drawing, setDrawing] = useLocalStorage<DrawingModes>("hebi8:chart:drawing", DEFAULT_DRAWING);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [drawTool, setDrawTool] = useState<string | null>(null);
+  /** The last tool used in each toolbar group, shown on the group's button */
+  const [groupTools, setGroupTools] = useLocalStorage<Record<string, string>>("hebi8:chart:tools", {});
   const [clearSeq, setClearSeq] = useState(0);
+  const [revealSeq, setRevealSeq] = useState(0);
   const [autoScale, setAutoScale] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -329,6 +314,9 @@ export function ChartView({
   const chooseTool = (name: string | null) => {
     // TradingView shows hidden drawings again when you start a new one
     if (name && drawing.hidden) setDrawing({ ...drawing, hidden: false });
+    // ...and the group's button keeps the tool picked last
+    const group = name ? DRAW_GROUPS.find((g) => g.sections.some((s) => s.tools.some((t) => t.name === name))) : undefined;
+    if (group && groupTools[group.id] !== name) setGroupTools({ ...groupTools, [group.id]: name! });
     setDrawTool((cur) => (cur === name ? null : name));
   };
 
@@ -441,6 +429,13 @@ export function ChartView({
   const compareWithHidden = useMemo(() => compare.map((c) => ({ ...c, hidden: hiddenCompares.includes(c.key) })), [compare, hiddenCompares]);
   const subPanes = specs.filter((s) => s.pane === "sub").length + compare.filter((c) => c.mode === "pane").length;
   const drawLabel = DRAW_TOOLS.find((t) => t.name === drawTool)?.label;
+  // drawings hidden one by one (the floating toolbar's eye) are shown again by the same button as "hide all"
+  const someHidden = drawing.hidden || chartState.overlays.some((o) => o.hidden);
+  const toggleHidden = () => {
+    if (!someHidden) return setDrawing({ ...drawing, hidden: true });
+    setDrawing({ ...drawing, hidden: false });
+    setRevealSeq((n) => n + 1);
+  };
   const name = names[symbolKey] ?? meta?.name ?? symbolKey;
   const ticker = meta?.ticker ?? tickerOf(symbolKey);
   const sourceLabel = meta ? (meta.source === "expr" ? "合成" : SOURCE_LABELS[meta.source]) : null;
@@ -472,17 +467,18 @@ export function ChartView({
         }}>
         <IconCursor /> 十字光标
       </button>
-      {DRAW_TOOLS.map((t) => {
-        const Icon = TOOL_ICONS[t.name];
-        return (
-          <button key={t.name} role="menuitem" className={`menu-item flex items-center gap-2 ${drawTool === t.name ? "font-medium" : ""}`} onClick={() => {
-              chooseTool(t.name);
-              close();
-            }}>
-            <Icon /> {t.label}
-          </button>
-        );
-      })}
+      {DRAW_GROUPS.map((g) => (
+        <GroupMenuItems
+          key={g.id}
+          group={g}
+          active={drawTool}
+          hotkeys={false}
+          onPick={(tool) => {
+            chooseTool(tool);
+            close();
+          }}
+        />
+      ))}
       <div className="my-1 h-px bg-line" />
       <button role="menuitem" className="menu-item flex items-center gap-2" onClick={() => setDrawing({ ...drawing, magnet: !drawing.magnet })}>
         <IconMagnet /> 磁铁模式{drawing.magnet && " ✓"}
@@ -490,8 +486,8 @@ export function ChartView({
       <button role="menuitem" className="menu-item flex items-center gap-2" onClick={() => setDrawing({ ...drawing, locked: !drawing.locked })}>
         <IconLock open={!drawing.locked} /> 锁定所有绘图{drawing.locked && " ✓"}
       </button>
-      <button role="menuitem" className="menu-item flex items-center gap-2" onClick={() => setDrawing({ ...drawing, hidden: !drawing.hidden })}>
-        <IconEye off={drawing.hidden} /> 隐藏所有绘图{drawing.hidden && " ✓"}
+      <button role="menuitem" className="menu-item flex items-center gap-2" onClick={toggleHidden}>
+        <IconEye off={someHidden} /> {someHidden ? "显示所有绘图" : "隐藏所有绘图"}
       </button>
       <button role="menuitem" className="menu-item flex items-center gap-2 text-down" onClick={() => {
           close();
@@ -594,7 +590,7 @@ export function ChartView({
         {/* narrow screens: drawing tools and the side panels live in the top bar */}
         <span className="tb-sep md:hidden" />
         <span className="flex md:hidden">
-          <Dropdown label={<><IconPencil /><span className="text-xs">画线</span></>} title="画线工具" pressed={Boolean(drawTool)} menuClassName="min-w-[12rem]">
+          <Dropdown label={<><IconPencil /><span className="text-xs">画线</span></>} title="画线工具" pressed={Boolean(drawTool)} menuClassName="w-[200px] max-h-[70vh] overflow-y-auto">
             {drawingMenu}
           </Dropdown>
           <button type="button" onClick={() => togglePanel("watchlist")} aria-pressed={panel === "watchlist"} className="tb-btn" title="自选列表" aria-label="自选列表">
@@ -630,22 +626,7 @@ export function ChartView({
           <button type="button" onClick={() => chooseTool(null)} aria-pressed={!drawTool} className="tb-btn" title="十字光标 · Esc" aria-label="十字光标">
             <IconCursor />
           </button>
-          {DRAW_TOOLS.map((t) => {
-            const Icon = TOOL_ICONS[t.name];
-            return (
-              <button
-                key={t.name}
-                type="button"
-                onClick={() => chooseTool(t.name)}
-                aria-pressed={drawTool === t.name}
-                className="tb-btn"
-                title={t.hotkey ? `${t.label} · ${t.hotkey}` : t.label}
-                aria-label={t.label}
-              >
-                <Icon />
-              </button>
-            );
-          })}
+          <DrawToolGroups active={drawTool} remembered={groupTools} onPick={(tool) => chooseTool(tool)} />
           <span className="tb-sep-h" />
           <button
             type="button"
@@ -669,13 +650,13 @@ export function ChartView({
           </button>
           <button
             type="button"
-            onClick={() => setDrawing({ ...drawing, hidden: !drawing.hidden })}
-            aria-pressed={drawing.hidden}
+            onClick={toggleHidden}
+            aria-pressed={someHidden}
             className="tb-btn"
-            title={drawing.hidden ? "显示所有绘图" : "隐藏所有绘图"}
-            aria-label="隐藏所有绘图"
+            title={someHidden ? "显示所有绘图" : "隐藏所有绘图"}
+            aria-label={someHidden ? "显示所有绘图" : "隐藏所有绘图"}
           >
-            <IconEye off={drawing.hidden} />
+            <IconEye off={someHidden} />
           </button>
           <button type="button" onClick={clearDrawings} disabled={chartState.overlays.length === 0} className="tb-btn" title="删除所有绘图" aria-label="删除所有绘图">
             <IconTrash />
@@ -686,7 +667,7 @@ export function ChartView({
           <div className="relative min-h-0 flex-1">
             {drawLabel && (
               <div className="pointer-events-none absolute top-2 left-1/2 z-20 -translate-x-1/2 rounded border border-line bg-card/95 px-2 py-1 text-[11px] text-muted" role="status">
-                {drawLabel} · 在主图上点击 · Esc 退出
+                {drawLabel} · 在主图上点击{drawTool && OPEN_DRAWINGS.has(drawTool) ? " · 双击或回车结束" : ""} · Esc 退出
               </div>
             )}
             <div className="absolute inset-0">
@@ -707,6 +688,7 @@ export function ChartView({
                 drawTool={drawTool}
                 onDrawDone={() => setDrawTool(null)}
                 clearSeq={clearSeq}
+                revealSeq={revealSeq}
                 drawing={drawing}
                 controlRef={control}
                 onAutoScaleChange={setAutoScale}

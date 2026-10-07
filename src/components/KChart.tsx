@@ -7,6 +7,7 @@ import {
   registerIndicator,
   registerOverlay,
   type Chart,
+  type Coordinate,
   type Crosshair,
   type DeepPartial,
   type Indicator,
@@ -17,6 +18,7 @@ import {
   type Overlay,
   type OverlayCreate,
   type OverlayFigure,
+  type Point,
   type Styles,
 } from "klinecharts";
 import { customIndicators } from "@/indicators/custom";
@@ -26,8 +28,11 @@ import type { ChartStyle } from "@/lib/config";
 import type { Timeframe } from "@/lib/symbols";
 import type { CompareEntry, OverlaySpec } from "@/lib/vault";
 import { ChartLegend, createLegendStore, type ChartLegendProps } from "./ChartLegend";
-import { IconAlarm, IconTrash } from "./chart-icons";
-import { COMPARE_COLORS, type ChartControl, type IndicatorSpec, type LegendValue } from "./chart-types";
+import { IconAlarm } from "./chart-icons";
+import { registerDrawingTemplates, setOverlayChart, setOverlayTheme, textOf, textSizeOf } from "./chart-overlays";
+import { dashOf, drawingStyles, lineOf, withAlpha } from "./drawing-style";
+import { COMPARE_COLORS, OPEN_DRAWINGS, TEXT_DRAWINGS, type ChartControl, type IndicatorSpec, type LegendValue } from "./chart-types";
+import { DrawingSettings, DrawingToolbar, TextEditor, type DrawingChange, type DrawingInfo } from "./DrawingToolbar";
 
 export interface DrawingModes {
   magnet: boolean;
@@ -56,6 +61,8 @@ interface KChartProps {
   /** A drawing finished or was abandoned, so the toolbar can go back to the cursor */
   onDrawDone: () => void;
   clearSeq: number;
+  /** Bumped by 显示所有绘图: drawings hidden one by one come back too */
+  revealSeq: number;
   drawing: DrawingModes;
   /** Filled with the imperative handle for hotkeys and the bottom bar */
   controlRef: RefObject<ChartControl | null>;
@@ -74,7 +81,12 @@ interface KChartProps {
 /** Alert lines live in their own overlay group, apart from the drawings. */
 const ALERT_GROUP = "price_alerts";
 /** Drawings whose floating toolbar offers 添加警报 (the line's price is copied). */
-const PRICE_LINES = new Set(["horizontalStraightLine", "horizontalRayLine"]);
+const PRICE_LINES = new Set(["horizontalStraightLine", "horizontalRayLine", "crossLine"]);
+/** KLineChart's `currentStep` once a drawing is finished. */
+const DRAW_DONE = -1;
+
+/** Per-drawing lock and hide; "lock all" and "hide all" are UI modes applied on top. */
+type DrawingFlags = { lock?: boolean; hidden?: boolean };
 
 /** The y-axis object behind `getYAxes`; KLineChart keeps these methods off its public type. */
 interface AxisImpl {
@@ -121,6 +133,7 @@ let registered = false;
 function registerTemplates() {
   if (registered) return;
   registered = true;
+  registerDrawingTemplates();
   // TradingView's alert line: dashed across the pane, ⏰ and the price on the axis (clicking it edits)
   registerOverlay<{ id: string }>({
     name: "priceAlert",
@@ -176,12 +189,6 @@ function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-function withAlpha(hex: string, alpha: number): string {
-  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
-  if (!m) return hex;
-  return `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, ${alpha})`;
-}
-
 function applyTheme(chart: Chart, style: ChartStyle) {
   const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   const up = cssVar("--up");
@@ -227,26 +234,43 @@ function applyTheme(chart: Chart, style: ChartStyle) {
       lastValueMark: { text: { family: MONO } },
     },
     crosshair: { horizontal: { text: { family: MONO } }, vertical: { text: { family: MONO } } },
-    overlay: { line: { color: accent }, point: { color: accent, borderColor: withAlpha(accent, 0.35) }, text: { family: SANS } },
+    overlay: {
+      line: { color: accent },
+      point: { color: accent, borderColor: withAlpha(accent, 0.35), activeColor: accent, activeBorderColor: withAlpha(accent, 0.35) },
+      rect: { color: withAlpha(accent, 0.12), borderColor: accent },
+      polygon: { color: withAlpha(accent, 0.12), borderColor: accent },
+      circle: { color: withAlpha(accent, 0.12), borderColor: accent },
+      arc: { color: accent },
+      text: { family: SANS, backgroundColor: accent, borderColor: accent },
+    },
     xAxis: axis,
     yAxis: axis,
     separator: { color: line },
   };
   chart.setStyles(dark ? "dark" : "light");
   chart.setStyles(overrides);
+  setOverlayTheme({ up, down, text: cssVar("--fg") });
+}
+
+/** Points without repeats in a row (two clicks on one spot). */
+function distinctPoints(points: Partial<Point>[]): Partial<Point>[] {
+  return points.filter((p, i) => i === 0 || p.timestamp !== points[i - 1].timestamp || p.value !== points[i - 1].value);
 }
 
 /** Finished drawings on the main pane; `except` is one being removed right now. */
-function serializeOverlays(chart: Chart, keepLock: boolean, except?: string): OverlaySpec[] {
+function serializeOverlays(chart: Chart, flags: Map<string, DrawingFlags>, except?: string): OverlaySpec[] {
   return chart.getOverlays().flatMap((o) => {
-    if (o.paneId !== CANDLE_PANE || o.id === except || o.groupId === ALERT_GROUP) return [];
+    if (o.paneId !== CANDLE_PANE || o.id === except || o.groupId === ALERT_GROUP || o.currentStep !== DRAW_DONE) return [];
     const points = o.points
       .filter((p) => typeof p.timestamp === "number" && typeof p.value === "number")
       .map((p) => ({ timestamp: p.timestamp!, value: p.value! }));
-    if (points.length === 0 || points.length < o.totalStep - 1) return []; // still being drawn
+    if (points.length === 0) return [];
     const spec: OverlaySpec = { name: o.name, points };
-    // "lock all" is a UI mode, not a property of each drawing
-    if (o.lock && keepLock) spec.lock = true;
+    if (o.styles) spec.styles = o.styles;
+    // "lock all" and "hide all" are UI modes, not properties of each drawing
+    const f = flags.get(o.id);
+    if (f?.lock) spec.lock = true;
+    if (f?.hidden) spec.hidden = true;
     if (o.extendData !== undefined && o.extendData !== null && typeof o.extendData !== "function") spec.extendData = o.extendData;
     return [spec];
   });
@@ -319,6 +343,7 @@ export function KChart({
   drawTool,
   onDrawDone,
   clearSeq,
+  revealSeq,
   drawing,
   controlRef,
   onAutoScaleChange,
@@ -339,6 +364,7 @@ export function KChart({
   const overlaysRef = useRef(overlays);
   const drawingModesRef = useRef(drawing);
   const restoringRef = useRef(false);
+  const flagsRef = useRef(new Map<string, DrawingFlags>());
   const selectedRef = useRef<string | null>(null);
   const drawingRef = useRef<{ tool: string; id: string; overlay: Overlay | null; extendData?: unknown } | null>(null);
   const onOverlaysChangeRef = useRef(onOverlaysChange);
@@ -347,15 +373,17 @@ export function KChart({
   const legendFrame = useRef(0);
   const [store] = useState(createLegendStore);
   const [legendHeight, setLegendHeight] = useState(24);
-  /** A drawing's menu (删除), or the chart's own (在 X 添加警报) */
-  const [menu, setMenu] = useState<({ kind: "overlay"; id: string } | { kind: "chart"; price: number }) & { x: number; y: number } | null>(null);
+  /** A drawing's menu (设置 / 锁定 / 隐藏 / 删除), or the chart's own (在 X 添加警报) */
+  const [menu, setMenu] = useState<({ kind: "overlay"; id: string; locked: boolean } | { kind: "chart"; price: number }) & { x: number; y: number } | null>(null);
   /** The selected drawing, for its floating toolbar */
-  const [selected, setSelected] = useState<{ id: string; name: string } | null>(null);
+  const [selected, setSelected] = useState<{ id: string; info: DrawingInfo } | null>(null);
+  /** The 设置 dialog of a drawing */
+  const [settings, setSettings] = useState<{ id: string; info: DrawingInfo } | null>(null);
+  /** A text drawing being typed in place (absolute px in the chart box) */
+  const [editor, setEditor] = useState<{ id: string; x: number; y: number; center: boolean; size: number; color: string; text: string; isNew: boolean } | null>(null);
   const overlayMenuRef = useRef(false);
   const onAddAlertRef = useRef(onAddAlert);
   const onEditAlertRef = useRef(onEditAlert);
-  /** Text for the 文字 tool while it is being typed; null when the box is closed */
-  const [textDraft, setTextDraft] = useState<string | null>(null);
   // Latest props for the chart callbacks; declared first so later effects see the new values.
   useEffect(() => {
     onOverlaysChangeRef.current = onOverlaysChange;
@@ -422,7 +450,7 @@ export function KChart({
   const persistOverlays = (except?: string) => {
     const chart = chartRef.current;
     if (!chart || restoringRef.current) return;
-    onOverlaysChangeRef.current(serializeOverlays(chart, !drawingModesRef.current.locked, except));
+    onOverlaysChangeRef.current(serializeOverlays(chart, flagsRef.current, except));
   };
 
   /** Drop the drawing in progress (if any) and start the same tool again. */
@@ -435,15 +463,13 @@ export function KChart({
     startDrawing(d.tool, d.extendData);
   };
 
-  const overlayModes = (): Partial<OverlayCreate> => {
+  const overlayModes = (flags: DrawingFlags = {}): Partial<OverlayCreate> => {
     const m = drawingModesRef.current;
-    return { mode: m.magnet ? "weak_magnet" : "normal", lock: m.locked, visible: !m.hidden };
+    return { mode: m.magnet ? "weak_magnet" : "normal", lock: Boolean(flags.lock) || m.locked, visible: !flags.hidden && !m.hidden };
   };
+  const modesOf = (id: string) => overlayModes(flagsRef.current.get(id));
 
   const overlayHandlers = (): Partial<OverlayCreate> => ({
-    onDrawStart: (e) => {
-      if (drawingRef.current && drawingRef.current.id === e.overlay.id) drawingRef.current.overlay = e.overlay;
-    },
     onDrawEnd: (e) => {
       if (e.overlay.paneId !== CANDLE_PANE) {
         // drawn on a sub pane: discard it, the click listener below restarts the tool
@@ -452,11 +478,24 @@ export function KChart({
       }
       // drawn while "lock all" is on: lock it like the rest once it is finished
       if (drawingModesRef.current.locked) e.chart.overrideOverlay({ id: e.overlay.id, lock: true });
-      persistOverlays();
+      // KLineChart finishes a path on a double click, keeping the click and the cursor point on the same spot
+      if (OPEN_DRAWINGS.has(e.overlay.name)) {
+        const points = distinctPoints(e.overlay.points);
+        if (points.length < 2) e.chart.removeOverlay({ id: e.overlay.id });
+        else if (points.length < e.overlay.points.length) e.chart.overrideOverlay({ id: e.overlay.id, points });
+      }
+      // TradingView: place the text first, then type it in place (saved when it is committed)
+      if (TEXT_DRAWINGS.has(e.overlay.name)) openEditor(e.overlay, true);
+      else persistOverlays();
       if (drawingRef.current?.id === e.overlay.id) {
         drawingRef.current = null;
         onDrawDoneRef.current();
       }
+    },
+    // TradingView: double click edits a text in place and opens the settings of anything else
+    onDoubleClick: (e) => {
+      if (TEXT_DRAWINGS.has(e.overlay.name) && !e.overlay.lock) openEditor(e.overlay, false);
+      else openSettings(e.overlay.id);
     },
     onPressedMoveEnd: () => persistOverlays(),
     // KLineChart calls this before the overlay leaves its list, so it is excluded by id
@@ -475,25 +514,143 @@ export function KChart({
       overlayMenuRef.current = true;
       if (drawingRef.current?.id === e.overlay.id) return;
       select(e.overlay);
-      setMenu({ kind: "overlay", id: e.overlay.id, x: (e.pageX ?? 0) - window.scrollX, y: (e.pageY ?? 0) - window.scrollY });
+      setMenu({ kind: "overlay", id: e.overlay.id, locked: Boolean(flagsRef.current.get(e.overlay.id)?.lock), x: (e.pageX ?? 0) - window.scrollX, y: (e.pageY ?? 0) - window.scrollY });
     },
   });
 
-  const select = (o: Pick<Overlay, "id" | "name"> | null) => {
+  const infoOf = (chart: Chart, o: Overlay): DrawingInfo => {
+    const line = lineOf(chart, o);
+    return {
+      name: o.name,
+      color: line.color,
+      size: line.size,
+      dash: dashOf(line),
+      textSize: textSizeOf(o),
+      text: textOf(o),
+      locked: Boolean(flagsRef.current.get(o.id)?.lock),
+      values: o.points.map((p) => p.value ?? 0),
+    };
+  };
+  const overlayById = (id: string) => chartRef.current?.getOverlays({ id })[0];
+
+  const select = (o: Overlay | null) => {
     selectedRef.current = o?.id ?? null;
-    setSelected(o ? { id: o.id, name: o.name } : null);
+    const chart = chartRef.current;
+    setSelected(o && chart ? { id: o.id, info: infoOf(chart, o) } : null);
+  };
+  /** Re-read the selected drawing after the toolbar changed it. */
+  const refreshSelected = (id: string) => {
+    const o = overlayById(id);
+    if (o && selectedRef.current === id) select(o);
+  };
+
+  const openSettings = (id: string) => {
+    const chart = chartRef.current;
+    const o = overlayById(id);
+    if (chart && o) setSettings({ id, info: infoOf(chart, o) });
+  };
+
+  /** Style, text and point prices from the floating toolbar or the settings dialog. */
+  const changeDrawing = (id: string, change: DrawingChange) => {
+    const chart = chartRef.current;
+    const o = overlayById(id);
+    if (!chart || !o) return;
+    const line = lineOf(chart, o);
+    const styles = drawingStyles(change.color ?? line.color, change.size ?? line.size, change.dash ?? dashOf(line));
+    if (TEXT_DRAWINGS.has(o.name)) styles.text = { ...styles.text, size: change.textSize ?? textSizeOf(o) };
+    chart.overrideOverlay({
+      id,
+      styles,
+      ...(change.text !== undefined ? { extendData: change.text } : {}),
+      ...(change.values ? { points: o.points.map((p, i) => ({ ...p, value: change.values![i] ?? p.value })) } : {}),
+    });
+    persistOverlays();
+    refreshSelected(id);
+  };
+
+  const setFlag = (id: string, flag: keyof DrawingFlags, on: boolean) => {
+    flagsRef.current.set(id, { ...flagsRef.current.get(id), [flag]: on });
+    chartRef.current?.overrideOverlay({ id, ...modesOf(id) });
+    persistOverlays();
+  };
+  const toggleLock = (id: string) => {
+    setFlag(id, "lock", !flagsRef.current.get(id)?.lock);
+    refreshSelected(id);
+  };
+  const hideDrawing = (id: string) => {
+    setFlag(id, "hidden", true);
+    select(null);
+  };
+  const removeDrawing = (id: string) => {
+    chartRef.current?.removeOverlay({ id });
+    select(null);
+  };
+
+  /** Type a text drawing in place; the canvas text hides meanwhile so it is not drawn twice. */
+  const openEditor = (o: Overlay, isNew: boolean) => {
+    const chart = chartRef.current;
+    const point = o.points[0];
+    if (!chart || !point) return;
+    const at = chart.convertToPixel({ timestamp: point.timestamp, value: point.value }, { paneId: CANDLE_PANE, absolute: true }) as Partial<Coordinate>;
+    const note = o.name === "simpleAnnotation";
+    chart.overrideOverlay({ id: o.id, visible: false });
+    setEditor({
+      id: o.id,
+      x: at.x ?? 0,
+      // a 注释's label sits 61px above its point
+      y: (at.y ?? 0) - (note ? 61 : 0),
+      center: note,
+      size: textSizeOf(o),
+      color: note ? cssVar("--fg") : lineOf(chart, o).color,
+      text: textOf(o),
+      isNew,
+    });
+  };
+  const closeEditor = (text: string | null) => {
+    const chart = chartRef.current;
+    const ed = editor;
+    setEditor(null);
+    if (!chart || !ed) return;
+    const value = text?.replace(/\s+$/, "") ?? "";
+    // an empty text is no drawing, as in TradingView
+    if (text !== null && !value.trim()) return chart.removeOverlay({ id: ed.id });
+    if (text === null && ed.isNew) return chart.removeOverlay({ id: ed.id });
+    chart.overrideOverlay({ id: ed.id, ...(text !== null ? { extendData: value } : {}), visible: modesOf(ed.id).visible });
+    persistOverlays();
+    refreshSelected(ed.id);
   };
 
   const startDrawing = (tool: string, extendData?: unknown) => {
     const chart = chartRef.current;
     if (!chart) return;
     const id = chart.createOverlay({ name: tool, paneId: CANDLE_PANE, extendData, ...overlayModes(), lock: false, ...overlayHandlers() });
-    if (typeof id === "string") drawingRef.current = { tool, id, overlay: null, extendData };
+    // the live object: its points and step show how far the drawing has got
+    if (typeof id === "string") drawingRef.current = { tool, id, overlay: chart.getOverlays({ id })[0] ?? null, extendData };
+  };
+
+  /**
+   * Finish a path or polyline at the points clicked so far (Enter, Esc or picking another
+   * tool); fewer than two points is no drawing. False when no such drawing is in progress.
+   */
+  const finishOpenDrawing = (notify: boolean): boolean => {
+    const chart = chartRef.current;
+    const d = drawingRef.current;
+    if (!chart || !d || !OPEN_DRAWINGS.has(d.tool)) return false;
+    const o = d.overlay;
+    const points = distinctPoints(o ? o.points.slice(0, Math.max(0, o.currentStep - 1)) : []);
+    drawingRef.current = null;
+    chart.removeOverlay({ id: d.id });
+    if (points.length >= 2) {
+      chart.createOverlay({ name: d.tool, paneId: CANDLE_PANE, points, ...overlayModes(), ...overlayHandlers() });
+      persistOverlays();
+    }
+    if (notify) onDrawDoneRef.current();
+    return true;
   };
 
   const cancelDrawing = () => {
     const d = drawingRef.current;
-    if (!d) return;
+    if (!d || finishOpenDrawing(false)) return;
     drawingRef.current = null;
     chartRef.current?.removeOverlay({ id: d.id });
   };
@@ -575,6 +732,7 @@ export function KChart({
     });
     if (!chart) return;
     chartRef.current = chart;
+    setOverlayChart(chart);
     applyTheme(chart, styleRef.current);
     sizePanes();
     // The full history arrives in one response, so there is never more to load.
@@ -600,6 +758,11 @@ export function KChart({
         if (d?.overlay && d.overlay.paneId !== CANDLE_PANE) restartDrawing();
       }, 0);
     el.addEventListener("click", onClick, true);
+    // a path or polyline ends on Enter; KLineChart itself finishes it on a double click
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Enter" && !e.defaultPrevented && finishOpenDrawing(true)) e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
     // the base of a price-axis drag or a vertical pan, before KLineChart's own mousedown takes it
     const onPress = () => {
       const range = candleAxis()?.getRange();
@@ -657,6 +820,7 @@ export function KChart({
       clearTimeout(checkTimer);
       cancelAnimationFrame(legendFrame.current);
       el.removeEventListener("click", onClick, true);
+      window.removeEventListener("keydown", onKey);
       el.removeEventListener("mousedown", onPress, true);
       el.removeEventListener("touchstart", onPress, true);
       el.removeEventListener("contextmenu", onContextMenu);
@@ -667,6 +831,7 @@ export function KChart({
       resize.disconnect();
       dispose(el);
       chartRef.current = null;
+      setOverlayChart(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- chart lives for the component's lifetime
   }, []);
@@ -734,18 +899,28 @@ export function KChart({
     drawingRef.current = null;
     select(null);
     chart.removeOverlay();
-    if (overlaysRef.current.length) {
-      chart.createOverlay(
-        overlaysRef.current.map((o) => ({
-          ...o,
-          paneId: CANDLE_PANE,
-          styles: o.styles as OverlayCreate["styles"],
-          ...overlayModes(),
-          lock: Boolean(o.lock) || drawingModesRef.current.locked,
-          ...overlayHandlers(),
-        })),
-      );
+    const specs = overlaysRef.current;
+    const flags = new Map<string, DrawingFlags>();
+    if (specs.length) {
+      const ids = chart.createOverlay(
+        specs.map((o) => {
+          const f = { lock: o.lock, hidden: o.hidden };
+          return {
+            name: o.name,
+            points: o.points,
+            extendData: o.extendData,
+            paneId: CANDLE_PANE,
+            ...(o.styles ? { styles: o.styles as OverlayCreate["styles"] } : {}),
+            ...overlayModes(f),
+            ...overlayHandlers(),
+          };
+        }),
+      ) as (string | null)[];
+      ids.forEach((id, i) => {
+        if (id && (specs[i].lock || specs[i].hidden)) flags.set(id, { lock: specs[i].lock, hidden: specs[i].hidden });
+      });
     }
+    flagsRef.current = flags;
     restoringRef.current = false;
     crosshairRef.current = null;
     scheduleLegend();
@@ -829,22 +1004,31 @@ export function KChart({
     drawingModesRef.current = drawing;
     const chart = chartRef.current;
     if (!chart) return;
-    const m = overlayModes();
     for (const o of chart.getOverlays({ paneId: CANDLE_PANE })) {
       if (o.id === drawingRef.current?.id || o.groupId === ALERT_GROUP) continue;
-      chart.overrideOverlay({ id: o.id, mode: m.mode, visible: m.visible, lock: m.lock });
+      chart.overrideOverlay({ id: o.id, ...modesOf(o.id) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the three flags
   }, [drawingKey]);
+
+  // 显示所有绘图 also brings back the drawings hidden one by one
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || revealSeq === 0) return;
+    for (const [id, f] of flagsRef.current) {
+      if (!f.hidden) continue;
+      flagsRef.current.set(id, { ...f, hidden: false });
+      chart.overrideOverlay({ id, ...modesOf(id) });
+    }
+    persistOverlays();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per reveal
+  }, [revealSeq]);
 
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
     cancelDrawing();
-    setTextDraft(drawTool === "simpleAnnotation" ? "" : null);
-    // the text tool asks for its text in an in-chart box first: a native prompt() would drop fullscreen
-    if (!drawTool || drawTool === "simpleAnnotation") return;
-    startDrawing(drawTool);
+    if (drawTool) startDrawing(drawTool);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one overlay per tool selection
   }, [drawTool]);
 
@@ -856,8 +1040,10 @@ export function KChart({
     select(null);
     // every drawing, not the alert lines
     for (const o of chart.getOverlays({ paneId: CANDLE_PANE })) if (o.groupId !== ALERT_GROUP) chart.removeOverlay({ id: o.id });
+    flagsRef.current = new Map();
     restoringRef.current = false;
     onOverlaysChangeRef.current([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per clear
   }, [clearSeq]);
 
   // alert lines: after the bars effect above, which clears every overlay when the data changes
@@ -912,94 +1098,98 @@ export function KChart({
         compare={compare}
         onMainHeight={(h) => setLegendHeight((prev) => (Math.abs(prev - h) > 2 ? h : prev))}
       />
-      {textDraft !== null && (
-        <form
-          className="absolute top-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-md border border-line bg-card p-2 text-xs shadow-lg"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const text = textDraft.trim();
-            if (!text) return;
-            setTextDraft(null);
-            startDrawing("simpleAnnotation", text);
-          }}
-        >
-          <input
-            autoFocus
-            value={textDraft}
-            onChange={(e) => setTextDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key !== "Escape") return;
-              e.preventDefault();
-              e.stopPropagation();
-              setTextDraft(null);
-              onDrawDoneRef.current();
-            }}
-            placeholder="标注文字，回车后在图上点击放置"
-            aria-label="标注文字"
-            className="input h-7 w-64"
-          />
-          <button type="submit" className="btn btn-primary h-7" disabled={!textDraft.trim()}>
-            放置
-          </button>
-          <button
-            type="button"
-            className="btn h-7"
-            onClick={() => {
-              setTextDraft(null);
-              onDrawDoneRef.current();
-            }}
-          >
-            取消
-          </button>
-        </form>
+      {editor && (
+        <TextEditor
+          key={editor.id}
+          x={editor.x}
+          y={editor.y}
+          center={editor.center}
+          size={editor.size}
+          color={editor.color}
+          initial={editor.text}
+          onCommit={(text) => closeEditor(text)}
+          onCancel={() => closeEditor(null)}
+        />
       )}
-      {selected && PRICE_LINES.has(selected.name) && !menu && (
-        // TradingView's floating toolbar for a selected drawing; a horizontal line can become an alert
-        <div className="absolute top-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-0.5 rounded-md border border-line bg-card p-0.5 shadow-lg" role="toolbar" aria-label="画线工具条">
-          <button
-            type="button"
-            className="tb-btn"
-            title="添加警报"
-            aria-label="添加警报"
-            onClick={() => {
-              const value = chartRef.current?.getOverlays({ id: selected.id })[0]?.points[0]?.value;
-              if (typeof value === "number") onAddAlertRef.current(value);
-            }}
-          >
-            <IconAlarm />
-          </button>
-          <button
-            type="button"
-            className="tb-btn"
-            title="删除 · Del"
-            aria-label="删除"
-            onClick={() => {
-              chartRef.current?.removeOverlay({ id: selected.id });
-              select(null);
-            }}
-          >
-            <IconTrash />
-          </button>
-        </div>
+      {selected && !menu && !editor && (
+        <DrawingToolbar
+          key={selected.id}
+          info={selected.info}
+          canAlert={PRICE_LINES.has(selected.info.name)}
+          onChange={(change) => changeDrawing(selected.id, change)}
+          onEditText={() => {
+            const o = overlayById(selected.id);
+            if (o) openEditor(o, false);
+          }}
+          onSettings={() => openSettings(selected.id)}
+          onAlert={() => onAddAlertRef.current(selected.info.values[0])}
+          onLock={() => toggleLock(selected.id)}
+          onHide={() => hideDrawing(selected.id)}
+          onDelete={() => removeDrawing(selected.id)}
+        />
+      )}
+      {settings && (
+        <DrawingSettings
+          key={settings.id}
+          info={settings.info}
+          precision={pricePrecision}
+          onApply={(change) => {
+            changeDrawing(settings.id, change);
+            setSettings(null);
+          }}
+          onClose={() => setSettings(null)}
+        />
       )}
       {menu && (
         <div
           role="menu"
           className="menu fixed min-w-[8rem]"
-          style={{ left: Math.min(menu.x, window.innerWidth - 200), top: Math.min(menu.y, window.innerHeight - 50), right: "auto" }}
+          style={{ left: Math.min(menu.x, window.innerWidth - 200), top: Math.min(menu.y, window.innerHeight - (menu.kind === "overlay" ? 150 : 50)), right: "auto" }}
           onMouseDown={(e) => e.stopPropagation()}
         >
           {menu.kind === "overlay" ? (
-            <button
-              role="menuitem"
-              className="menu-item flex items-center justify-between gap-4"
-              onClick={() => {
-                chartRef.current?.removeOverlay({ id: menu.id });
-                setMenu(null);
-              }}
-            >
-              删除 <span className="text-[11px] text-muted">Del</span>
-            </button>
+            <>
+              <button
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  openSettings(menu.id);
+                  setMenu(null);
+                }}
+              >
+                设置…
+              </button>
+              <button
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  toggleLock(menu.id);
+                  setMenu(null);
+                }}
+              >
+                {menu.locked ? "解锁" : "锁定"}
+              </button>
+              <button
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  hideDrawing(menu.id);
+                  setMenu(null);
+                }}
+              >
+                隐藏
+              </button>
+              <button
+                role="menuitem"
+                className="menu-item flex items-center justify-between gap-4"
+                onClick={() => {
+                  removeDrawing(menu.id);
+                  setMenu(null);
+                }}
+              >
+                删除 <span className="text-[11px] text-muted">Del</span>
+              </button>
+            </>
           ) : (
             <button
               role="menuitem"

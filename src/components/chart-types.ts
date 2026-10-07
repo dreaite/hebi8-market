@@ -67,7 +67,7 @@ export const COMPARE_COLORS = ["#0e9aa7", "#c2410c", "#2f6fde", "#a21caf", "#65a
 export const SUB_PANE_HEIGHT = 100;
 
 export interface DrawTool {
-  /** KLineChart overlay name */
+  /** KLineChart overlay name (built in, or registered in chart-overlays.ts) */
   name: string;
   label: string;
   /** TradingView's default hotkey, shown in the tooltip */
@@ -76,17 +76,167 @@ export interface DrawTool {
   code?: string;
 }
 
-/** TradingView's line tools that KLineChart has built in, in TV's toolbar order. */
-export const DRAW_TOOLS: DrawTool[] = [
-  { name: "segment", label: "趋势线", hotkey: "Alt+T", code: "KeyT" },
-  { name: "rayLine", label: "射线" },
-  { name: "straightLine", label: "延长线" },
-  { name: "horizontalStraightLine", label: "水平线", hotkey: "Alt+H", code: "KeyH" },
-  { name: "horizontalRayLine", label: "水平射线", hotkey: "Alt+J", code: "KeyJ" },
-  { name: "verticalStraightLine", label: "垂直线", hotkey: "Alt+V", code: "KeyV" },
-  { name: "fibonacciLine", label: "斐波那契回撤", hotkey: "Alt+F", code: "KeyF" },
-  { name: "simpleAnnotation", label: "文字" },
+export interface DrawGroup {
+  id: string;
+  label: string;
+  /** Sub-headings of the group's menu, as in TradingView */
+  sections: { label: string; tools: DrawTool[] }[];
+}
+
+/** TradingView's left toolbar: one button per group, its menu split into sections. */
+export const DRAW_GROUPS: DrawGroup[] = [
+  {
+    id: "lines",
+    label: "趋势线工具",
+    sections: [
+      {
+        label: "线条",
+        tools: [
+          { name: "segment", label: "趋势线", hotkey: "Alt+T", code: "KeyT" },
+          { name: "rayLine", label: "射线" },
+          { name: "infoLine", label: "信息线" },
+          { name: "straightLine", label: "延长线" },
+          { name: "trendAngle", label: "趋势角" },
+          { name: "horizontalStraightLine", label: "水平线", hotkey: "Alt+H", code: "KeyH" },
+          { name: "horizontalRayLine", label: "水平射线", hotkey: "Alt+J", code: "KeyJ" },
+          { name: "verticalStraightLine", label: "垂直线", hotkey: "Alt+V", code: "KeyV" },
+          { name: "crossLine", label: "十字线", hotkey: "Alt+C", code: "KeyC" },
+        ],
+      },
+      {
+        label: "通道",
+        tools: [
+          { name: "parallelChannel", label: "平行通道" },
+          { name: "regressionTrend", label: "回归趋势" },
+          { name: "priceChannelLine", label: "价格通道" },
+        ],
+      },
+      { label: "叉", tools: [{ name: "pitchfork", label: "安德鲁音叉" }] },
+    ],
+  },
+  {
+    id: "fib",
+    label: "江恩和斐波那契工具",
+    sections: [
+      {
+        label: "斐波那契",
+        tools: [
+          { name: "fibonacciLine", label: "斐波那契回撤", hotkey: "Alt+F", code: "KeyF" },
+          { name: "fibExtension", label: "基于趋势的斐波那契扩展" },
+          { name: "fibChannel", label: "斐波那契通道" },
+          { name: "fibTimeZone", label: "斐波那契时间周期" },
+          { name: "fibFan", label: "斐波那契速度阻力扇" },
+          { name: "fibCircles", label: "斐波那契圆环" },
+          { name: "fibSpiral", label: "斐波那契螺旋" },
+          { name: "fibArcs", label: "斐波那契速度阻力弧" },
+        ],
+      },
+      {
+        label: "江恩",
+        tools: [
+          { name: "gannBox", label: "江恩方箱" },
+          { name: "gannFan", label: "江恩扇" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "patterns",
+    label: "形态",
+    sections: [
+      {
+        label: "图表形态",
+        tools: [
+          { name: "xabcd", label: "XABCD 形态" },
+          { name: "abcd", label: "ABCD 形态" },
+          { name: "trianglePattern", label: "三角形态" },
+          { name: "headShoulders", label: "头肩形态" },
+        ],
+      },
+      {
+        label: "艾略特波浪",
+        tools: [
+          { name: "elliottImpulse", label: "艾略特推动浪 (12345)" },
+          { name: "elliottCorrection", label: "艾略特调整浪 (ABC)" },
+          { name: "elliottTriangle", label: "艾略特三角浪 (ABCDE)" },
+          { name: "elliottDoubleCombo", label: "艾略特双重组合浪 (WXY)" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "forecast",
+    label: "预测和测量工具",
+    sections: [
+      {
+        label: "预测",
+        tools: [
+          { name: "longPosition", label: "多头持仓" },
+          { name: "shortPosition", label: "空头持仓" },
+        ],
+      },
+      {
+        label: "测量",
+        tools: [
+          { name: "priceRange", label: "价格范围" },
+          { name: "dateRange", label: "日期范围" },
+          { name: "datePriceRange", label: "日期和价格范围" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "shapes",
+    label: "几何形状",
+    sections: [
+      { label: "画笔", tools: [{ name: "brush", label: "画笔" }] },
+      {
+        label: "形状",
+        tools: [
+          { name: "rect", label: "矩形" },
+          { name: "path", label: "路径" },
+          { name: "circle", label: "圆" },
+          { name: "ellipse", label: "椭圆" },
+          { name: "polyline", label: "折线" },
+          { name: "triangle", label: "三角形" },
+          { name: "arc", label: "弧形" },
+          { name: "curve", label: "曲线" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "annotation",
+    label: "标注工具",
+    sections: [
+      {
+        label: "文字和注释",
+        tools: [
+          { name: "text", label: "文本" },
+          { name: "simpleAnnotation", label: "注释" },
+          { name: "priceLabel", label: "价格标签" },
+          { name: "flag", label: "旗帜标记" },
+        ],
+      },
+      {
+        label: "箭头",
+        tools: [
+          { name: "arrow", label: "箭头" },
+          { name: "arrowMarkUp", label: "向上箭头" },
+          { name: "arrowMarkDown", label: "向下箭头" },
+        ],
+      },
+    ],
+  },
 ];
+
+export const DRAW_TOOLS: DrawTool[] = DRAW_GROUPS.flatMap((g) => g.sections.flatMap((s) => s.tools));
+
+/** Tools whose floating toolbar edits text (font size and the text) instead of line width and dash. */
+export const TEXT_DRAWINGS = new Set(["text", "simpleAnnotation"]);
+
+/** Tools drawn click by click until a double click, Enter or Esc. */
+export const OPEN_DRAWINGS = new Set(["path", "polyline"]);
 
 /** Date-range buttons under the chart; null = all history. */
 export const RANGES: { label: string; years: number | null }[] = [
