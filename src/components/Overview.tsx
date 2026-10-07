@@ -44,7 +44,7 @@ export interface OverviewData {
   readOnly: boolean;
 }
 
-type SortKey = "last" | "ddAth" | "pos52" | ChangePeriod;
+type SortKey = "last" | "ddAth" | ChangePeriod;
 type Sort = { key: SortKey; dir: 1 | -1 } | null;
 
 function sortValue(row: OverviewRow, key: SortKey): number | null {
@@ -52,7 +52,6 @@ function sortValue(row: OverviewRow, key: SortKey): number | null {
   if (!s) return null;
   if (key === "last") return s.last;
   if (key === "ddAth") return s.ddAth;
-  if (key === "pos52") return s.pos52;
   return s.changes[key];
 }
 
@@ -70,9 +69,37 @@ function sortRows(rows: OverviewRow[], sort: Sort): OverviewRow[] {
 
 /**
  * Column widths shared by every group, so the price column sits at the same x everywhere.
- * The 52-week bar and the sparkline only fit from xl (1280px) up; below md the table becomes a list.
+ * The sparkline only fits from xl (1280px) up; below md the table becomes a list.
  */
-const COL = { price: 112, period: 72, ddAth: 72, conditions: 220, menu: 28 }; // pos52 128 and spark 200 come from CSS variables
+const COL = { price: 112, period: 72, high: 96, conditions: 220, menu: 28 }; // spark 200 comes from a CSS variable
+
+/** What each change column is measured against (stats.ts: the close on or before that day). */
+const SINCE: Record<ChangePeriod, string> = {
+  "1W": "7 天前",
+  "1M": "30 天前",
+  "3M": "91 天前",
+  YTD: "去年最后一个交易日",
+  "1Y": "一年前",
+  "3Y": "三年前",
+  "5Y": "五年前",
+};
+
+const HINTS = {
+  name: "标的名称，下一行是代码 · 数据源 · 币种",
+  last: "最新价：最近一根日线的收盘价",
+  high: "距高点：最新价比历史最高收盘低多少，0% 就是在历史高点。\n下面的短条是 52 周区间位置：最左是近 52 周最低价，最右是最高价，竖线是现在的价格",
+  spark: "近两年的周收盘走势",
+};
+
+/** Where the last close sits between the 52-week low (left) and high (right). */
+function Range52({ pos }: { pos: number }) {
+  const pct = Math.round(pos * 100);
+  return (
+    <div className="relative mt-1.5 ml-auto h-1 w-16 rounded bg-line" title={`52 周区间位置 ${pct}%：0% 是近 52 周最低，100% 是最高`}>
+      <div className="absolute top-1/2 h-2.5 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded bg-fg" style={{ left: `${pct}%` }} />
+    </div>
+  );
+}
 
 function PeriodPicker({ value, onChange }: { value: ChangePeriod[]; onChange: (next: ChangePeriod[]) => void }) {
   const toggle = (key: ChangePeriod) => {
@@ -111,6 +138,7 @@ function Badges({ row, conditions }: { row: OverviewRow; conditions: OverviewDat
 
 function Th({
   label,
+  hint,
   sortKey,
   sort,
   onSort,
@@ -118,6 +146,8 @@ function Th({
   className = "",
 }: {
   label: string;
+  /** The hover text: what the column means */
+  hint?: string;
   sortKey?: SortKey;
   sort: Sort;
   onSort: (key: SortKey) => void;
@@ -126,19 +156,22 @@ function Th({
 }) {
   const active = sortKey !== undefined && sort?.key === sortKey;
   const sorted = active ? (sort.dir < 0 ? "descending" : "ascending") : undefined;
+  const sortHint = active ? (sort.dir < 0 ? "降序，再点升序" : "升序，再点恢复默认顺序") : "点击排序";
   return (
     <th style={width ? { width } : undefined} aria-sort={sorted} className={`p-0 text-[11px] font-normal text-muted ${className}`}>
       {sortKey ? (
         <button
           onClick={() => onSort(sortKey)}
           className={`flex h-7 w-full items-center gap-1 px-2 hover:text-fg ${className.includes("text-right") ? "justify-end" : ""} ${active ? "text-fg" : ""}`}
-          title={active ? (sort.dir < 0 ? "降序，再点升序" : "升序，再点恢复默认") : "点击排序"}
+          title={hint ? `${hint}\n\n${sortHint}` : sortHint}
         >
-          {label}
+          <span className={hint ? "underline decoration-dotted decoration-muted/60 underline-offset-[3px]" : ""}>{label}</span>
           <span className="w-2 text-[9px]">{active ? (sort.dir < 0 ? "▼" : "▲") : ""}</span>
         </button>
       ) : (
-        <span className="flex h-7 items-center px-2">{label}</span>
+        <span className="flex h-7 items-center px-2" title={hint}>
+          <span className={hint ? "cursor-help underline decoration-dotted decoration-muted/60 underline-offset-[3px]" : ""}>{label}</span>
+        </span>
       )}
     </th>
   );
@@ -204,7 +237,7 @@ export function Overview({ data }: { data: OverviewData }) {
 
   const shownPeriods = CHANGE_PERIODS.filter((p) => periods.includes(p.key));
   const groupNames = data.groups.map((g) => g.name);
-  const colCount = 7 + shownPeriods.length;
+  const colCount = 6 + shownPeriods.length;
 
   const menu = (row: OverviewRow, group: string) =>
     menuFor === row.key && (
@@ -312,23 +345,21 @@ export function Overview({ data }: { data: OverviewData }) {
             {shownPeriods.map((p) => (
               <col key={p.key} style={{ width: COL.period }} />
             ))}
-            <col style={{ width: COL.ddAth }} />
-            <col style={{ width: "var(--col-pos52)" }} />
+            <col style={{ width: COL.high }} />
             <col style={{ width: COL.conditions }} />
             <col style={{ width: "var(--col-spark)" }} />
             <col style={{ width: COL.menu }} />
           </colgroup>
           <thead>
             <tr className="text-left">
-              <Th label="名称" sort={sort} onSort={onSort} />
-              <Th label="价格" sortKey="last" sort={sort} onSort={onSort} className="text-right" />
+              <Th label="名称" hint={HINTS.name} sort={sort} onSort={onSort} />
+              <Th label="价格" hint={HINTS.last} sortKey="last" sort={sort} onSort={onSort} className="text-right" />
               {shownPeriods.map((p) => (
-                <Th key={p.key} label={p.label} sortKey={p.key} sort={sort} onSort={onSort} className="text-right" />
+                <Th key={p.key} label={p.label} hint={`${p.label}涨跌：最新价相对 ${SINCE[p.key]}收盘的涨跌幅`} sortKey={p.key} sort={sort} onSort={onSort} className="text-right" />
               ))}
-              <Th label="距高点" sortKey="ddAth" sort={sort} onSort={onSort} className="text-right" />
-              <Th label="52周" sortKey="pos52" sort={sort} onSort={onSort} className="wide-col" />
+              <Th label="距高点" hint={HINTS.high} sortKey="ddAth" sort={sort} onSort={onSort} className="text-right" />
               <Th label="条件" sort={sort} onSort={onSort} />
-              <Th label="两年" sort={sort} onSort={onSort} className="wide-col" />
+              <Th label="两年" hint={HINTS.spark} sort={sort} onSort={onSort} className="wide-col" />
               <th />
             </tr>
           </thead>
@@ -453,13 +484,9 @@ function GroupRows({
                 {fmtPct(s?.changes[p.key])}
               </td>
             ))}
-            <td className={`tabular ${cell} text-right ${changeColor(s?.ddAth)}`}>{fmtPct(s?.ddAth)}</td>
-            <td className={`${cell} wide-col`}>
-              {s?.pos52 != null && (
-                <div className="relative h-1 w-20 rounded bg-line" title={`52 周区间位置 ${Math.round(s.pos52 * 100)}%`}>
-                  <div className="absolute top-1/2 h-2.5 w-0.5 -translate-y-1/2 rounded bg-fg" style={{ left: `${Math.round(s.pos52 * 100)}%` }} />
-                </div>
-              )}
+            <td className={`${cell} text-right`}>
+              <div className={`tabular ${changeColor(s?.ddAth)}`}>{fmtPct(s?.ddAth)}</div>
+              {s?.pos52 != null && <Range52 pos={s.pos52} />}
             </td>
             <td className={cell}>
               <Badges row={row} conditions={conditions} />

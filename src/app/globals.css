@@ -330,7 +330,6 @@ input:focus-visible {
  * columns are sized to 0 and their cells stay in the row, clipped, until xl.
  */
 :root {
-  --col-pos52: 0px;
   --col-spark: 0px;
 }
 .wide-col {
@@ -341,7 +340,6 @@ input:focus-visible {
 }
 @media (min-width: 1280px) {
   :root {
-    --col-pos52: 128px;
     --col-spark: 200px;
   }
   .wide-col {
