@@ -230,8 +230,8 @@ CREATE TABLE usage_alerts (kind TEXT NOT NULL, day INTEGER NOT NULL, PRIMARY KEY
 - **第一次登录**的非 owner：复制根 vault 的 `hebi8.yaml` 作为起点，去掉 `owner`、`sync`、`datasets`、`usage`、`alerts`；notes / journal / charts 为空。之后两边互不影响。
 - **所有写操作**（Server Actions、写文件的 Route Handler）都先取 viewer，`canWrite` 为假就返回「请先登录」；写入路径只来自 viewer 的 vault 目录，不接受客户端传来的目录或 login。读操作同样只读 viewer 的 vault。
 - **同步**：要同步的 key 是所有 vault 的并集（各自的 groups、bench、公式引用、告警、charts 对比列表）。同步后对每个 vault 算一遍 stats 和告警。
-- **页头**：右侧显示当前身份。未登录是「登录」按钮（打开帮助抽屉里同一套 device flow）；登录后是头像 + login，菜单里有「通知设置」、owner 才有的「使用情况」（§1.7）和「退出」。owner 模式下未登录时，总览标题是「示例列表」（内容就是 owner 的列表）。
-- **怎么用**：第一次打开总览时弹出一个三步引导面板（扫描 / 深看 / 记录），每步一张循环小动画，←/→ 翻页；关掉后记在浏览器 localStorage，不再自动出现，帮助抽屉「项目」里的「怎么用」可以再打开。访客的最后一步是「用 GitHub 登录」和「先看看示例」。
+- **页头**：右侧显示当前身份。未登录是「登录」按钮（打开登录抽屉，开始 device flow，§5.8）；登录后是头像 + login，菜单里有「通知设置」（同一个抽屉，§2.5）、owner 才有的「使用情况」（§1.7）和「退出」。owner 模式下未登录时，总览标题是「示例列表」（内容就是 owner 的列表）。
+- **怎么用**：第一次打开总览时弹出一个三步引导面板（扫描 / 深看 / 记录），每步一张循环小动画，←/→ 翻页；关掉后记在浏览器 localStorage，不再自动出现，帮助抽屉「使用」页签里的「打开三步引导」可以再打开。访客的最后一步是「用 GitHub 登录」和「先看看示例」。
 - 登录会话和反馈共用（§5.8），30 天有效；退出只删会话，不动 vault。
 - 会话 cookie 经 HTTPS 来的请求（隧道，`X-Forwarded-Proto: https`）带 `Secure`；Tailscale 直连是 http，不带，照样能登录。两边 Host 不同，cookie 各存各的。
 
@@ -245,9 +245,9 @@ CREATE TABLE usage_alerts (kind TEXT NOT NULL, day INTEGER NOT NULL, PRIMARY KEY
 - **访客**：公网取 `CF-Connecting-IP`，Tailscale 取 Next 填进 `X-Forwarded-For` 的 socket 地址；存 `HMAC-SHA256(盐, IP)` 的前 16 位，盐在配置目录的 `traffic-salt.json`。访客单独一张表（`visitors`），不和路径交叉：每天每个 origin 最多 `MAX_VISITORS = 2000` 个不同访客，已存的照常累加，新来的超出上限就合进 `(其他)` 这一行，页面上那天的访客数显示成「2000+」。代价是热门路径不再有「每个路径多少访客」。**登录名**：proxy 只记会话 cookie，落库时整批只读一次 `sessions.json`，在内存里查；伪造的 cookie 查不到就是未登录。
 - **落库**（`src/lib/usage.ts`，从 `instrumentation` 启动，`globalThis` 防重复）：每 30 秒一次，或内存里攒到 5000 个不同的键时提前；同一天、同一组维度的行累加。写库失败（锁超时、磁盘满）时这一批合并回内存缓冲，下次再写。进程退出丢最后几十秒的计数，可以接受。每小时删一次 90 天以前的行。监控数据只在 `data/hebi8.db`，不进 vault。
 - **上游压力**：`src/lib/sources/index.ts` 把 yahoo、binance、tv 三个适配器的 `fetchDaily` / `search` / `quotes` 包一层，每次调用记一次请求（Binance 的 `search` 除外：它读缓存一天的交易对列表，由 `usdtBases()` 在真正去取列表时自己记，失败时照样回退到旧列表）；抛错记失败，错误里有 HTTP 429 / 403 / 418、Too Many Requests、rate limit 的另记「疑似限流」。`data` 源平时读本地文件，只在真正 `git fetch` / `clone` 远端数据集时记一次。按调用计数：Binance 全量拉取的分页算一次。
-- **页面 `/usage`**：只有 `viewer.isOwner` 能看，其他人（包括单用户模式）404；入口是页头账号菜单里的「使用情况」。最近 30 天每天的请求数（页面 / 预取 / Action / API）、公网和 Tailscale 的独立访客、登录用户数；今天的热门路径；最近 30 天访客按请求量排行（只显示哈希前 8 位）；各 vault 的品种数、告警数、最近活跃时间；各数据源每天的请求 / 失败 / 疑似限流。打开页面时先落一次库。
+- **页面 `/usage`**：只有 `viewer.isOwner` 能看，其他人（包括单用户模式）404；入口是页头账号菜单里的「使用情况」。最上面是「实例」：版本（`APP_INFO`：version · commit · 构建时间）、上次同步、下次同步（调度器 `scheduledNextSync()`，没启动时按 `sync.at` 推算）和每天的时间表、缓存的标的数、上次同步出错的标的和错误（所有 vault 的，名字按根 vault 解析）、根 vault 的绝对路径。这些原来在帮助抽屉里给所有人看，对用的人是噪音，只留给 owner。然后是最近 30 天每天的请求数（页面 / 预取 / Action / API）、公网和 Tailscale 的独立访客、登录用户数；今天的热门路径；最近 30 天访客按请求量排行（只显示哈希前 8 位）；各 vault 的品种数、告警数、最近活跃时间；各数据源每天的请求 / 失败 / 疑似限流。打开页面时先落一次库。
 - **阈值提醒**：根 yaml 的 `usage.visitors`（每日公网独立访客）、`usage.limited`（每日上游疑似限流次数），正整数，可省；`/usage` 页面上也能改（Server Action `setUsageLimits`，parseDocument 写回）。每 5 分钟落库后检查一次，查今天和昨天（午夜前最后几分钟超过的，过了午夜照样补发，消息里写「昨天（10-06）」），超过（严格大于）且还没提醒过的合成一条消息，发到根 vault 的通道（§2.5 的 `channelsFor('')`）；有通道发送成功才按那一天记进 `usage_alerts`；全部失败或没有通道时只打日志、不记，下次检查再试，当天补好通道也能收到。每天每种最多一次。
-- **隐私说明 `/privacy`**：公开页面，页脚（`SiteFooter`，图表页不显示，帮助面板的「项目」页也有入口）链过去。逐条写明收集什么、存哪里、留多久：访问统计、Cloudflare、GitHub 登录与令牌、各自的 vault 与通知通道、公开的反馈 issue、浏览器本地存储、行情由服务器代取。收集的东西变了就同步改这一页和它的更新日期。
+- **隐私说明 `/privacy`**：公开页面，页脚（`SiteFooter`，图表页不显示，帮助抽屉的「使用」页签也有入口）链过去。逐条写明收集什么、存哪里、留多久：访问统计、Cloudflare、GitHub 登录与令牌、各自的 vault 与通知通道、公开的反馈 issue、浏览器本地存储、行情由服务器代取。收集的东西变了就同步改这一页和它的更新日期。
 
 ---
 
@@ -349,9 +349,9 @@ date,open,high,low,close,volume
 - `webhook.format`：`text`（默认，正文就是摘要，带 `Title` 头，适合 ntfy）或 `json`（`{ title, text, events }`）。
 - `link` 可省；有的话每条事件后面带图表页链接。
 - `npm run notify:test` 往 `notify.json` 里的通道发一条测试消息。
-- **owner 在页面上设置 bot**：「通知」页签里，owner（单用户模式下是任何人）多一块「实例的 Telegram bot」：显示「未配置」或 `@<bot 用户名>`；粘贴 token 后服务端先用 `getMe` 校验，通过才写进 `notify.json`（保留文件里的其他字段，原子写、600），「移除」删掉 telegram 段。token 写进去以后不再回显，只显示 bot 用户名。接口 `PUT /api/notify/bot`、`DELETE /api/notify/bot`，非 owner 返回 403。
+- **owner 在页面上设置 bot**：「通知设置」抽屉里，owner 多一块「实例的 Telegram bot」：显示「未配置」或 `@<bot 用户名>`；粘贴 token 后服务端先用 `getMe` 校验，通过才写进 `notify.json`（保留文件里的其他字段，原子写、600），「移除」删掉 telegram 段。token 写进去以后不再回显，只显示 bot 用户名。接口 `PUT /api/notify/bot`、`DELETE /api/notify/bot`，非 owner 返回 403。
 
-**通知设置页面**（登录后，页头菜单「通知设置」打开帮助抽屉的「通知」页签；未登录或单用户模式下页签提示改 `notify.json`）：
+**通知设置抽屉**（`AccountPanel`，和帮助抽屉同样的位置和尺寸，但不是它的页签：通知设置只有这一个入口）。页头的「登录」和账号菜单的「通知设置」都打开它：未登录时标题是「登录」，显示 device flow（从「登录」打开时直接开始）；登录后标题是「通知设置」，顶部是头像 + login +「退出」，下面是这个人的通道，owner 再多一块实例的 bot。只有共用实例有登录，所以单用户模式没有这个抽屉，通道和 bot 都手写 `notify.json`（README「通知」）。
 
 - **绑定 Telegram**：服务端生成一次性码（10 分钟有效，内存里），用 `getMe` 拿 bot 用户名，返回 `https://t.me/<bot>?start=<码>`；面板显示「打开 Telegram 点 Start」和等待状态。有待绑定的码时，服务端用 `getUpdates` 长轮询（timeout 25 秒，只往外连）读 bot 收到的消息；私聊里收到 `/start <码>` 就把这个 chat id 记到对应 login，回一句「已绑定 hebi8：<login>」，确认 update 的 offset。没有待绑定的码时不轮询。
 - 实例的 bot 必须是 hebi8 专用的：同一个 token 被别的程序（比如 Hermes 网关）`getUpdates` 时两边会抢消息。
@@ -477,7 +477,7 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 - 条件徽标三态，同一个 `Badge` 组件（复盘页也用）：`now=true` 普通描边；**本周新触发**淡高亮底（浅色 `bg-accent/10 border-accent/40 text-accent`，深色 `bg-accent/15 border-accent/50`）加圆点；**本周失效**虚线边、`opacity .55`，不用删除线。
 - 显示名：yaml `name` > 内置字典中文名 > 数据源名（超过 24 字符 truncate，hover 显全名）。
 - ≤768px 隐藏 sparkline 与 52 周列，徽标 `whitespace-nowrap`；≤640px 改为列表：第一行 名称 + 价格，第二行 所选涨跌周期，第三行 徽标；外层 `overflow-x-auto` 兜底，不允许横向溢出。
-- 页脚只显示相对路径 `vault/hebi8.yaml`。
+- 页面上不提示 yaml 的路径：共用实例的其他人和访客改不了服务器上的文件，怎么手改 yaml 写在 README。
 - 同步错误显示在该行；库为空时显示「首次拉取中…」并轮询。
 
 ### 5.2 图表 `/chart/[key]`（key 需 URL 编码，`yahoo:SPY → yahoo%3ASPY`，合成 `=BTC/GOLD → %3DBTC%2FGOLD`）
@@ -572,7 +572,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 ### 5.5 设置
 
-不做单独页面。周期选择、涨跌色、图表偏好由各处 UI 写回 yaml；分组、名称、基准由总览行菜单写回；其余（同步时间、别名、条件、告警、数据集）直接改 yaml，页面上给出 vault 相对路径提示。通知通道写在 `~/.config/hebi8/market/notify.json`（§2.5）。反馈用的 GitHub App 只有一个 client id，写在源码里（§5.8），不需要设置页。
+不做单独页面。周期选择、涨跌色、图表偏好由各处 UI 写回 yaml；分组、名称、基准由总览行菜单写回；其余（同步时间、别名、条件、告警、数据集）直接改 yaml，写法在 README，页面上不提示路径（owner 在 `/usage` 能看到）。通知通道写在 `~/.config/hebi8/market/notify.json`（§2.5）。反馈用的 GitHub App 只有一个 client id，写在源码里（§5.8），不需要设置页。
 
 ### 5.6 自动保存（笔记与复盘日志）
 
@@ -586,13 +586,19 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 - 全站按钮：`.btn` 纯文本（hover 底色）、`.btn-primary`（实心 fg 底 + bg 字）、`.btn-secondary`（1px line 描边）；分段 `.seg`；输入 `.input`；徽标 `.badge`；菜单 `.menu`。
 - 图表页工具栏：`.tb-btn`（30px 热区、fg 色图标或图标 + 短文字、hover 浅底，按下 / 展开时 fg 11% 实底）、`.tb-sep` / `.tb-sep-h` 1px 分隔；图标是 `chart-icons.tsx` 里的 18px 线性 SVG，不引入图标库。
 
-### 5.8 帮助面板与应用内反馈
+### 5.8 帮助抽屉与应用内反馈
 
 **目标**：几秒钟内在应用里把问题报给 GitHub，issue 的作者是报告的人自己，且带机器可读的上下文，以后让自动化识别并修复简单问题。任何人自己部署的 hebi8 都能把问题报到 `dreaite/hebi8-market`：实例里不放、也不存任何 App 密钥。
 
-**入口**：页头最右的圆形「?」，或焦点不在输入框时按 `?`（Shift+/）；图表页全屏时页头隐藏，顶栏全屏按钮旁出现同样的「?」。右侧抽屉 380px（≤768px 为底部抽屉 85dvh），两个页签「项目 / 反馈」，上次的页签记在 localStorage（`hebi8:help:tab`）。Esc、点外面、再按 `?` 关闭；抽屉内的按键不冒泡到页面（图表的 Space / 方向键 / 字母搜索不会在背后触发）。`?help=feedback|project` 打开抽屉并从地址栏去掉这个参数。全程不用原生 alert / confirm / prompt（会退出全屏）。
+**入口**：页头最右的圆形「?」，或焦点不在输入框时按 `?`（Shift+/）；图表页全屏时页头隐藏，顶栏全屏按钮旁出现同样的「?」。右侧抽屉 380px（≤768px 为底部抽屉 85dvh），两个页签「使用 / 反馈」，上次的页签记在 localStorage（`hebi8:help:tab`，「使用」的值是 `project`，存着已经去掉的 `notify` 时回到「使用」）。Esc、点外面、再按 `?` 关闭；抽屉内的按键不冒泡到页面（图表的 Space / 方向键 / 字母搜索不会在背后触发）。`?help=feedback|project` 打开抽屉并从地址栏去掉这个参数。全程不用原生 alert / confirm / prompt（会退出全屏）。
 
-**项目页签**（`GET /api/help`，只读本地）：名称与含义；版本 = `package.json` version + 构建时的 `git rev-parse --short HEAD` + 构建时间（`next.config.ts` 的 `env` 注入 `HEBI8_VERSION / HEBI8_COMMIT / HEBI8_BUILT_AT`，取不到 commit 时为 `unknown`）；数据状态：自选数、缓存标的数、上次同步、下次同步（调度器 `scheduledNextSync()`，没启动时按 `sync.at` 推算）、同步出错的标的与错误、vault 相对路径；快捷键表；仓库、设计文档、反馈仓库 `from-app` issue 列表的链接。
+**原则**：抽屉里只放用的时候要的东西：怎么用、快捷键、反馈、隐私说明和登录状态。项目介绍、架构、数据源细节、yaml 字段、版本 / commit、vault 路径、缓存统计、部署信息都写在 README 和本文档，界面上只留一个「项目文档」链接到仓库。owner 需要的实例状态在 `/usage`（§1.7）；通知设置在自己的抽屉里（§2.5），不是这里的页签。
+
+**使用页签**（纯前端，不请求接口）：「怎么用」一句话 +「打开三步引导」（§1.6 的引导面板）；快捷键表；「项目文档」（仓库首页，即 README）和「隐私说明」两个链接。
+
+**版本**：`package.json` version + 构建时的 `git rev-parse --short HEAD` + 构建时间（`next.config.ts` 的 `env` 注入 `HEBI8_VERSION / HEBI8_COMMIT / HEBI8_BUILT_AT`，取不到 commit 时为 `unknown`）。只出现在反馈的 `hebi8-context` 里和 owner 的 `/usage` 上。
+
+**`GET /api/help`**（只读本地）：`{ shared, canSetBot, issuesUrl, github: { enabled, feedbackRepo, user } }`，反馈页签和通知设置抽屉共用。
 
 **配置**（`src/lib/app-info.ts`，服务端读，环境变量可覆盖，供 fork 用自己的 App / 仓库）：
 
@@ -600,13 +606,12 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 |---|---|---|
 | `FEEDBACK_REPO` | `dreaite/hebi8-market` | `HEBI8_FEEDBACK_REPO`（须形如 `owner/name`，否则用默认） |
 | `GITHUB_APP_CLIENT_ID` | `"Iv23liCniWEUtlDruFJa"`（dreaite 组织的 hebi8-market App） | `HEBI8_GITHUB_CLIENT_ID`（`off` 关闭应用内登录） |
-| `GITHUB_APP_SLUG` | `hebi8-market`（只用于 `github.com/apps/<slug>` 链接） | `HEBI8_GITHUB_APP_SLUG` |
 
 client id 不是秘密（device flow 的设计就是给拿不住密钥的客户端用的），写在源码里即可。
 
 **反馈页签**的四种状态，表单（类型分段 问题 bug / 体验 ux / 数据 data / 想法 idea、标题、描述、「附带页面信息」、「可以自动修复」、可展开的「预览将附带的信息」= 实际发送的 JSON）在每种状态下都在，未发送的内容在本标签页内关掉抽屉也保留：
 
-- **未启用**（client id 为空）：「反馈未启用」说明；表单下方主按钮是「在 GitHub 网页上提交」。
+- **未启用**（client id 为空）：「反馈未启用」，说明不能在应用里直接提交（不提配置项，那是部署的人看的，见上表）；表单下方主按钮是「在 GitHub 网页上提交」。
 - **未登录**：「用 GitHub 登录」+ 说明会以你的名义提交到哪个仓库；表单下方是次要按钮「在 GitHub 网页上提交」。
 - **登录中**：大号、可复制的 user code（复制不用 async clipboard——内网是 http，没有安全上下文——而是隐藏 textarea + `execCommand("copy")`，焦点留在抽屉里）、「打开 github.com/login/device」（新标签页，地址来自 GitHub 的 `verification_uri`，只接受 `https://github.com/…`）、状态行（等待授权 / GitHub 要求放慢）+ 倒计时、「取消」。进行中的登录记在模块变量里，关掉再打开抽屉会接着轮询。
 - **已登录**：头像 + 用户名 +「退出」；「提交」按钮下注明「以你的 GitHub 账号提交到 <repo>」。`Ctrl/Cmd+Enter` 提交，成功 toast「已提交 #123」（链到 issue）并清空；GitHub 返回 403 / 404 / 410 时显示中文原因并给出「在 GitHub 网页上提交」。未登录 / 未启用时 `Ctrl/Cmd+Enter` 打开网页版。
@@ -688,7 +693,7 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 - `GET /api/bars?key=&tf=D|W|M|Q&prices=split|total&with=k1,k2`
   → `{ symbol: {key, name, source, ticker, currency, bench, syncedAt, syncError}, pricePrecision, bars: [{timestamp, open, high, low, close, volume}], refs: { [key]: { c: (number|null)[], o?, h?, l?, v? } } }`，`refs` 与 `bars` 等长对齐。响应按 viewer 的 yaml 解析名字、基准和合成别名，`Cache-Control: no-store`，不做条件请求。
 - `GET /api/search?q=` → 外部结果 `SearchResult[]`（§5.4；本地层在浏览器里算）。
-- `GET /api/help` → 帮助面板数据（§5.8，只读本地）。
+- `GET /api/help` → 反馈页签和通知设置抽屉要的登录状态与反馈设置（§5.8，只读本地）。
 - `/api/github/device`（POST 开始 device flow / DELETE 取消）、`/api/github/device/poll`（POST）、`/api/github/logout`（POST）、`/api/github/issues`（GET 最近反馈 / POST 提交）：§5.8，唯一会碰 GitHub 网络的接口，都是打开反馈页签或用户动作触发。
 
 **Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench?, alias? })`、`removeSymbol(key)`、`moveSymbol(key, group)`、`renameSymbol(key, name)`、`setBench(key, bench | null)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveCondition(def)` / `deleteCondition(id)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`、`setUsageLimits({ visitors, limited })`（owner，§1.7）。Server Action 在客户端是**串行派发**的，自动保存靠去抖合并，不并行发。
