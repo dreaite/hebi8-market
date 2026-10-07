@@ -633,7 +633,8 @@ function NotifySettings({ toast }: { toast: (message: string, opts?: ToastOption
     setBusy(true);
     setError(null);
     try {
-      done?.(await fn());
+      const result = await fn();
+      done?.(result);
     } catch (err) {
       setError(errorText(err));
     } finally {

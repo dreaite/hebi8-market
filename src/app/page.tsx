@@ -41,7 +41,7 @@ export default async function Home() {
     }),
   }));
 
-  const journal = listJournals(viewer.dir)[0];
+  const journal = viewer.shared && !viewer.login ? undefined : listJournals(viewer.dir)[0];
   const notices = [
     viewer.shared && !viewer.login ? `正在看 ${viewer.owner} 的列表 · 登录后用自己的` : null,
     config.ignored.length ? `hebi8.yaml 里的 ${config.ignored.join("、")} 是实例设置，只有 ${viewer.owner} 的 vault 里写的生效，这里忽略` : null,
@@ -58,5 +58,5 @@ export default async function Home() {
     notices,
     readOnly: !viewer.canWrite,
   };
-  return <Overview data={data} />;
+  return <Overview key={`${viewer.vault}:${viewer.canWrite ? "w" : "r"}`} data={data} />;
 }

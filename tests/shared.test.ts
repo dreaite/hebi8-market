@@ -248,6 +248,22 @@ describe("stats and alerts per vault", () => {
     expect(readAllStats("bob")).toEqual({});
   });
 
+  it("hides the owner's last review from visitors, retaining it for the owner and single-user mode", async () => {
+    const { writeJournal } = await import("@/lib/vault");
+    const { default: Home } = await import("@/app/page");
+    writeJournal(root, "2026-W41", "owner's review");
+    expect((await Home()).props).toMatchObject({ data: { lastReviewDays: null } });
+    request.session = sessions.owner;
+    expect((await Home()).props).toMatchObject({ data: { lastReviewDays: 0 } });
+    request.session = undefined;
+    writeRoot(ROOT_YAML.replace(/^owner:.*\n/m, ""));
+    try {
+      expect((await Home()).props).toMatchObject({ data: { lastReviewDays: 0 } });
+    } finally {
+      writeRoot(ROOT_YAML);
+    }
+  });
+
   it("computes a vault's stats from the cache the first time a page asks", async () => {
     const { statsFor } = await import("@/lib/sync");
     const { readAllStats } = await import("@/lib/store");

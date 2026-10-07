@@ -21,7 +21,7 @@ interface Update {
 let updates: Update[] = [];
 const calls: { method: string; body: Record<string, unknown> }[] = [];
 /** Runs when the bot is asked to confirm its last batch (`timeout: 0`), before it answers */
-let onConfirm: (() => Promise<void>) | null = null;
+let onConfirm: (() => Promise<void | number>) | null = null;
 const hooks: string[] = [];
 
 const server = http.createServer((req, res) => {
@@ -48,7 +48,8 @@ const server = http.createServer((req, res) => {
       if (body.timeout === 0 && onConfirm) {
         const hook = onConfirm;
         onConfirm = null;
-        await hook();
+        const status = await hook();
+        if (status) return reply(null, status);
       }
       // like Telegram: an offset confirms everything before it; hold briefly when there is nothing
       const offset = Number(body.offset ?? 0);
@@ -194,6 +195,25 @@ describe("Telegram binding", () => {
     expect(logs.mock.calls.flat().join("\n")).not.toContain("SECRET");
     logs.mockRestore();
   });
+
+  it("keeps polling for a new binding after the final acknowledgement returns 502", async () => {
+    const { startBinding, bindingStatus } = await import("@/lib/telegram");
+    const codeOf = (url: string) => new URL(url).searchParams.get("start")!;
+    const grace = codeOf((await startBinding("grace")).url);
+    let heidi: string | null = null;
+    onConfirm = async () => {
+      heidi = codeOf((await startBinding("heidi")).url);
+      return 502;
+    };
+    updates.push({ update_id: 20, message: { chat: { id: 201, type: "private" }, text: `/start ${grace}` } });
+    await until(() => heidi !== null);
+    expect(bindingStatus("grace")).toEqual({ status: "bound", chat: "201" });
+    updates.push({ update_id: 21, message: { chat: { id: 202, type: "private" }, text: `/start ${heidi}` } });
+    let status = bindingStatus("heidi");
+    await until(() => (status = bindingStatus("heidi")).status !== "pending", 8000);
+    expect(status).toEqual({ status: "bound", chat: "202" });
+    await until(() => calls.some((c) => c.method === "getUpdates" && c.body.offset === 22 && c.body.timeout === 0));
+  }, 10_000);
 
   it("cancelling makes the link useless, and a new run does not reuse an old offset", async () => {
     const { startBinding, bindingStatus, cancelBinding } = await import("@/lib/telegram");

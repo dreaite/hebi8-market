@@ -22,6 +22,7 @@ interface SymbolSearchProps {
   /** navigate: open the chart, adding to the watchlist first when needed; pick: hand the key back */
   mode: "navigate" | "pick";
   ctx: SearchContext;
+  readOnly?: boolean;
   initialQuery?: string;
   placeholder?: string;
   /** Keys that should not be offered (the chart's own symbol, symbols already compared) */
@@ -43,7 +44,7 @@ const SECTION_LABELS: Record<Section, string> = { key: "", watchlist: "自选", 
  * One combobox for finding, opening, adding and comparing symbols. The watchlist, aliases and the
  * dictionary match instantly; external sources arrive after a short debounce.
  */
-export function SymbolSearch({ mode, ctx, initialQuery = "", placeholder, exclude = [], busy, error, onPick, onClose, pickActions }: SymbolSearchProps) {
+export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", placeholder, exclude = [], busy, error, onPick, onClose, pickActions }: SymbolSearchProps) {
   const id = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState(initialQuery);
@@ -97,10 +98,11 @@ export function SymbolSearch({ mode, ctx, initialQuery = "", placeholder, exclud
 
   const groupOptions = [...ctx.groups, NEW_GROUP];
   const chosenGroup = (r: SearchResult) => groupChoice[r.key] ?? r.suggestedGroup;
-  const addable = (r: SearchResult) => mode === "navigate" && !r.inWatchlist;
+  const addable = (r: SearchResult) => mode === "navigate" && !readOnly && !r.inWatchlist;
 
   const pick = (r: SearchResult, group = chosenGroup(r), action = pickActions?.[0]?.id) => {
     if (busy) return;
+    if (mode === "navigate" && readOnly && !r.inWatchlist) return;
     if (addable(r) && group === NEW_GROUP) {
       setNewGroup({ key: r.key, name: "" });
       return;
@@ -140,7 +142,8 @@ export function SymbolSearch({ mode, ctx, initialQuery = "", placeholder, exclud
   const listId = `${id}-list`;
   const optionId = (i: number) => `${id}-opt-${i}`;
   const activeRow = rows[active];
-  const hint = mode === "pick" ? (pickActions?.[0]?.label ?? "加入对比") : activeRow?.inWatchlist ? "打开" : "添加并打开";
+  const needsLogin = mode === "navigate" && readOnly && activeRow && !activeRow.inWatchlist;
+  const hint = mode === "pick" ? (pickActions?.[0]?.label ?? "加入对比") : activeRow?.inWatchlist ? "打开" : readOnly ? "需登录" : "添加并打开";
 
   return (
     <div role="combobox" aria-expanded={rows.length > 0} aria-haspopup="listbox" aria-controls={listId} aria-owns={listId} className="flex flex-col text-xs">
@@ -264,6 +267,7 @@ export function SymbolSearch({ mode, ctx, initialQuery = "", placeholder, exclud
           );
         })}
       </ul>
+      {needsLogin && <div className="border-t border-line px-3 py-2 text-[11px] text-muted">登录后可以添加到自己的列表</div>}
       {(searching || error || (trimmed && rows.length === 0)) && (
         <div className={`border-t border-line px-3 py-2 text-[11px] ${error ? "text-down" : "text-muted"}`}>
           {error ?? (searching ? "搜索中…" : "无结果，可直接输入 source:ticker 或 =表达式")}

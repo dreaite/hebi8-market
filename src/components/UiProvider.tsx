@@ -51,7 +51,7 @@ interface Toast extends ToastOptions {
 }
 
 /** Global search overlay, help drawer, toasts and the keyboard shortcuts that open them. */
-export function UiProvider({ ctx, children }: { ctx: SearchContext; children: ReactNode }) {
+export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; readOnly: boolean; children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [search, setSearch] = useState<{ query: string; seq: number } | null>(null);
@@ -172,7 +172,7 @@ export function UiProvider({ ctx, children }: { ctx: SearchContext; children: Re
             role="dialog"
             aria-label="搜索标的"
           >
-            <SymbolSearch key={search.seq} mode="navigate" ctx={ctx} initialQuery={search.query} busy={busy} error={error} onPick={(d) => void onPick(d)} onClose={closeSearch} />
+            <SymbolSearch key={search.seq} mode="navigate" ctx={ctx} readOnly={readOnly} initialQuery={search.query} busy={busy} error={error} onPick={(d) => void onPick(d)} onClose={closeSearch} />
           </div>
         </div>
       )}

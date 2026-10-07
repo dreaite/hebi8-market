@@ -148,7 +148,7 @@ async function pollUpdates(bot: Bot): Promise<void> {
         // e.g. 409 when something else reads the same bot: shown in the panel, retried
         state.lastError = err instanceof Error ? err.message : String(err);
         log(state.lastError);
-        if (!busy) break;
+        if (!waiting()) break;
         await new Promise((r) => setTimeout(r, RETRY_MS));
       }
     }

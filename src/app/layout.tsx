@@ -32,7 +32,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
     <html lang="zh-CN" data-updown={updown === "red-up" ? "red-up" : undefined}>
       <body className="flex min-h-screen flex-col font-sans antialiased">
         <ErrorCapture />
-        <UiProvider ctx={searchCtx}>
+        <UiProvider ctx={searchCtx} readOnly={!viewer?.canWrite}>
           <header className="site-header border-b border-line">
             <div className="mx-auto flex h-12 max-w-[1400px] items-center gap-3 px-3 sm:gap-4 sm:px-5">
               <Link href="/" className="flex shrink-0 items-baseline gap-3" title="hebi（蛇）首尾相衔，七天一个轮回；多出来的第八天，用来观测市场">
