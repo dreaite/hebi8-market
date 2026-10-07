@@ -211,6 +211,22 @@ describe("quote polling", () => {
     expect(withQuote(daily, quote(104, day2 + DAY), "UTC", 3_000_000_000_000)).toBe(daily);
   });
 
+  it("puts Sunday evening overnight quotes on Monday, matching the daily bars", async () => {
+    const { withQuote } = await import("@/lib/quotes");
+    const monday = Date.UTC(2026, 9, 5) / 1000;
+    const time = Date.parse("2026-10-04T22:00:00Z") / 1000; // Sunday 18:00 New York
+    const daily = [{ ...bar(100), t: monday }];
+    for (const [key, zone, kind] of [["tv:TVC:GOLD", "America/New_York", "cfd"], ["tv:FX_IDC:EURUSD", "Etc/UTC", "forex"], ["tv:CME_MINI:ES1!", "America/New_York", "futures"]]) {
+      const quote = { key, price: 110, time, session: "open" as const, fetchedAt: Date.now() };
+      const live = withQuote(daily, quote, zone, null, undefined, kind);
+      expect(live).toHaveLength(1);
+      expect(live[0]).toMatchObject({ t: monday, c: 110 });
+      expect(withQuote([{ ...bar(100), t: monday - 3 * DAY }], quote, zone, null, undefined, kind).map((b) => b.t)).toEqual([monday - 3 * DAY, monday]);
+      // Monday afternoon stays on Monday, instead of rolling over at noon.
+      expect(withQuote(daily, { ...quote, time: Date.parse("2026-10-05T19:00:00Z") / 1000 }, zone, null, undefined, kind)[0].t).toBe(monday);
+    }
+  });
+
   describe("rounds", () => {
     let calls: { source: string; tickers: string[] }[];
     let fail: Record<string, boolean>;
@@ -323,19 +339,58 @@ describe("quote polling", () => {
       logs.mockRestore();
     });
 
-    it("a once alert whose switch-off never reached the yaml does not fire again; editing the yaml later re-arms it", async () => {
+    it.each([
+      { formula: "close < 100", tf: "D" },
+      { formula: "close > ref(close, 1)", tf: "W" },
+    ])("recomputes a changed condition instead of reusing the old result: %j", async ({ formula, tf }) => {
       const { runAlerts } = await import("@/lib/alerts");
-      const { configMtime, readConfig } = await import("@/lib/vault");
+      const { readConfig, updateConfig } = await import("@/lib/vault");
+      const { recomputeStats } = await import("@/lib/sync");
+      const { writeBars } = await import("@/lib/store");
+      const { getDb } = await import("@/lib/db");
+      writeBars(BTC, closes(100, 101), "replace");
+      const vaults = vaultsWith([]);
+      updateConfig(root, (doc) => {
+        doc.set("groups", [{ name: "Crypto", symbols: ["BTC"] }]);
+        doc.set("conditions", [{ id: "gate", label: "Above", formula: "close > ref(close, 1)", tf: "D", notify: true }]);
+      });
+      const computedConfig = readConfig(root);
+      const results = recomputeStats("", computedConfig);
+      expect(results.get(BTC)?.gate.now).toBe(true);
+      getDb().prepare("INSERT INTO alert_state (vault, rule, key, state) VALUES ('', 'cond:gate', ?, 0)").run(BTC);
+      updateConfig(root, (doc) => {
+        doc.setIn(["conditions", 0, "formula"], formula);
+        doc.setIn(["conditions", 0, "tf"], tf);
+        doc.setIn(["conditions", 0, "label"], "Below100");
+      });
+      expect(await runAlerts(vaults[0], () => readConfig(root), results, undefined, computedConfig.conditions)).toEqual([]);
+    });
+
+    it("a committed once alert only retries its yaml switch-off; unrelated writes and manual enabling do not re-arm it", async () => {
+      const { forgetAlerts, runAlerts, setAlertsEnabled } = await import("@/lib/alerts");
+      const { readConfig, updateConfig } = await import("@/lib/vault");
       const { writeBars } = await import("@/lib/store");
       const { getDb } = await import("@/lib/db");
       writeBars(BTC, closes(100, 101), "replace");
       const vaults = vaultsWith([{ key: "BTC", cond: "greater", value: 50 }]);
       const alertId = vaults[0].config.alerts[0].id;
       const logs = vi.spyOn(console, "log").mockImplementation(() => undefined);
-      const fired = getDb().prepare("INSERT OR REPLACE INTO alert_state (vault, rule, key, state, fired_at) VALUES ('', ?, ?, 1, ?)");
-      fired.run(alertId, BTC, configMtime(root) + 60_000);
+      const rename = vi.spyOn(fs, "renameSync").mockImplementationOnce(() => {
+        throw new Error("ENOSPC");
+      });
+      expect(await runAlerts(vaults[0], () => readConfig(root), new Map())).toHaveLength(1);
+      rename.mockRestore();
+      expect(readConfig(root).alerts[0].enabled).toBe(true);
+      const firedAt = getDb().prepare("SELECT fired_at FROM alert_state WHERE rule = ?").get(alertId);
+      updateConfig(root, (doc) => doc.set("updown", "red-up"));
       expect(await runAlerts(vaults[0], () => readConfig(root), new Map())).toEqual([]);
-      fired.run(alertId, BTC, configMtime(root) - 60_000);
+      expect(readConfig(root).alerts[0].enabled).toBe(false);
+      expect(getDb().prepare("SELECT fired_at FROM alert_state WHERE rule = ?").get(alertId)).toEqual(firedAt);
+      setAlertsEnabled(root, [alertId], true); // hand-written enabled: true retains the firing
+      expect(await runAlerts(vaults[0], () => readConfig(root), new Map())).toEqual([]);
+      expect(readConfig(root).alerts[0].enabled).toBe(false);
+      setAlertsEnabled(root, [alertId], true);
+      forgetAlerts("", [alertId]); // the UI's restore starts over
       expect(await runAlerts(vaults[0], () => readConfig(root), new Map())).toHaveLength(1);
       logs.mockRestore();
     });

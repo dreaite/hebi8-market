@@ -175,6 +175,7 @@ alerts:
 | `moving_up_pct` / `moving_down_pct` | 上涨 % / 下跌 % | `{ pct, bars }` | 最近 `bars` 根日线内涨跌超过 `pct`% |
 
 - `trigger`：`once`（默认）触发后把这条写成 `enabled: false`（注释保留）；`bar` 每根日线最多一次。`enabled: false` 是暂停。
+  已触发的 `once` 手改 yaml 的 `enabled: true` 不会重新启用；重新启用请用界面上的恢复。
 - `when` 公式沿用条件的「新成立才推送」；要明确的上穿下穿写 `cross(close, X)`。`label` 省了按条件自动生成。
 - `data:` 数据集只有日线，跟着日线同步判断。
 - 所有通道都发送失败时不记账，下次再试；没配通道时只写日志。

@@ -141,7 +141,7 @@ export function syncAll(force = false): Promise<SyncOutcome[]> {
       `[hebi8m] synced ${results.length} symbols in ${((Date.now() - started) / 1000).toFixed(1)}s` +
         (failed.length ? `, failed: ${failed.map((r) => `${r.key} (${r.error})`).join(", ")}` : ""),
     );
-    for (const [i, v] of vaults.entries()) await runAlerts(v, () => readConfig(v.dir), conditions[i]);
+    for (const [i, v] of vaults.entries()) await runAlerts(v, () => readConfig(v.dir), conditions[i], undefined, v.config.conditions);
     return results;
   })().finally(() => {
     allInFlight = null;

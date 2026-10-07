@@ -117,6 +117,35 @@ describe("alert Server Actions", () => {
     expect(readConfig(root).alerts[0]).toMatchObject({ id: "alert:nvda-200", condition: { cond: "less", value: 100 }, tf: "D" });
   });
 
+  it("an edit during delivery waits for the old commit, then stays enabled with fresh state", async () => {
+    const { saveAlert } = await import("@/app/actions");
+    const { runAlerts } = await import("@/lib/alerts");
+    const { readConfig } = await import("@/lib/vault");
+    const { getDb } = await import("@/lib/db");
+    await saveAlert({ key: "BTC", cond: "greater", value: 100, trigger: "once" });
+    const alert = readConfig(root).alerts[0];
+    const secrets = path.join(dir, "secrets");
+    fs.mkdirSync(secrets, { recursive: true });
+    fs.writeFileSync(path.join(secrets, "notify.json"), JSON.stringify({ webhook: "http://fixture" }));
+    let started!: () => void;
+    const delivering = new Promise<void>((resolve) => { started = resolve; });
+    let release!: (response: Response) => void;
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise<Response>((resolve) => {
+      release = resolve;
+      started();
+    }));
+    const job = runAlerts({ id: "", dir: root }, () => readConfig(root), new Map(), () => [{ t: 1, o: 110, h: 110, l: 110, c: 110, v: 1, adj: 1 }]);
+    await delivering;
+    const edited = saveAlert({ id: alert.id, key: "BTC", cond: "greater", value: 100, trigger: "once", label: "Edited" });
+    release(new Response("ok"));
+    expect(await job).toHaveLength(1);
+    expect(await edited).toEqual({ ok: true });
+    expect(readConfig(root).alerts[0]).toMatchObject({ enabled: true, label: "Edited" });
+    expect(getDb().prepare("SELECT count(*) AS n FROM alert_state WHERE vault = '' AND rule = ?").get(alert.id)).toEqual({ n: 0 });
+    fetch.mockRestore();
+    fs.rmSync(path.join(secrets, "notify.json"));
+  });
+
   it("checks the input and the formula", async () => {
     const { saveAlert } = await import("@/app/actions");
     expect(await saveAlert({ key: "BTC", cond: "greater", value: Number.NaN, trigger: "once" })).toEqual({ ok: false, error: "greater 的 value 应是一个价格" });

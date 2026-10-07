@@ -41,10 +41,11 @@ interface State {
   /** Bot username by token, from getMe */
   botNames: Map<string, string>;
   lastError: string | null;
+  version: number;
 }
 
 const g = globalThis as unknown as { hebi8Telegram?: State };
-const state: State = (g.hebi8Telegram ??= { bindings: new Map(), run: null, botNames: new Map(), lastError: null });
+const state: State = (g.hebi8Telegram ??= { bindings: new Map(), run: null, botNames: new Map(), lastError: null, version: 0 });
 
 const log = (msg: string) => console.log(`[hebi8m] telegram: ${msg}`);
 
@@ -84,9 +85,11 @@ export async function botName(bot: Bot): Promise<string> {
 
 /** A new code for this login (replacing any earlier one) and the link that sends it to the bot. */
 export async function startBinding(login: string, now = Date.now()): Promise<{ url: string; expiresAt: number }> {
+  const version = state.version;
   const bot = instanceBot();
   if (!bot) throw new Error("这台 hebi8/market 没有配置 Telegram bot（notify.json 的 telegram.token），请找部署的人");
   const name = await botName(bot);
+  if (version !== state.version) throw new Error("bot 已更换，请重新开始绑定");
   const code = crypto.randomBytes(9).toString("base64url");
   const expiresAt = now + CODE_TTL_MS;
   state.bindings.set(login.toLowerCase(), { login, code, expiresAt });
@@ -124,6 +127,7 @@ export function cancelBinding(login: string): void {
  * and the old bot's polling ends now (its long poll is aborted). The next code starts a new loop.
  */
 export function resetBindings(): void {
+  state.version++;
   for (const [key, b] of state.bindings) if (!b.chat) state.bindings.delete(key);
   state.lastError = null;
   state.run?.stop.abort();

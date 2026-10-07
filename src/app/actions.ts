@@ -5,7 +5,7 @@ import { isMap, isScalar, isSeq, type Document, type YAMLMap, type YAMLSeq } fro
 import { compile } from "@/indicators/formula";
 import { describeError } from "@/indicators/formula-indicators";
 import type { AlertCond, AlertCondition, AlertTrigger } from "@/lib/alert-conds";
-import { alertIndex, forgetAlerts, setAlertsEnabled } from "@/lib/alerts";
+import { alertIndex, forgetAlerts, serializeAlerts, setAlertsEnabled } from "@/lib/alerts";
 import { CHART_STYLES, findItem, parseAlert, resolveKey, type ChartPrefs, type ConditionDef, type FormulaDef } from "@/lib/config";
 import { CHANGE_PERIODS, MAX_PERIODS } from "@/lib/periods";
 import type { Prices } from "@/lib/series";
@@ -408,7 +408,7 @@ function setField(doc: Document, map: YAMLMap, field: string, value: unknown): v
 
 /** Create or edit a price alert in the viewer's yaml; an edited alert starts over (TradingView restarts it too). */
 export async function saveAlert(input: AlertInput): Promise<ActionResult> {
-  return attempt(({ dir, vault }) => {
+  return attempt(({ dir, vault }) => serializeAlerts(() => {
     const cfg = readConfig(dir);
     const key = resolveKey(str(input.key), cfg.aliases);
     if (!isValidKey(key)) throw new Error("无效的 key");
@@ -463,24 +463,24 @@ export async function saveAlert(input: AlertInput): Promise<ActionResult> {
       id = parseAlert(node.toJSON(), index, cfg.aliases).id;
     });
     forgetAlerts(vault, input.id ? [input.id, id] : [id]);
-  });
+  }));
 }
 
 export async function deleteAlert(id: string): Promise<ActionResult> {
-  return attempt(({ dir, vault }) => {
+  return attempt(({ dir, vault }) => serializeAlerts(() => {
     const aliases = readConfig(dir).aliases;
     updateConfig(dir, (doc) => {
       const index = alertIndex(doc, str(id), aliases);
       if (index >= 0) doc.deleteIn(["alerts", index]);
     });
     forgetAlerts(vault, [str(id)]);
-  });
+  }));
 }
 
 /** 暂停 / 恢复; a resumed alert starts over. */
 export async function setAlertEnabled(id: string, enabled: boolean): Promise<ActionResult> {
-  return attempt(({ dir, vault }) => {
+  return attempt(({ dir, vault }) => serializeAlerts(() => {
     setAlertsEnabled(dir, [str(id)], Boolean(enabled));
     if (enabled) forgetAlerts(vault, [str(id)]);
-  });
+  }));
 }

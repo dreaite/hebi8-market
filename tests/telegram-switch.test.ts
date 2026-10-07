@@ -7,10 +7,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const OLD = "111:OLD-token";
 const NEW = "222:NEW-token";
+const LATE = "333:LATE-token";
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hebi8m-tg-switch-"));
 const secrets = path.join(dir, "secrets");
 const polls: { token: string; offset: unknown }[] = [];
 const updates: Record<string, { update_id: number; message: { chat: { id: number; type: string }; text: string } }[]> = { [OLD]: [], [NEW]: [] };
+let finishGetMe: (() => void) | null = null;
 
 // two bots; the old one's long poll stays open until the client gives up on it
 const server = http.createServer((req, res) => {
@@ -20,7 +22,13 @@ const server = http.createServer((req, res) => {
     const [, token, method] = /^\/bot([^/]+)\/(\w+)$/.exec(req.url ?? "") ?? [];
     const reply = (result: unknown) => res.end(JSON.stringify({ ok: true, result }));
     res.setHeader("content-type", "application/json");
-    if (method === "getMe") return reply({ username: token === OLD ? "old_bot" : "new_bot" });
+    if (method === "getMe") {
+      if (token === LATE) {
+        finishGetMe = () => reply({ username: "old_bot" });
+        return;
+      }
+      return reply({ username: token === OLD ? "old_bot" : "new_bot" });
+    }
     if (method === "sendMessage") return reply({ message_id: 1 });
     const body = JSON.parse(raw || "{}") as { offset?: number; timeout?: number };
     polls.push({ token, offset: body.offset });
@@ -58,6 +66,20 @@ afterAll(() => {
 });
 
 describe("a new instance bot", () => {
+  it("discards a binding whose getMe finishes after the bot was replaced", async () => {
+    const { bindingStatus, resetBindings, startBinding } = await import("@/lib/telegram");
+    writeNotify(LATE);
+    const pending = startBinding("carol");
+    const rejected = expect(pending).rejects.toThrow("bot 已更换");
+    await until(() => finishGetMe !== null);
+    writeNotify(NEW);
+    resetBindings();
+    finishGetMe!();
+    await rejected;
+    expect(bindingStatus("carol")).toEqual({ status: "expired" });
+    expect(polls.filter((p) => p.token === LATE)).toEqual([]);
+  });
+
   it("voids the codes of the old bot, stops its polling and binds through the new one", async () => {
     const { bindingStatus, resetBindings, startBinding } = await import("@/lib/telegram");
     const { readNotifyUsers } = await import("@/lib/notify");
