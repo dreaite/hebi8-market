@@ -36,14 +36,14 @@ describe("normalizeConfig", () => {
 
   it("resolves aliases in groups and benchmarks", () => {
     const cfg = example();
-    expect(cfg.groups.map((g) => g.name)).toEqual(["加密", "美股", "港 A", "宏观", "比价"]);
-    expect(cfg.groups[0].symbols).toEqual([
+    expect(cfg.groups.map((g) => g.name)).toEqual(["美股", "宏观", "加密", "港 A", "比价"]);
+    expect(cfg.groups[2].symbols).toEqual([
       { key: "binance:BTCUSDT", name: "比特币", bench: null, group: "加密" },
       { key: "binance:ETHUSDT", name: "以太坊", bench: "binance:BTCUSDT", group: "加密" },
     ]);
     expect(cfg.aliases).toMatchObject({ ETH: "binance:ETHUSDT", NVDA: "yahoo:NVDA", US10Y: "tv:TVC:US10Y", DXY: "tv:TVC:DXY", HSTECH: "tv:HSI:HSTECH" });
-    expect(cfg.groups[3].symbols.map((s) => s.name)).toEqual(["黄金", "美债 10 年", "美元指数"]);
-    expect(cfg.groups[2].symbols[1]).toEqual({ key: "yahoo:600519.SS", name: "贵州茅台", bench: "tv:SSE:000300", group: "港 A" });
+    expect(cfg.groups[1].symbols.map((s) => s.name)).toEqual(["黄金", "美债 10 年", "美元指数"]);
+    expect(cfg.groups[3].symbols[1]).toEqual({ key: "yahoo:600519.SS", name: "贵州茅台", bench: "tv:SSE:000300", group: "港 A" });
     expect(cfg.groups[4].symbols[0].key).toBe("=BTC/GOLD");
     expect(cfg.periods).toEqual(["1W", "1M", "1Y"]);
     expect(cfg.chart).toEqual({ tf: "W", log: true, style: "candle_solid", indicators: ["MA", "VOL"], params: { W: { MA: [10, 40, 200] } } });

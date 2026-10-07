@@ -42,7 +42,8 @@ export function ensureVault(): void {
 
 /**
  * A person's first visit: their yaml starts as a copy of the root one without the instance
- * settings and the owner's alerts; notes, journal and charts start empty. Returns the directory.
+ * settings and the owner's alerts, with 美股、宏观、加密 first; notes, journal and charts start
+ * empty. Returns the directory.
  */
 export function ensureUserVault(login: string): string {
   const dir = userVaultDir(login);
@@ -55,8 +56,23 @@ export function ensureUserVault(login: string): string {
     doc.commentBefore = [doc.commentBefore, first.commentBefore].filter(Boolean).join("\n");
   }
   for (const key of drop) doc.delete(key);
+  leadGroups(doc);
   atomicWrite(yamlPath(dir), doc.toString({ lineWidth: 0 }));
   return dir;
+}
+
+/** A new list starts with these groups in this order; the rest follow as the owner has them. */
+export const LEADING_GROUPS = ["美股", "宏观", "加密"];
+
+function leadGroups(doc: Document): void {
+  const groups = doc.get("groups");
+  if (!isSeq(groups)) return;
+  const rank = (g: unknown) => {
+    const i = isMap(g) ? LEADING_GROUPS.indexOf(String(g.get("name") ?? "").trim()) : -1;
+    return i < 0 ? LEADING_GROUPS.length : i;
+  };
+  // sort is stable, so the other groups keep their order
+  groups.items = [...groups.items].sort((a, b) => rank(a) - rank(b));
 }
 
 export interface VaultRef {
