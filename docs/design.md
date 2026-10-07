@@ -54,22 +54,22 @@ aliases:                       # 公式、条件、对比、合成标的里可�
   GOLD: tv:TVC:GOLD
   GPU4090: data:gpu/4090-xianyu
 
-groups:
-  - name: 加密
-    symbols:
-      - BTC                                      # 字符串：别名或完整 key
-      - { key: binance:ETHUSDT, bench: BTC }     # bench：相对强弱、close(bench) 的默认基准
+groups:                        # 顺序就是总览和图表右侧自选的顺序，页面上拖动会改写
   - name: 美股
     symbols:
-      - SPY
-      - { key: QQQ, bench: SPY }
+      - SPY                                      # 字符串：别名或完整 key
+      - { key: QQQ, bench: SPY }                 # bench：相对强弱、close(bench) 的默认基准
       - { key: yahoo:NVDA, name: 英伟达, bench: QQQ }
+  - name: 宏观
+    symbols: [GOLD, tv:TVC:US10Y, tv:TVC:DXY]
+  - name: 加密
+    symbols:
+      - BTC
+      - { key: binance:ETHUSDT, bench: BTC }
   - name: 港 A
     symbols:
       - { key: yahoo:0700.HK, name: 腾讯控股, bench: HSI }
       - { key: yahoo:600519.SS, name: 贵州茅台, bench: CSI300 }
-  - name: 宏观
-    symbols: [GOLD, tv:TVC:US10Y, tv:TVC:DXY]
   - name: 比价
     symbols:
       - { key: "=BTC/GOLD", name: 比特币/黄金 }   # 以 = 开头的是合成标的，见 §3.3
@@ -111,7 +111,7 @@ chart:                         # 全局图表偏好（UI 改动会写回这里�
 
 - 标的引用（groups、bench、公式里的 `close(X)`、合成表达式、对比列表）一律先查 `aliases`，查不到就当完整 key `source:ticker`。
 - `key` 格式：`yahoo:AAPL`、`yahoo:0700.HK`、`yahoo:^GSPC`、`binance:BTCUSDT`、`tv:TVC:US10Y`、`tv:FX_IDC:USDCNH`、`data:gpu/4090-xianyu`，或 `=表达式`。`data:` 的 key 区分大小写，在合成表达式和 `close(...)` 里要用别名或带引号。
-- 一个标的只出现在一个组里。显示名：`name` > 内置字典（`src/lib/wellknown.ts`）的中文名 > 数据源返回的名字。
+- 一个标的只出现在一个组里；`groups` 只有一份，就是唯一的自选列表，组是列表里的分区（TV 的 section）。显示名：`name` > 内置字典（`src/lib/wellknown.ts`）的中文名 > 数据源返回的名字。
 - yaml 由 UI 写回时必须保留注释和顺序：用 `yaml` 包的 `parseDocument` 修改后 `toString()`，原子写入（写临时文件再 rename）。
 - yaml 解析失败时页面显示错误（含行号），服务不崩。
 
@@ -227,7 +227,7 @@ CREATE TABLE usage_alerts (kind TEXT NOT NULL, day INTEGER NOT NULL, PRIMARY KEY
 
 - login 一律转小写作为目录名和 `vault` 列的值（GitHub login 只有字母数字和 `-`，大小写不敏感）。根 vault 的 `vault` 值是 `''`。
 - **实例级设置只认根 vault**：`owner`、`sync`、`datasets`、`usage`。用户 yaml 里写了也忽略（页面上提示一次）。
-- **第一次登录**的非 owner：复制根 vault 的 `hebi8.yaml` 作为起点，去掉 `owner`、`sync`、`datasets`、`usage`、`alerts`；notes / journal / charts 为空。之后两边互不影响。
+- **第一次登录**的非 owner：复制根 vault 的 `hebi8.yaml` 作为起点，去掉 `owner`、`sync`、`datasets`、`usage`、`alerts`，分组按「美股、宏观、加密」在前、其余按 owner 原来的顺序排（`vault.example` 也是这个顺序）；notes / journal / charts 为空。之后两边互不影响。
 - **所有写操作**（Server Actions、写文件的 Route Handler）都先取 viewer，`canWrite` 为假就返回「请先登录」；写入路径只来自 viewer 的 vault 目录，不接受客户端传来的目录或 login。读操作同样只读 viewer 的 vault。
 - **同步**：要同步的 key 是所有 vault 的并集（各自的 groups、bench、公式引用、告警、charts 对比列表）。同步后对每个 vault 算一遍 stats 和告警。
 - **页头**：右侧显示当前身份。未登录是「登录」按钮（打开帮助抽屉里同一套 device flow）；登录后是头像 + login，菜单里有「通知设置」、owner 才有的「使用情况」（§1.7）和「退出」。owner 模式下未登录时，总览标题是「示例列表」（内容就是 owner 的列表）。
@@ -291,6 +291,8 @@ interface SourceAdapter {
 - 读取路径（页面、API）**只读库**。首次运行库为空时，总览显示「首次拉取中…」并每 3s 刷新一次，同时后台触发 `syncAll`。
 - 「刷新」按钮是 Server Action：`await syncAll(true)` 后 `revalidatePath`，按钮期间显示 pending（手动动作，阻塞 3–30s 可以接受）。
 - 新增标的时立即 `syncOne(key, true)`，失败则不写入 yaml 并报错（首次拉取兼做校验）。
+- **打开不在自选里的标的**（搜索选中、直接输网址）：页面照样只读库；图表页挂载后调 Server Action `loadSymbol(key)`，对它（合成标的是各操作数）`syncOne`，一小时内拉过就跳过，只进缓存、不写 yaml，完成后重新取 `/api/bars`。它不在任何 vault 的引用里，所以定时同步不会更新它，下次打开时再补。访客不能触发（和添加一样要登录），只能看到已经缓存的。
+- `syncOne` 只在真的拉到新数据时重算各 vault 的 stats。
 - `syncAll` 算完 stats 后跑一次通知（§2.5）；`syncOne` 不通知。
 
 ### 2.4 自定义数据集（`data` 源）
@@ -470,13 +472,17 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 
 ### 5.1 总览 `/`（RSC 直读 yaml + stats 表）
 
-- 顶部：`自选 · 上次同步`；右侧「上次复盘 N 天前」链到 `/review`、「周期 · 1周 1月 1年」（点开选择显示的涨跌周期）、涨跌色分段开关「绿涨 | 红涨」、「刷新」、「+ 添加」（打开全局搜索，见 §5.4）。
-- **一张表格**，`table-layout: fixed` + `<colgroup>`，分组做 subheader 行，所以「价格」列在每个分组里的 x 坐标一致。名称列吃剩余宽度并 truncate（title 显全名）；其余列固定：价格 112、每个涨跌周期 72、距高点 72、52 周 128、条件 220、两年 200、菜单 28。
+- 顶部：`自选 · 上次同步`；右侧「上次复盘 N 天前」链到 `/review`、「周期 · 1周 1月 1年」（点开选择显示的涨跌周期）、涨跌色分段开关「绿涨 | 红涨」、「刷新」、「+ 添加」（打开全局搜索的添加模式，Enter = 加入自选，见 §5.4）。
+- **一张表格**，`table-layout: fixed` + `<colgroup>`，分组做 subheader 行，所以「价格」列在每个分组里的 x 坐标一致。名称列吃剩余宽度并 truncate（title 显全名）；其余列固定：价格 112、每个涨跌周期 72、距高点 96、条件 220、两年 200、菜单 28。
+- **距高点**一列合并了原来的「距高点」和「52 周」两列：上面是距历史最高收盘的跌幅（`ddAth`，按它排序），下面是 52 周区间位置的短条（`pos52`，最左 52 周低点、最右高点）。「近高点」「新高」是用户自己的条件徽标，不在这里合并。
+- **表头悬浮说明**：名称、价格、各涨跌周期（相对哪天的收盘）、距高点（两部分各是什么）、两年都有 `title`，有说明的表头文字带虚下划线；可排序的在说明后面接排序提示。
+- **分组（分区）**：标题行是「拖动手柄 · 折叠箭头 + 组名 + 数量 · ⋯」。折叠状态是界面偏好，存 localStorage（`hebi8:watchlist:collapsed`，组名列表，和图表页的自选面板共用）。「⋯」：重命名 / 删除分组（照 TV 删除分区：组里的标的并入上面那组，第一组并入下面那组；唯一的组里还有标的时不能删）。列表末尾「+ 新建分组」内联输入。
+- **拖动排序**：标的行和分组标题都能拖（鼠标按住行任意处拖动，移动超过 4px 才算拖，松开后的 click 被吞掉；手指从行首的手柄拖），标的可以拖进别的组，拖到折叠或空的组上就放到那组末尾；落点画一条 accent 色的线，被拖的行变淡，靠近滚动区上下边缘时自动滚动，Esc 取消。键盘：聚焦手柄（Tab 可达，hover / focus 时显示，触屏一直显示）后 ↑ / ↓ 移动一格，跨组边界就进相邻组，焦点跟着走，结果用 `aria-live` 读出。界面先乐观更新（`useOptimistic`），Server Action `moveSymbol(key, group, index)` / `moveGroup(name, index)` 写回 yaml 顺序，失败 toast 并恢复。按列排序时不能拖（手柄隐藏，给一行提示）。访客没有手柄和组菜单，只能折叠。
 - 表头整格可点排序：第一次降序、第二次升序、第三次恢复 yaml 顺序；箭头指示方向（`aria-sort`）；**同一列的排序同时作用于所有分组**。
 - 整行是链接（`onClick` 路由 + 名称单元格是真正的 `<a>`，中键在新标签打开）。行尾「⋯」菜单始终可聚焦，视觉上 hover / focus / 打开时才显示；右键整行也打开：打开 / 移到分组 ▸（现有分组或新建）/ 改名 / 设基准 / 移除（toast「已移除 X · 撤销」，不用原生 confirm）。
 - 条件徽标三态，同一个 `Badge` 组件（复盘页也用）：`now=true` 普通描边；**本周新触发**淡高亮底（浅色 `bg-accent/10 border-accent/40 text-accent`，深色 `bg-accent/15 border-accent/50`）加圆点；**本周失效**虚线边、`opacity .55`，不用删除线。
 - 显示名：yaml `name` > 内置字典中文名 > 数据源名（超过 24 字符 truncate，hover 显全名）。
-- ≤768px 隐藏 sparkline 与 52 周列，徽标 `whitespace-nowrap`；≤640px 改为列表：第一行 名称 + 价格，第二行 所选涨跌周期，第三行 徽标；外层 `overflow-x-auto` 兜底，不允许横向溢出。
+- ≤768px 隐藏 sparkline，徽标 `whitespace-nowrap`；≤640px 改为列表：第一行 名称 + 价格，第二行 所选涨跌周期，第三行 徽标；外层 `overflow-x-auto` 兜底，不允许横向溢出。
 - 页脚只显示相对路径 `vault/hebi8.yaml`。
 - 同步错误显示在该行；库为空时显示「首次拉取中…」并轮询。
 
@@ -489,7 +495,8 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 - **顶部工具栏**（一行，38px，按钮 30px 热区，组间 1px 竖分隔线）：`‹ 总览` · **商品按钮**（放大镜 + 代码 + 名称，点开全局搜索换标的）· `+` **比较商品** · 周期快捷按钮 `日 周 月 季` · **图表类型**（图标 + 下拉：实心 K 线 / 空心阳线 / 美国线 / 面积）· `fx 指标` · ……右端 **刷新**（tooltip 显示同步时间，加载时图标转动）· **全屏**（`document.documentElement.requestFullscreen()`，全屏时隐藏站点页头，弹窗和搜索浮层照常可用）。
 - **左侧画线工具栏**（42px 竖条，图标按钮，tooltip「名称 · 快捷键」）：十字光标（= 退出画线）· 趋势线 `segment` · 射线 `rayLine` · 延长线 `straightLine` · 水平线 `horizontalStraightLine` · 水平射线 `horizontalRayLine` · 垂直线 `verticalStraightLine` · 斐波那契回撤 `fibonacciLine` · 文字 `simpleAnnotation` ｜ 磁铁模式（overlay `mode: weak_magnet`）· 锁定所有绘图 · 隐藏所有绘图 · 删除所有绘图（确认）。当前工具高亮；画完一条自动回到十字光标（TV 默认）；开始画线时若「隐藏所有绘图」开着会先显示出来。磁铁 / 锁定 / 隐藏是纯界面偏好，存 localStorage（`hebi8:chart:drawing`），作用于所有画线和之后新画的。
 - **图内图例（左上角，TV 样式，React 覆盖层 `ChartLegend`）**：第一行 `名称 周期 · 源 · 币种 · 基准` + `开 高 低 收` + 涨跌（相对上一根收盘，十字线处或最后一根）；然后每个百分比对比一行、每个主图指标一行（名称 + 参数 + 各条线的值，颜色同线）；副图指标 / 新窗格对比的行放在各自窗格左上角（`chart.getSize(paneId).top`）。行上悬停（鼠标指针事件，不用 CSS `:hover`，触屏上点一下）出现 **眼睛**（隐藏 / 显示，会话内）· **设置**（内置指标 = 参数弹窗，按当前周期保存；公式指标 = 公式编辑器）· **×**（移除）；双击行 = 设置。KLineChart 自己的蜡烛与指标 tooltip 关闭（`showRule: "none"`），数值由 `indicator.result` 和图形样式按 KLineChart 同样的规则取（线色按 `lines[i]`，柱按 `figure.styles` 动态色）。
-- **右侧边栏**：最右 42px 图标条（自选列表 · 笔记），面板 280px，同一时间只开一个，上次打开的记在 localStorage（`hebi8:chart:panel`；没记过时有笔记就默认开笔记）。**自选列表**按 yaml 分组，每行名称 · 最新价 · 总览第一个周期的涨跌（`stats`），当前标的高亮，点击客户端切换（偏好不变）。**笔记**即原来的笔记面板。
+- **右侧边栏**：最右 42px 图标条（自选列表 · 笔记），面板 280px，同一时间只开一个，上次打开的记在 localStorage（`hebi8:chart:panel`；没记过时有笔记就默认开笔记）。**自选列表**按 yaml 分组，每行名称 · 最新价 · 总览第一个周期的涨跌（`stats`），当前标的高亮，点击客户端切换（偏好不变）；分组和总览一样能折叠、重命名、删除、新建，标的和分组都能拖动排序（§5.1）；标题栏「+」打开搜索的添加模式。**笔记**即原来的笔记面板。
+- **加入自选**：当前标的不在自选里时，顶栏商品按钮后面出现「加入自选」下拉（现有分组 + 新分组名输入），选了就 `addSymbol`，toast 可撤销；在自选里就不显示。不在自选里的标的打开时先按需拉日线（§2.3），图上显示「正在拉取 X 的日线…」。
 - **底部栏**（32px）：左边日期范围 `1年 3年 5年 10年 全部`——按当前周期算出这段有多少根，`setBarSpace(可用宽度 / 根数)` 后 `scrollToRealTime()`；若每根不足 1px（例如日线 10 年），像 TV 一样自动升到下一个周期（日 → 周 → 月）再适配。右边 `ADJ`（含分红，总回报）· `%`（百分比坐标，localStorage）· `log` · `自动`（重新启用价格轴自动缩放；拖动价格轴后它会熄灭）。`%` 与 `log` 互斥；有百分比对比时 `%` 显示为按下且锁定，tooltip「比较模式下使用百分比坐标」，`log` 禁用。
 - **窄屏（≤768px，TV 移动版）**：顶部工具栏一行横向滚动；左侧画线栏隐藏，改为顶栏里的「画线」下拉（工具 + 磁铁 / 锁定 / 隐藏 / 删除）；右侧图标条隐藏，自选 / 笔记按钮进顶栏，面板变成底部抽屉（60vh，默认关闭）；底部栏仍是一行。390px 宽无横向溢出。下拉菜单用 `position: fixed` 按按钮位置弹出，不被滚动的工具栏裁掉。
 
@@ -555,10 +562,12 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 1. 「使用 `<key>`」：输入本身是合法 key（`yahoo:XXX`、`binance:XXX`、`tv:EX:SYM`、`=A/B`）或别名（不区分大小写）时永远是第一行。
 2. 「自选」：本地即时匹配，不区分大小写，匹配 name、ticker、key、yaml 别名、分组名、内置字典的中文名和拼音（全拼 / 首字母）；每行「名称 · 代码 · 分组」；Enter = 打开（图表页 = 客户端切换）。
-3. 「常用」：yaml `aliases` 与内置字典里尚未在自选的条目；Enter = 添加并打开。
-4. 「搜索」：外部结果，300ms 防抖（ASCII ≥2 字符，CJK ≥1）；状态「搜索中…」/「无结果，可直接输入 source:ticker 或 =表达式」；已在自选的行尾标「已在自选 · 分组」且 Enter = 打开。
+3. 「常用」：yaml `aliases` 与内置字典里尚未在自选的条目。
+4. 「搜索」：外部结果，300ms 防抖（ASCII ≥2 字符，CJK ≥1）；状态「搜索中…」/「无结果，可直接输入 source:ticker 或 =表达式」；已在自选的行尾标「已在自选 · 分组」。
 
-**添加**（`navigate` 模式，行不在自选时）：行尾显示推断的分组芯片——`binance` / 加密类 → 加密；`.HK/.SS/.SZ` 或 `tv:SSE/SZSE/HKEX` → 港 A；`tv:TVC/FX_IDC/OANDA` 或 kind ∈ index/bond/commodity/forex/cfd/currency/economic → 宏观；`=` → 比价；其余 → 美股。按组名（含同义词）匹配 yaml 里现有的组，没有就落到第一个组；高亮行展开全部芯片 + 「新建分组…」（内联输入）。Enter = `addSymbol` 到该组 + 立即开图；名称写 yaml 时取字典中文名；若输入的是中文搜索词且添加成功，把「搜索词 → key」写进 `aliases`；成功 toast「已添加到 港 A · 撤销」（撤销 = `removeSymbol`）；已存在 → 直接打开。
+**打开和加入是两个动作（照 TV）**。`navigate` 模式（页头搜索框、`/`、图表页敲字母、商品按钮）：Enter / 点击 = 打开图表，**不改自选**（不在自选的标的由图表页按需拉数据，§2.3）；加入自选是行尾的「+」按钮或 Shift+Enter。`add` 模式（总览「+ 添加」、图表页自选面板的「+」，对应 TV 自选列表的「添加商品」）：Enter / 点击 = 加入自选，已在自选的行只标「已在自选」。两种模式加入后搜索框都不关，可以接着加，行尾随即变成「已在自选 · 分组」（按当前 yaml 判断，不看搜索时的结果）。访客选不在列表里的行无效，底部提示登录。
+
+**加入**（行不在自选时）：行尾显示推断的分组芯片——`binance` / 加密类 → 加密；`.HK/.SS/.SZ` 或 `tv:SSE/SZSE/HKEX` → 港 A；`tv:TVC/FX_IDC/OANDA` 或 kind ∈ index/bond/commodity/forex/cfd/currency/economic → 宏观；`=` → 比价；其余 → 美股。按组名（含同义词）匹配 yaml 里现有的组，没有就落到第一个组；高亮行展开全部芯片 + 「新建分组…」（内联输入）+「+」，其他行只有淡色「+」；Tab 换组。加入 = `addSymbol` 到该组；名称写 yaml 时取字典中文名；若输入的是中文搜索词且添加成功，把「搜索词 → key」写进 `aliases`；成功 toast「已把 X 加入「港 A」· 撤销」（撤销 = `removeSymbol`）。
 
 **`pick` 模式**（比较商品弹窗）：主动作由 `pickActions` 给出（「同百分比坐标」/「新窗格」，高亮行上显示为按钮，Enter = 第一个），自选段也是；排除当前标的与已对比的 key。
 
@@ -691,7 +700,7 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 - `GET /api/help` → 帮助面板数据（§5.8，只读本地）。
 - `/api/github/device`（POST 开始 device flow / DELETE 取消）、`/api/github/device/poll`（POST）、`/api/github/logout`（POST）、`/api/github/issues`（GET 最近反馈 / POST 提交）：§5.8，唯一会碰 GitHub 网络的接口，都是打开反馈页签或用户动作触发。
 
-**Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench?, alias? })`、`removeSymbol(key)`、`moveSymbol(key, group)`、`renameSymbol(key, name)`、`setBench(key, bench | null)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveCondition(def)` / `deleteCondition(id)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`、`setUsageLimits({ visitors, limited })`（owner，§1.7）。Server Action 在客户端是**串行派发**的，自动保存靠去抖合并，不并行发。
+**Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench?, alias? })`、`loadSymbol(key)`（只拉缓存，§2.3）、`removeSymbol(key)`、`moveSymbol(key, group, index?)`（index 不算被移动的那个，省略 = 末尾）、`moveGroup(name, index)`、`addGroup(name)`、`renameGroup(name, next)`、`deleteGroup(name)`（标的并入相邻组）、`renameSymbol(key, name)`、`setBench(key, bench | null)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveCondition(def)` / `deleteCondition(id)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`、`setUsageLimits({ visitors, limited })`（owner，§1.7）。Server Action 在客户端是**串行派发**的，自动保存靠去抖合并，不并行发。
 
 所有写入校验输入；文件路径只能落在 vault 内（fileKey 已保证无 `/`、`..`）；写入原子。
 
@@ -736,4 +745,4 @@ schema v2 + 迁移；`adj` 因子与 `prices` 模式；适配器 meta；应用�
 
 ## 9. 不做的事
 
-访问控制、限流和封禁（实例经隧道公开，GitHub 登录只用来区分共用实例的人和提交反馈，不防恶意访问者；流量只监控，§1.6、§1.7）；vault 之间的共享和协作编辑；日内 K 线（盘中只取最新价判断警报，§2.6，不存也不画日内 K 线）；比 5 分钟更快的价格警报（WebSocket、逐笔）；入站 webhook；数据集爬虫（hebi8 只读仓库）；Pine Script 兼容；拖拽排序（改 yaml）。
+访问控制、限流和封禁（实例经隧道公开，GitHub 登录只用来区分共用实例的人和提交反馈，不防恶意访问者；流量只监控，§1.6、§1.7）；vault 之间的共享和协作编辑；日内 K 线（盘中只取最新价判断警报，§2.6，不存也不画日内 K 线）；比 5 分钟更快的价格警报（WebSocket、逐笔）；入站 webhook；数据集爬虫（hebi8 只读仓库）；Pine Script 兼容；多个自选列表（TV 的「列表」切换）：现在只有一个列表 + 分组，一个标的只在一个组里，bench、名字都挂在条目上；要做多列表得先把每个标的的字段和「在哪些列表」分开，等确实需要再说。
