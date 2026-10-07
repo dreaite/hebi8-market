@@ -48,6 +48,9 @@ export async function getViewer(): Promise<Viewer> {
   return resolveViewer((await cookies()).get(SESSION_COOKIE)?.value);
 }
 
+/** Whoever may change the instance's settings from the page (the bot): an owner, or anyone in single-user mode. */
+export const maySetBot = (viewer: Viewer) => viewer.isOwner || (!viewer.shared && viewer.canWrite);
+
 /** The viewer, refused unless they may change their vault. */
 export function requireWriter(viewer: Viewer): Viewer {
   if (!viewer.canWrite) throw new Error("请先登录");

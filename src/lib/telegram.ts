@@ -70,7 +70,8 @@ export function instanceBot(): Bot | null {
   return t ? { token: t.token, api: t.api } : null;
 }
 
-async function botName(bot: Bot): Promise<string> {
+/** The bot's @username from getMe, cached per token; throws when Telegram does not accept the token. */
+export async function botName(bot: Bot): Promise<string> {
   const known = state.botNames.get(bot.token);
   if (known) return known;
   const me = await call<{ username?: string }>(bot, "getMe", {});

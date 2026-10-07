@@ -7,7 +7,7 @@ import { recentErrors } from "@/lib/client-errors";
 import { FEEDBACK_TYPES, feedbackContext, webIssueUrl, type FeedbackType, type PageInfo } from "@/lib/feedback";
 import { fmtAgo } from "@/lib/format";
 import type { IssueSummary } from "@/lib/github";
-import type { ChannelSummary } from "@/lib/notify";
+import type { BotSummary, ChannelSummary } from "@/lib/notify";
 import type { HelpInfo } from "@/lib/help-info";
 import { getChartContext } from "@/lib/page-context";
 import { useLocalStorage } from "@/lib/use-local-storage";
@@ -564,17 +564,23 @@ function NotifyTab({
   reload: () => Promise<void>;
   toast: (message: string, opts?: ToastOptions) => void;
 }) {
+  // a new bot changes what the channel settings can offer, so they reload
+  const [botVersion, setBotVersion] = useState(0);
   if (!info) return <p className="text-muted">读取中…</p>;
   const notifyJson = <code className="font-mono">~/.config/hebi8/market/notify.json</code>;
+  const bot = info.canSetBot && <InstanceBot toast={toast} onChange={() => setBotVersion((n) => n + 1)} />;
   if (!info.shared) {
     return (
-      <Section title="通知">
-        <p className="leading-relaxed">
-          标了 <code className="font-mono">notify</code> 的条件和 <code className="font-mono">alerts</code> 规则在同步后新成立时推一条摘要。单用户模式下通道写在服务器的 {notifyJson}
-          （Telegram bot 和 chat、webhook），改完运行 <code className="font-mono">npm run notify:test</code> 发一条试试。
-        </p>
-        <p className="mt-2 leading-relaxed text-muted">在 hebi8.yaml 里写了 owner 的共用实例，每个人登录后在这里绑定自己的通道。</p>
-      </Section>
+      <>
+        <Section title="通知">
+          <p className="leading-relaxed">
+            标了 <code className="font-mono">notify</code> 的条件在同步后新成立、价格警报触发时，推一条摘要。单用户模式下通道写在服务器的 {notifyJson}
+            （Telegram bot 和 chat、webhook），改完运行 <code className="font-mono">npm run notify:test</code> 发一条试试。
+          </p>
+          <p className="mt-2 leading-relaxed text-muted">在 hebi8.yaml 里写了 owner 的共用实例，每个人登录后在这里绑定自己的通道。</p>
+        </Section>
+        {bot}
+      </>
     );
   }
   if (!info.github.enabled) {
@@ -588,10 +594,106 @@ function NotifyTab({
         autoLogin={autoLogin}
         reload={reload}
         toast={toast}
-        intro="登录后用你自己的自选、笔记和复盘，并设置你自己的通知：你标了 notify 的条件和 alerts 规则新成立时，推到你绑定的 Telegram 或 webhook。"
+        intro="登录后用你自己的自选、笔记和复盘，并设置你自己的通知：你标了 notify 的条件新成立、你的价格警报触发时，推到你绑定的 Telegram 或 webhook。"
       />
-      {user && <NotifySettings key={user.login} toast={toast} />}
+      {user && <NotifySettings key={`${user.login}:${botVersion}`} toast={toast} />}
+      {user && bot && <div className="mt-5">{bot}</div>}
     </>
+  );
+}
+
+/**
+ * 实例的 Telegram bot (§2.5): an owner (anyone in single-user mode) pastes the token; the server
+ * checks it with getMe before writing notify.json and never shows it again, only the bot's name.
+ */
+function InstanceBot({ toast, onChange }: { toast: (message: string, opts?: ToastOptions) => void; onChange: () => void }) {
+  const [bot, setBot] = useState<BotSummary | null>(null);
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    request<BotSummary>("/api/notify/bot", "GET")
+      .then((b) => alive && setBot(b))
+      .catch((err) => alive && setError(errorText(err)));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const change = async (method: "PUT" | "DELETE") => {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await request<BotSummary>("/api/notify/bot", method, method === "PUT" ? { token } : undefined);
+      setBot(next);
+      setToken("");
+      setConfirming(false);
+      toast(next.configured ? `已设置 bot @${next.username}` : "已移除 bot");
+      onChange();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title="实例的 Telegram bot">
+      <Row label="bot">
+        {!bot ? (
+          <span className="text-muted">读取中…</span>
+        ) : !bot.configured ? (
+          <span className="text-muted">未配置</span>
+        ) : bot.username ? (
+          <span className="font-mono">@{bot.username}</span>
+        ) : (
+          <span className="text-down">已配置，但 getMe 失败：{bot.error}</span>
+        )}
+      </Row>
+      <form
+        className="mt-2 flex items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void change("PUT");
+        }}
+      >
+        <input
+          type="password"
+          autoComplete="off"
+          className="input min-w-0 flex-1 font-mono"
+          placeholder={bot?.configured ? "粘贴新的 token 替换" : "粘贴 @BotFather 给的 token"}
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          aria-label="bot token"
+        />
+        <button type="submit" className="btn btn-secondary" disabled={busy || !token.trim()}>
+          {busy ? "校验中…" : "保存"}
+        </button>
+      </form>
+      {bot?.configured &&
+        (confirming ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span className="text-down">移除会删掉 notify.json 的 telegram 段（含主人的 chat），大家的 Telegram 通知都会停。</span>
+            <button type="button" className="btn btn-secondary text-down" disabled={busy} onClick={() => void change("DELETE")}>
+              确认移除
+            </button>
+            <button type="button" className="btn" onClick={() => setConfirming(false)}>
+              取消
+            </button>
+          </div>
+        ) : (
+          <button type="button" className="btn mt-2" onClick={() => setConfirming(true)}>
+            移除
+          </button>
+        ))}
+      {error && <p className="mt-1 text-down">{error}</p>}
+      <p className="mt-2 text-[11px] leading-relaxed text-muted">
+        保存前先用 getMe 校验，通过才写进服务器的 notify.json，之后只显示 bot 用户名，不再显示 token。这个 bot 要给 hebi8/market 专用：别的程序也读它的消息时，绑定会抢不到。
+      </p>
+    </Section>
   );
 }
 

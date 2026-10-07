@@ -93,6 +93,50 @@ export function parseNotifyConfig(raw: unknown): NotifyConfig {
   return out;
 }
 
+/** What the page shows about the instance's bot; never the token. */
+export interface BotSummary {
+  configured: boolean;
+  username: string | null;
+  /** getMe failed for the configured token */
+  error?: string;
+}
+
+/**
+ * The owner sets the instance's bot from the page (§2.5): only the `telegram` section changes, every
+ * other field of the hand-written file stays as it was. `token: null` removes the section.
+ */
+export function setInstanceBot(bot: { token: string; api: string } | null): void {
+  const raw = readNotifyFile();
+  if (bot) raw.telegram = { ...obj(raw.telegram), token: bot.token, ...(bot.api !== TELEGRAM_API ? { api: bot.api } : {}) };
+  else delete raw.telegram;
+  writeJson(NOTIFY_FILE, raw);
+}
+
+/** The Bot API a new token is checked against: the file's `telegram.api`, else Telegram's. */
+export function instanceBotApi(): string {
+  const api = str(obj(readNotifyFile().telegram)?.api);
+  return api ? httpUrl(api, "telegram.api") : TELEGRAM_API;
+}
+
+/** notify.json as written; a file that is not a JSON object is not overwritten. */
+function readNotifyFile(): Record<string, unknown> {
+  let text: string;
+  try {
+    text = fs.readFileSync(path.join(secretsDir(), NOTIFY_FILE), "utf8");
+  } catch {
+    return {};
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    raw = null;
+  }
+  const root = obj(raw);
+  if (!root) throw new Error("notify.json 不是有效的 JSON 对象，先手动修好它");
+  return root;
+}
+
 /** A missing file means no channels; a broken one is reported, not ignored. */
 export function readNotifyConfig(): { config: NotifyConfig; error: string | null } {
   const file = path.join(secretsDir(), NOTIFY_FILE);

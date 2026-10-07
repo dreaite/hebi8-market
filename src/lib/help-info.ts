@@ -6,12 +6,14 @@ import { nameOf } from "./names";
 import { nextRun, scheduledNextSync } from "./scheduler";
 import { listSymbols, maxSyncedAt } from "./store";
 import { readConfigSafe, vaultDir } from "./vault";
-import type { Viewer } from "./viewer";
+import { maySetBot, type Viewer } from "./viewer";
 
 export interface HelpInfo {
   app: typeof APP_INFO;
   /** The instance is shared: logging in switches to your own vault */
   shared: boolean;
+  /** This viewer may set the instance's Telegram bot (an owner, or anyone in single-user mode) */
+  canSetBot: boolean;
   repo: { fullName: string; url: string; designUrl: string; issuesUrl: string };
   data: {
     watched: number;
@@ -57,6 +59,7 @@ export function helpInfo(viewer: Viewer): HelpInfo {
   return {
     app: APP_INFO,
     shared: viewer.shared,
+    canSetBot: maySetBot(viewer),
     repo: { fullName: REPO_FULL_NAME, url: REPO_URL, designUrl: DESIGN_DOC_URL, issuesUrl: fromAppIssuesUrl(repo) },
     data: {
       watched: watched.length,
