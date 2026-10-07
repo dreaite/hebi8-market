@@ -374,7 +374,8 @@ export function KChart({
   const styleRef = useRef(chartStyle);
   const compareRef = useRef(compare);
   const basesRef = useRef<number[]>([]);
-  const crosshairRef = useRef<number | null>(null);
+  /** Where the pointer is, not the bar under it: scrolling and zooming move the bars under a still pointer */
+  const crosshairRef = useRef<{ x: number; paneId?: string } | null>(null);
   const overlaysRef = useRef(overlays);
   const drawingModesRef = useRef(drawing);
   const restoringRef = useRef(false);
@@ -418,7 +419,9 @@ export function KChart({
     const chart = chartRef.current;
     if (!chart) return;
     const bars = barsRef.current;
-    const idx = Math.max(0, Math.min(crosshairRef.current ?? bars.length - 1, bars.length - 1));
+    const pointer = crosshairRef.current;
+    const at = pointer ? (chart.convertFromPixel([{ x: pointer.x }], { paneId: pointer.paneId }) as Partial<Point>[])[0]?.dataIndex : undefined;
+    const idx = Math.max(0, Math.min(at ?? bars.length - 1, bars.length - 1));
     const bar = bars[idx];
     const prev = bars[idx - 1];
     const paneTops: Record<string, number> = {};
@@ -613,8 +616,11 @@ export function KChart({
   const editorAt = (id: string): { x: number; y: number } => {
     const o = overlayById(id);
     const point = o?.points[0];
-    const at = (point ? chartRef.current?.convertToPixel({ timestamp: point.timestamp, value: point.value }, { paneId: CANDLE_PANE, absolute: true }) : {}) as Partial<Coordinate>;
-    return { x: at.x ?? 0, y: (at.y ?? 0) - (o?.name === "simpleAnnotation" ? 61 : 0) };
+    const chart = chartRef.current;
+    const at = (point ? chart?.convertToPixel({ timestamp: point.timestamp, value: point.value }, { paneId: CANDLE_PANE, absolute: true }) : {}) as Partial<Coordinate>;
+    // `absolute` only adds the pane's top: x is still from the plot's left edge, after any left scale
+    const left = chart?.getSize(CANDLE_PANE, "main")?.left ?? 0;
+    return { x: left + (at.x ?? 0), y: (at.y ?? 0) - (o?.name === "simpleAnnotation" ? 61 : 0) };
   };
 
   /** Type a text drawing in place; the canvas text hides meanwhile so it is not drawn twice. */
@@ -776,15 +782,16 @@ export function KChart({
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     chart.subscribeAction("onVisibleRangeChange", () => {
+      // a still pointer is over another bar now
+      scheduleLegend();
       clearTimeout(timer);
       timer = setTimeout(updateBases, 80);
     });
     // KLineChart 10 hands this only the pointer ({ x, y, paneId }), not the bar under it, and stays
-    // silent when the crosshair goes away: the bar is found from x, and leaving the chart is heard below
+    // silent when the crosshair goes away: the legend finds the bar from x, and leaving the chart is heard below
     chart.subscribeAction("onCrosshairChange", (data) => {
       const { x, paneId } = data as Crosshair;
-      const point = x === undefined ? undefined : (chart.convertFromPixel([{ x }], { paneId }) as Partial<Point>[])[0];
-      crosshairRef.current = point?.dataIndex ?? null;
+      crosshairRef.current = x === undefined ? null : { x, paneId };
       scheduleLegend();
     });
     // TradingView: off the chart, the legend goes back to the latest bar
