@@ -14,13 +14,18 @@ export interface PickDetail {
   /** What was typed, for remembering a Chinese search term as an alias */
   query: string;
   inWatchlist: string | undefined;
-  /** Which of `pickActions` was chosen (pick mode); Enter takes the first */
+  /** navigate / add mode: `open` the chart or `add` to the watchlist; pick mode: which of `pickActions` (Enter takes the first) */
   action?: string;
 }
 
+export type SearchMode = "navigate" | "add" | "pick";
+
 interface SymbolSearchProps {
-  /** navigate: open the chart, adding to the watchlist first when needed; pick: hand the key back */
-  mode: "navigate" | "pick";
+  /**
+   * navigate: Enter opens the chart (like TradingView, opening never adds); the row's「+」or
+   * Shift+Enter adds. add: Enter adds (the watchlist's「+」). pick: hand the key back.
+   */
+  mode: SearchMode;
   ctx: SearchContext;
   readOnly?: boolean;
   initialQuery?: string;
@@ -41,7 +46,8 @@ const sectionOf = (r: SearchResult): Section =>
 const SECTION_LABELS: Record<Section, string> = { key: "", watchlist: "自选", common: "常用", external: "搜索" };
 
 /**
- * One combobox for finding, opening, adding and comparing symbols. The watchlist, aliases and the
+ * One combobox for finding, opening, adding and comparing symbols, as in TradingView: choosing a
+ * result opens it, adding to the watchlist is its own action. The watchlist, aliases and the
  * dictionary match instantly; external sources arrive after a short debounce.
  */
 export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", placeholder, exclude = [], busy, error, onPick, onClose, pickActions }: SymbolSearchProps) {
@@ -98,16 +104,29 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
 
   const groupOptions = [...ctx.groups, NEW_GROUP];
   const chosenGroup = (r: SearchResult) => groupChoice[r.key] ?? r.suggestedGroup;
-  const addable = (r: SearchResult) => mode === "navigate" && !readOnly && !r.inWatchlist;
+  // from the list as it is now, so a row added a moment ago says so
+  const watchedIn = useMemo(() => new Map(ctx.watchlist.map((w) => [w.key, w.group])), [ctx.watchlist]);
+  const groupOf = (r: SearchResult) => watchedIn.get(r.key);
+  const addable = (r: SearchResult) => mode !== "pick" && !readOnly && !groupOf(r);
 
-  const pick = (r: SearchResult, group = chosenGroup(r), action = pickActions?.[0]?.id) => {
+  const detail = (r: SearchResult, group: string, action: string | undefined): PickDetail => ({ key: r.key, name: r.name, group, query: trimmed, inWatchlist: groupOf(r), action });
+
+  /** Enter or a click: open the chart, add (add mode), or the first pick action */
+  const pick = (r: SearchResult, action = pickActions?.[0]?.id) => {
     if (busy) return;
-    if (mode === "navigate" && readOnly && !r.inWatchlist) return;
-    if (addable(r) && group === NEW_GROUP) {
+    if (mode === "add") return add(r);
+    if (mode === "navigate" && readOnly && !groupOf(r)) return;
+    onPick(detail(r, chosenGroup(r), mode === "navigate" ? "open" : action));
+  };
+
+  /** The row's「+」, Shift+Enter, or Enter in add mode: into the chosen group */
+  const add = (r: SearchResult, group = chosenGroup(r)) => {
+    if (busy || !addable(r)) return;
+    if (group === NEW_GROUP) {
       setNewGroup({ key: r.key, name: "" });
       return;
     }
-    onPick({ key: r.key, name: r.name, group, query: trimmed, inWatchlist: r.inWatchlist, action });
+    onPick(detail(r, group, "add"));
   };
 
   const cycleGroup = (r: SearchResult, step: 1 | -1) => {
@@ -128,7 +147,8 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
       setActive((i) => Math.max(i - 1, 0));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if (row) pick(row);
+      if (row && e.shiftKey && mode === "navigate") add(row);
+      else if (row) pick(row);
     } else if (e.key === "Tab" && row && addable(row)) {
       e.preventDefault();
       cycleGroup(row, e.shiftKey ? -1 : 1);
@@ -142,8 +162,22 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
   const listId = `${id}-list`;
   const optionId = (i: number) => `${id}-opt-${i}`;
   const activeRow = rows[active];
-  const needsLogin = mode === "navigate" && readOnly && activeRow && !activeRow.inWatchlist;
-  const hint = mode === "pick" ? (pickActions?.[0]?.label ?? "加入对比") : activeRow?.inWatchlist ? "打开" : readOnly ? "需登录" : "添加并打开";
+  const needsLogin = mode !== "pick" && readOnly && activeRow && !groupOf(activeRow);
+  const hint = !activeRow
+    ? ""
+    : mode === "pick"
+      ? `Enter ${pickActions?.[0]?.label ?? "加入对比"}`
+      : mode === "add"
+        ? addable(activeRow)
+          ? "Enter 加入自选 · Tab 换组"
+          : groupOf(activeRow)
+            ? "已在自选"
+            : "需登录"
+        : groupOf(activeRow) || readOnly
+          ? groupOf(activeRow)
+            ? "Enter 打开"
+            : "需登录"
+          : "Enter 打开 · Shift+Enter 加入自选 · Tab 换组";
 
   return (
     <div role="combobox" aria-expanded={rows.length > 0} aria-haspopup="listbox" aria-controls={listId} aria-owns={listId} className="flex flex-col text-xs">
@@ -165,12 +199,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
           autoComplete="off"
           className="h-10 flex-1 bg-transparent text-sm outline-none"
         />
-        {activeRow && (
-          <span className="hidden text-[11px] text-muted sm:inline">
-            Enter {hint}
-            {addable(activeRow) && " · Tab 换组"}
-          </span>
-        )}
+        {hint && <span className="hidden text-[11px] text-muted sm:inline">{hint}</span>}
       </div>
       <ul id={listId} role="listbox" className="max-h-[60vh] overflow-y-auto py-1">
         {items.map(({ r, section, header }, i) => {
@@ -198,7 +227,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
                 </span>
                 {mode === "pick" && pickActions ? (
                   !isActive ? (
-                    r.inWatchlist && <span className="shrink-0 text-[11px] text-muted">{r.inWatchlist}</span>
+                    groupOf(r) && <span className="shrink-0 text-[11px] text-muted">{groupOf(r)}</span>
                   ) : (
                     <span className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
                       {pickActions.map((a, ai) => (
@@ -206,7 +235,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
                           key={a.id}
                           type="button"
                           tabIndex={-1}
-                          onClick={() => pick(r, undefined, a.id)}
+                          onClick={() => pick(r, a.id)}
                           className={`h-[22px] rounded border px-2 text-[11px] ${ai === 0 ? "border-fg bg-fg text-bg" : "border-line text-fg hover:border-muted"}`}
                         >
                           {a.label}
@@ -214,10 +243,8 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
                       ))}
                     </span>
                   )
-                ) : r.inWatchlist ? (
-                  <span className="shrink-0 text-[11px] text-muted">
-                    {section === "watchlist" ? r.inWatchlist : `已在自选 · ${r.inWatchlist}`}
-                  </span>
+                ) : groupOf(r) ? (
+                  <span className="shrink-0 text-[11px] text-muted">{section === "watchlist" ? groupOf(r) : `已在自选 · ${groupOf(r)}`}</span>
                 ) : addable(r) ? (
                   <span className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
                     {newGroup?.key === r.key ? (
@@ -226,7 +253,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
                         onChange={(e) => setNewGroup({ key: r.key, name: e.target.value })}
                         onKeyDown={(e) => {
                           e.stopPropagation();
-                          if (e.key === "Enter" && newGroup.name.trim()) pick(r, newGroup.name.trim());
+                          if (e.key === "Enter" && newGroup.name.trim()) add(r, newGroup.name.trim());
                           if (e.key === "Escape") {
                             setNewGroup(null);
                             setGroupChoice((g) => ({ ...g, [r.key]: r.suggestedGroup }));
@@ -237,9 +264,8 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
                         autoFocus
                         className="h-[22px] w-28 rounded border border-accent bg-bg px-1.5 text-[11px] outline-none"
                       />
-                    ) : !isActive ? (
-                      <span className="h-[22px] rounded-full border border-line px-2 text-[11px] leading-[20px] text-muted">{chosenGroup(r) === NEW_GROUP ? "新建分组…" : chosenGroup(r)}</span>
                     ) : (
+                      isActive &&
                       groupOptions.map((g) => {
                         const on = g === chosenGroup(r);
                         return (
@@ -251,12 +277,25 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
                               setGroupChoice((c) => ({ ...c, [r.key]: g }));
                               if (g === NEW_GROUP) setNewGroup({ key: r.key, name: "" });
                             }}
+                            aria-pressed={on}
                             className={`h-[22px] rounded-full border px-2 text-[11px] ${on ? "border-fg bg-fg text-bg" : "border-line text-muted hover:border-muted"}`}
                           >
                             {g === NEW_GROUP ? "新建分组…" : g}
                           </button>
                         );
                       })
+                    )}
+                    {newGroup?.key !== r.key && (
+                      <button
+                        type="button"
+                        tabIndex={-1}
+                        onClick={() => add(r)}
+                        aria-label={`加入自选「${chosenGroup(r) === NEW_GROUP ? "新分组" : chosenGroup(r)}」`}
+                        title={`加入自选 · ${chosenGroup(r) === NEW_GROUP ? "新分组" : chosenGroup(r)}${mode === "navigate" ? "（Shift+Enter）" : "（Enter）"}`}
+                        className={`flex h-[22px] w-[22px] items-center justify-center rounded border text-sm leading-none ${isActive ? "border-fg text-fg hover:bg-fg hover:text-bg" : "border-transparent text-muted"}`}
+                      >
+                        +
+                      </button>
                     )}
                   </span>
                 ) : (
@@ -267,7 +306,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
           );
         })}
       </ul>
-      {needsLogin && <div className="border-t border-line px-3 py-2 text-[11px] text-muted">登录后可以添加到自己的列表</div>}
+      {needsLogin && <div className="border-t border-line px-3 py-2 text-[11px] text-muted">登录后可以打开不在列表里的标的，并加入自己的自选</div>}
       {(searching || error || (trimmed && rows.length === 0)) && (
         <div className={`border-t border-line px-3 py-2 text-[11px] ${error ? "text-down" : "text-muted"}`}>
           {error ?? (searching ? "搜索中…" : "无结果，可直接输入 source:ticker 或 =表达式")}

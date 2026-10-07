@@ -152,6 +152,21 @@ export async function addSymbol(input: AddSymbolInput): Promise<ActionResult> {
   });
 }
 
+/**
+ * Opening a symbol that is not in the list: fetch its daily bars into the cache so the chart has
+ * something to show. Nothing is written to the yaml; adding it is a separate, explicit action.
+ */
+export async function loadSymbol(key: string): Promise<ActionResult> {
+  return attempt(async ({ dir }) => {
+    if (!isValidKey(key)) throw new Error(`无效的 key「${key}」`);
+    const keys = isSynthetic(key) ? parseSynth(key.slice(1), readConfig(dir).aliases).keys : [key];
+    for (const k of keys) {
+      const outcome = await syncOne(k);
+      if (!outcome.ok) throw new Error(`拉取 ${k} 失败：${outcome.error}`);
+    }
+  });
+}
+
 export async function moveSymbol(key: string, group: string): Promise<ActionResult> {
   return attempt(({ dir }) => {
     const target = str(group);

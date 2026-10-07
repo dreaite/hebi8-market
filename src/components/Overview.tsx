@@ -312,7 +312,7 @@ export function Overview({ data }: { data: OverviewData }) {
               >
                 {refreshing ? "同步中…" : "刷新"}
               </button>
-              <button onClick={() => openSearch()} className="btn btn-secondary">
+              <button onClick={() => openSearch("", "add")} className="btn btn-secondary" title="搜索标的并加入自选">
                 + 添加
               </button>
             </>
@@ -333,7 +333,7 @@ export function Overview({ data }: { data: OverviewData }) {
       {data.firstRun && <p className="mb-3 text-sm text-muted">首次拉取中，正在从数据源获取全部历史，稍等几秒…</p>}
       {data.groups.length === 0 && (
         <p className="mb-3 text-sm text-muted">
-          还没有自选。按 <kbd className="rounded border border-line px-1 font-mono">/</kbd> 搜索并添加。
+          还没有自选。点「+ 添加」，或按 <kbd className="rounded border border-line px-1 font-mono">/</kbd> 搜索后点结果行上的 +。
         </p>
       )}
 
