@@ -89,6 +89,8 @@ export interface Config {
   indicators: FormulaDef[];
   /** Including the old `conditions` list, read as alerts on the whole watchlist */
   alerts: AlertDef[];
+  /** The old conditions' `alert_state` rules (`cond:<id>`) → the alert ids they continue as; empty once the yaml has moved them */
+  conditionRules: Record<string, string>;
   /** Dataset name → git URL or local directory (absolute, `~/`, or relative to the vault) */
   datasets: Record<string, string>;
   chart: ChartPrefs;
@@ -221,10 +223,14 @@ export function normalizeConfig(raw: unknown): Config {
     return [{ id, label: text(d.label) ?? id, pane: d.pane === "main" ? ("main" as const) : ("sub" as const), formula }];
   });
 
-  const alerts = [
-    ...list(root.alerts).map((raw, i) => parseAlert(raw, i, aliases)),
-    ...list(root.conditions).map((raw, i) => parseAlert(conditionAsAlert(raw), i, aliases, "conditions")),
-  ];
+  const alerts = list(root.alerts).map((raw, i) => parseAlert(raw, i, aliases));
+  const taken = new Set(alerts.map((a) => a.id));
+  const conditionRules: Record<string, string> = {};
+  for (const [i, raw] of list(root.conditions).entries()) {
+    const alert = parseAlert(conditionAsAlert(raw, taken), i, aliases, "conditions");
+    alerts.push(alert);
+    conditionRules[`cond:${text(obj(raw).id)}`] = alert.id;
+  }
   const ids = new Set<string>();
   for (const a of alerts) {
     if (ids.has(a.id)) throw new ConfigError(`alerts：重复的规则「${a.id.slice(6)}」，同一条件只写一次，或给每条写不同的 id`);
@@ -265,6 +271,7 @@ export function normalizeConfig(raw: unknown): Config {
     groups: parseGroups(root.groups, aliases),
     indicators,
     alerts,
+    conditionRules,
     datasets,
     chart: {
       tf: isTimeframe(chart.tf) ? chart.tf : DEFAULT_CHART.tf,
@@ -293,14 +300,22 @@ export function normalizeUserConfig(raw: unknown, root: Config): Config {
 const shortName = (key: string, aliases: Record<string, string>) => Object.entries(aliases).find(([, k]) => k === key)?.[0] ?? tickerOf(key);
 
 /**
+ * The id an old condition keeps as an alert: its own, `cond-<id>` when an alert in `alerts` has
+ * it already, none (a hash) when it is free text an alert id cannot be.
+ */
+export function conditionId(raw: unknown, taken: Set<string>): string | undefined {
+  const id = text(raw);
+  if (!id || !/^[A-Za-z0-9_-]+$/.test(id)) return undefined;
+  return taken.has(`alert:${id}`) ? `cond-${id}` : id;
+}
+
+/**
  * An entry of the old `conditions` list (`{ id, label, formula, tf: W by default, notify }`) as the
  * alert on the whole watchlist it now is; the first alert edit in the UI moves them into `alerts`.
  */
-export function conditionAsAlert(raw: unknown): Record<string, unknown> {
+function conditionAsAlert(raw: unknown, taken: Set<string>): Record<string, unknown> {
   const d = obj(raw);
-  // condition ids were free text; one an alert id cannot be is dropped, which only resets its state
-  const id = typeof d.id === "string" && /^[A-Za-z0-9_-]+$/.test(d.id.trim()) ? d.id : undefined;
-  return { id, label: d.label ?? d.id, when: d.formula, tf: d.tf ?? "W", notify: d.notify === true };
+  return { id: conditionId(d.id, taken), label: d.label ?? d.id, when: d.formula, tf: isTimeframe(d.tf) ? d.tf : "W", notify: d.notify === true };
 }
 
 /** 「收盘价上穿 130,000」, 「5 根 K 线内上涨 3%」, or the formula with its timeframe. */

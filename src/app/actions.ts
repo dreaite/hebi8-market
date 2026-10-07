@@ -5,7 +5,7 @@ import { isMap, isScalar, isSeq, type Document, type YAMLMap, type YAMLSeq } fro
 import { compile } from "@/indicators/formula";
 import { describeError } from "@/indicators/formula-indicators";
 import type { AlertCond, AlertCondition, AlertTrigger } from "@/lib/alert-conds";
-import { alertIndex, editAlerts, forgetAlerts, runAlerts, serializeAlerts, setAlertsEnabled } from "@/lib/alerts";
+import { adoptConditionState, alertIndex, editAlerts, forgetAlerts, runAlerts, serializeAlerts, setAlertsEnabled } from "@/lib/alerts";
 import { CHART_STYLES, USAGE_LIMITS, findItem, parseAlert, resolveKey, type ChartPrefs, type FormulaDef, type UsageLimits } from "@/lib/config";
 import { CHANGE_PERIODS, MAX_PERIODS } from "@/lib/periods";
 import type { Prices } from "@/lib/series";
@@ -503,6 +503,8 @@ export async function saveAlert(input: AlertInput): Promise<ActionResult> {
   return attempt(async ({ dir, vault }) => {
     const watchlist = await serializeAlerts(() => {
       const cfg = readConfig(dir);
+      // the old conditions' state follows them before the yaml moves them
+      adoptConditionState(vault, cfg);
       const key = input.key == null ? null : resolveKey(str(input.key), cfg.aliases);
       if (key !== null && !isValidKey(key)) throw new Error("无效的 key");
       // written the way a person would: the alias when there is one
@@ -564,7 +566,9 @@ export async function saveAlert(input: AlertInput): Promise<ActionResult> {
 
 export async function deleteAlert(id: string): Promise<ActionResult> {
   return attempt(({ dir, vault }) => serializeAlerts(() => {
-    const aliases = readConfig(dir).aliases;
+    const cfg = readConfig(dir);
+    adoptConditionState(vault, cfg);
+    const aliases = cfg.aliases;
     editAlerts(dir, (doc) => {
       const index = alertIndex(doc, str(id), aliases);
       if (index >= 0) doc.deleteIn(["alerts", index]);
@@ -577,6 +581,7 @@ export async function deleteAlert(id: string): Promise<ActionResult> {
 export async function setAlertEnabled(id: string, enabled: boolean): Promise<ActionResult> {
   return attempt(async ({ dir, vault }) => {
     await serializeAlerts(() => {
+      adoptConditionState(vault, readConfig(dir));
       setAlertsEnabled(dir, [str(id)], Boolean(enabled));
       if (enabled) forgetAlerts(vault, [str(id)]);
     });

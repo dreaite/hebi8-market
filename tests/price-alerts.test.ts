@@ -339,7 +339,7 @@ describe("quote polling", () => {
       logs.mockRestore();
     });
 
-    it("judges the whole watchlist after a daily sync only; quote rounds keep its rows, old cond: rows go", async () => {
+    it("judges the whole watchlist after a daily sync only; quote rounds keep its rows, old cond: rows continue", async () => {
       const { runAlerts, readState, stateId } = await import("@/lib/alerts");
       const { liveReader } = await import("@/lib/quotes");
       const { readConfig, updateConfig } = await import("@/lib/vault");
@@ -356,11 +356,14 @@ describe("quote polling", () => {
       const rules = () => [...readState("").keys()].map((k) => k.split("\u0000")[0]).sort();
       const [alertId] = vaults[0].config.alerts.map((a) => a.id);
 
+      // any pass renames the old row first; a quote round does not judge the watchlist
       await runAlerts(vaults[0], load, "quotes", liveReader());
-      expect(rules()).toEqual([alertId]);
+      expect(rules()).toEqual([alertId, "alert:gate"].sort());
+      expect(readState("").get(stateId("alert:gate", BTC))).toMatchObject({ state: 0, firedAt: null });
+      // it was false before the upgrade and holds now: a turn, not a first sighting
       await runAlerts(vaults[0], load);
       expect(rules()).toEqual([alertId, "alert:gate"].sort());
-      expect(readState("").get(stateId("alert:gate", BTC))?.state).toBe(1);
+      expect(readState("").get(stateId("alert:gate", BTC))).toMatchObject({ state: 1, firedAt: expect.any(Number) });
       await runAlerts(vaults[0], load, "quotes", liveReader());
       expect(rules()).toEqual([alertId, "alert:gate"].sort());
     });

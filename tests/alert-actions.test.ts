@@ -175,8 +175,9 @@ alerts: [] # 图表上建的写在这里
     const text = read();
     expect(text).not.toContain("conditions:");
     expect(text).toContain("# 比特币");
-    expect(text).toContain('- { id: trend, label: 趋势, when: close > 1, tf: W, notify: false }');
-    expect(text).toContain('- { id: hot, label: 新高, when: "close >= highest(close, 52)", tf: D }');
+    // the nodes themselves move: the formula is renamed, the old defaults are written out
+    expect(text).toContain('- { id: trend, label: 趋势, when: "close > 1", tf: W, notify: false }');
+    expect(text).toContain('- { id: hot, label: 新高, when: "close >= highest(close, 52)", notify: true, tf: D }');
     expect(text).toContain('- { when: "close > ref(close, 1)", tf: W, label: 周涨, notify: false }');
     const added = readConfig(root).alerts[2];
     expect(added).toMatchObject({ key: null, trigger: "bar", tf: "W", notify: false });
@@ -187,6 +188,66 @@ alerts: [] # 图表上建的写在这里
     expect(readConfig(root).alerts[0]).toMatchObject({ id: "alert:trend", enabled: false });
     // a price needs a symbol
     expect(await saveAlert({ key: null, cond: "greater", value: 1, trigger: "once" })).toMatchObject({ ok: false, error: expect.stringContaining("要写 key") });
+  });
+
+  it("an old condition keeps comments and aliases when it moves, yields its id to an alert, and keeps its state", async () => {
+    const { setAlertEnabled } = await import("@/app/actions");
+    const { readConfig } = await import("@/lib/vault");
+    const { readState, stateId } = await import("@/lib/alerts");
+    const { alertBadges } = await import("@/lib/alert-view");
+    const { getDb } = await import("@/lib/db");
+    const BTC = "binance:BTCUSDT";
+    fs.writeFileSync(
+      yamlFile,
+      `# 我的警报
+aliases:
+  BTC: binance:BTCUSDT # 比特币
+groups:
+  - { name: 加密, symbols: [BTC] }
+indicators:
+  - { id: up, label: 上涨, pane: sub, formula: &up "close > ref(close, 1)" }
+conditions: # 旧的条件
+  # 周线趋势
+  - id: trend # 趋势的 id
+    formula: *up # 和指标同一个公式
+  - { id: 趋势, formula: "close > 2" }
+alerts:
+  - { key: BTC, id: trend, cond: greater, value: 1 }
+`,
+    );
+    // readable as it was: the price alert keeps `trend`, the condition becomes cond-trend
+    const before = readConfig(root);
+    expect(before.alerts.map((a) => [a.id, a.key, a.when])).toEqual([
+      ["alert:trend", BTC, null],
+      ["alert:cond-trend", null, "close > ref(close, 1)"],
+      [expect.stringMatching(/^alert:[0-9a-f]{6}$/), null, "close > 2"],
+    ]);
+    expect(before.conditionRules).toEqual({ "cond:trend": "alert:cond-trend", "cond:趋势": before.alerts[2].id });
+
+    const firedAt = Date.now();
+    const db = getDb();
+    db.prepare("DELETE FROM alert_state WHERE vault = ''").run();
+    db.prepare("INSERT INTO alert_state (vault, rule, key, state, fired_bar, fired_at) VALUES ('', 'cond:trend', ?, 1, 7, ?)").run(BTC, firedAt);
+    db.prepare("INSERT INTO alert_state (vault, rule, key, state) VALUES ('', 'alert:trend', ?, 0)").run(BTC);
+
+    expect(await setAlertEnabled("alert:trend", false)).toEqual({ ok: true });
+    const text = read();
+    expect(text).not.toContain("conditions:");
+    expect(text).not.toContain("formula: *up");
+    for (const kept of ["# 周线趋势", "id: cond-trend # 趋势的 id", "when: *up # 和指标同一个公式", "label: trend", 'formula: &up "close > ref(close, 1)"']) expect(text).toContain(kept);
+    expect(text).toContain('- { formula: "close > 2" }'.replace("formula", "when").replace(" }", ", label: 趋势, tf: W, notify: false }"));
+    const after = readConfig(root);
+    expect(after.alerts.map((a) => [a.id, a.when, a.tf, a.notify, a.enabled])).toEqual([
+      ["alert:trend", null, "D", true, false],
+      ["alert:cond-trend", "close > ref(close, 1)", "W", false, true],
+      [before.alerts[2].id, "close > 2", "W", false, true],
+    ]);
+    expect(after.conditionRules).toEqual({});
+
+    // the condition's state went with it; the price alert's row is its own
+    expect(readState("").get(stateId("alert:cond-trend", BTC))).toEqual({ state: 1, firedBar: 7, firedAt });
+    expect(readState("").get(stateId("alert:trend", BTC))).toMatchObject({ state: 0 });
+    expect(alertBadges("", after)[BTC].find((b) => b.id === "alert:cond-trend")).toMatchObject({ label: "trend", state: "fresh" });
   });
 
   it("checks the input and the formula", async () => {
