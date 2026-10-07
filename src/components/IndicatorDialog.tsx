@@ -203,8 +203,10 @@ export function ParamDialog({
   onClose: () => void;
 }) {
   const [text, setText] = useState(value.join(", "));
+  // an optional param left empty goes back to the default (none)
+  const cleared = Boolean(def.optionalParams) && !text.trim();
   const parsed = parseParams(text);
-  if (value.length === 0 && !overridden) {
+  if (value.length === 0 && !overridden && !def.optionalParams) {
     return (
       <Dialog title={`${def.label} 设置`} onClose={onClose} className="max-w-[420px]">
         <div className="flex flex-col gap-3 p-4 text-xs">
@@ -224,8 +226,8 @@ export function ParamDialog({
         className="flex flex-col gap-3 p-4 text-xs"
         onSubmit={(e) => {
           e.preventDefault();
-          if (parsed) {
-            onSave(parsed);
+          if (parsed || cleared) {
+            onSave(cleared ? null : parsed);
             onClose();
           }
         }}
@@ -233,7 +235,7 @@ export function ParamDialog({
         <div className="text-[11px] font-medium text-muted">输入</div>
         <label className="flex flex-col gap-1">
           <span className="text-muted">{def.hint}</span>
-          <input value={text} onChange={(e) => setText(e.target.value)} onFocus={(e) => e.target.select()} autoFocus aria-invalid={!parsed} className="input h-8 font-mono text-[13px]" />
+          <input value={text} onChange={(e) => setText(e.target.value)} onFocus={(e) => e.target.select()} autoFocus aria-invalid={!parsed && !cleared} className="input h-8 font-mono text-[13px]" />
         </label>
         <p className="text-[11px] text-muted">
           只对{TF_LABELS[tf]}线生效，其它周期各自保存{overridden ? "；当前为自定义值" : ""}。多个参数用逗号分隔。
@@ -255,7 +257,7 @@ export function ParamDialog({
           <button type="button" onClick={onClose} className="btn btn-secondary">
             取消
           </button>
-          <button type="submit" disabled={!parsed} className="btn btn-primary">
+          <button type="submit" disabled={!parsed && !cleared} className="btn btn-primary">
             确定
           </button>
         </div>

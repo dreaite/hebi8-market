@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { changeColor, fmtPct, fmtPrice } from "@/lib/format";
+import { useLocalStorage } from "@/lib/use-local-storage";
 import type { CompareEntry } from "@/lib/vault";
-import { IconClose, IconEye, IconGear } from "./chart-icons";
+import { IconCaret, IconClose, IconEye, IconGear, IconMore } from "./chart-icons";
+import { Dropdown } from "./Dialog";
 import type { LegendSnapshot } from "./chart-types";
 
 const CANDLE_PANE = "candle_pane";
-const EMPTY: LegendSnapshot = { candle: null, paneTops: {}, indicators: [], compares: [] };
+const EMPTY: LegendSnapshot = { left: 0, candle: null, paneTops: {}, indicators: [], compares: [] };
 
 export interface LegendStore {
   get: () => LegendSnapshot;
@@ -43,13 +45,26 @@ export interface ChartLegendProps {
   /** Display label per chart indicator name (built-in name or `F_<id>`) */
   labels: Record<string, string>;
   hiddenIndicators: string[];
-  onIndicator: (name: string, action: "toggle" | "settings" | "remove") => void;
+  onIndicator: (name: string, action: "toggle" | "settings" | "remove" | "move") => void;
   onCompare: (key: string, action: "toggle" | "remove") => void;
   /** Height of the main-pane block, kept free above the candles */
   onMainHeight: (height: number) => void;
 }
 
-function RowActions({ hidden, onToggle, onSettings, onRemove }: { hidden: boolean; onToggle: () => void; onSettings?: () => void; onRemove: () => void }) {
+function RowActions({
+  hidden,
+  onToggle,
+  onSettings,
+  onRemove,
+  move,
+}: {
+  hidden: boolean;
+  onToggle: () => void;
+  onSettings?: () => void;
+  onRemove: () => void;
+  /** TradingView's ⋯ → 移动到: the one pane this row's indicator can go to, and the move */
+  move?: { to: string; onMove: () => void };
+}) {
   const btn = "flex h-5 w-5 items-center justify-center rounded text-muted hover:bg-fg/10 hover:text-fg";
   return (
     <>
@@ -64,6 +79,25 @@ function RowActions({ hidden, onToggle, onSettings, onRemove }: { hidden: boolea
       <button type="button" className={btn} onClick={onRemove} title="移除" aria-label="移除">
         <IconClose size={14} />
       </button>
+      {move && (
+        <Dropdown label={<IconMore size={14} />} title="更多" className={btn} menuClassName="min-w-[9rem]">
+          {(close) => (
+            <>
+              <div className="px-2 pt-1.5 pb-1 text-[11px] text-muted">移动到</div>
+              <button
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  close();
+                  move.onMove();
+                }}
+              >
+                {move.to}
+              </button>
+            </>
+          )}
+        </Dropdown>
+      )}
     </>
   );
 }
@@ -124,6 +158,8 @@ function Row({
 
 export function ChartLegend({ store, title, subtitle, pricePrecision, compare, names, labels, hiddenIndicators, onIndicator, onCompare, onMainHeight }: ChartLegendProps) {
   const snap = useSyncExternalStore(store.subscribe, store.get, () => EMPTY);
+  /** TradingView's arrow under the main legend: the indicator rows fold away, the symbol row stays */
+  const [collapsed, setCollapsed] = useLocalStorage("hebi8:chart:legend-collapsed", false);
   const [active, setActive] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const mainRef = useRef<HTMLDivElement>(null);
@@ -165,6 +201,7 @@ export function ChartLegend({ store, title, subtitle, pricePrecision, compare, n
             onToggle={() => onIndicator(ind.name, "toggle")}
             onSettings={() => onIndicator(ind.name, "settings")}
             onRemove={() => onIndicator(ind.name, "remove")}
+            move={{ to: ind.paneId === CANDLE_PANE ? "下方新窗格" : "主图窗格", onMove: () => onIndicator(ind.name, "move") }}
           />
         }
       >
@@ -204,6 +241,9 @@ export function ChartLegend({ store, title, subtitle, pricePrecision, compare, n
   };
 
   const mainIndicators = snap.indicators.filter((i) => i.paneId === CANDLE_PANE);
+  const mainCompares = compare.filter((entry) => entry.mode === "percent");
+  const folded = mainIndicators.length + mainCompares.length;
+  const left = snap.left + 6;
   // sub panes in the order KLineChart stacks them
   const subPanes = Object.entries(snap.paneTops)
     .filter(([id]) => id !== CANDLE_PANE)
@@ -211,7 +251,7 @@ export function ChartLegend({ store, title, subtitle, pricePrecision, compare, n
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden text-[12px] leading-5" onMouseLeave={() => setActive(null)}>
-      <div ref={mainRef} className="absolute top-1 left-1.5 flex max-w-[calc(100%-5rem)] flex-col items-start">
+      <div ref={mainRef} className="absolute top-1 flex max-w-[calc(100%-5rem)] flex-col items-start" style={{ left }}>
         <div className="legend-row pointer-events-auto flex w-fit max-w-full flex-wrap items-center gap-x-2 rounded px-1">
           <span className="whitespace-nowrap text-[13px] font-medium text-fg">{title}</span>
           {subtitle.length > 0 && <span className="whitespace-nowrap text-muted">{subtitle.join(" · ")}</span>}
@@ -242,8 +282,21 @@ export function ChartLegend({ store, title, subtitle, pricePrecision, compare, n
             </span>
           )}
         </div>
-        {compare.map((entry, slot) => entry.mode === "percent" && compareRow(entry, slot))}
-        {mainIndicators.map(indicatorRow)}
+        {!collapsed && compare.map((entry, slot) => entry.mode === "percent" && compareRow(entry, slot))}
+        {!collapsed && mainIndicators.map(indicatorRow)}
+        {folded > 0 && (
+          <button
+            type="button"
+            className="pointer-events-auto ml-0.5 flex h-5 items-center gap-0.5 rounded px-0.5 text-muted hover:bg-fg/10 hover:text-fg"
+            onClick={() => setCollapsed(!collapsed)}
+            title={collapsed ? "显示指标图例" : "隐藏指标图例"}
+            aria-label={collapsed ? "显示指标图例" : "隐藏指标图例"}
+            aria-expanded={!collapsed}
+          >
+            <IconCaret size={14} className={collapsed ? "" : "rotate-180"} />
+            {collapsed && <span className="tabular text-[11px]">{folded}</span>}
+          </button>
+        )}
       </div>
       {subPanes.map(([paneId, top]) => {
         const rows = snap.indicators.filter((i) => i.paneId === paneId);
@@ -251,7 +304,7 @@ export function ChartLegend({ store, title, subtitle, pricePrecision, compare, n
         const entry = slot !== undefined ? compare[Number(slot)] : undefined;
         if (!rows.length && !entry) return null;
         return (
-          <div key={paneId} className="absolute left-1.5 flex max-w-[calc(100%-5rem)] flex-col items-start" style={{ top: top + 2 }}>
+          <div key={paneId} className="absolute flex max-w-[calc(100%-5rem)] flex-col items-start" style={{ top: top + 2, left }}>
             {entry && compareRow(entry, Number(slot))}
             {rows.map(indicatorRow)}
           </div>

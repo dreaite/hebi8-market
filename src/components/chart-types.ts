@@ -3,6 +3,8 @@
 export interface IndicatorSpec {
   name: string;
   pane: "main" | "sub";
+  /** Made for a pane of its own: on the main pane it keeps its own scale instead of the price axis */
+  ownScale?: boolean;
   calcParams: number[];
   /** Hidden from the legend's eye toggle; the pane stays */
   hidden?: boolean;
@@ -34,6 +36,8 @@ export interface LegendIndicator {
 
 /** What the in-chart legend shows at the crosshair (or the last bar). */
 export interface LegendSnapshot {
+  /** Left edge of the plots in px (a left scale on the main pane pushes every pane right) */
+  left: number;
   candle: { open: number; high: number; low: number; close: number; prevClose: number | null } | null;
   /** Top of each pane in px, relative to the chart container */
   paneTops: Record<string, number>;

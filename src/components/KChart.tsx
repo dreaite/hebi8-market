@@ -20,6 +20,7 @@ import {
   type OverlayFigure,
   type Point,
   type Styles,
+  type YAxisOverride,
 } from "klinecharts";
 import { customIndicators } from "@/indicators/custom";
 import type { RefSeries } from "@/indicators/formula";
@@ -90,6 +91,7 @@ type DrawingFlags = { lock?: boolean; hidden?: boolean };
 
 /** The y-axis object behind `getYAxes`; KLineChart keeps these methods off its public type. */
 interface AxisImpl {
+  id: string;
   name: string;
   getRange: () => AxisRange;
   setRange: (range: AxisRange) => void;
@@ -119,6 +121,18 @@ const SUB_PANE_HEIGHT = 100;
 const MIN_BAR_SPACE = 1;
 const BOTTOM_GAP = 0.1;
 const MAX_COMPARE = COMPARE_COLORS.length;
+/**
+ * Volume moved onto the main pane, as TradingView overlays it: no scale of its own on screen, the
+ * bars in the bottom quarter (the range is stretched to four times the volumes).
+ */
+const VOLUME_AXIS: YAxisOverride = {
+  needWidget: false,
+  gap: { top: 0, bottom: 0 },
+  createRange: ({ defaultRange: r }) => {
+    const to = r.from + r.range * 4;
+    return { ...r, to, range: to - r.from, realTo: to, realRange: to - r.realFrom, displayTo: to, displayRange: to - r.displayFrom };
+  },
+};
 const compareName = (slot: number) => `CMP${slot}`;
 const comparePane = (slot: number) => `pane_cmp_${slot}`;
 const isCompare = (name: string) => name.startsWith("CMP");
@@ -404,7 +418,7 @@ export function KChart({
     const chart = chartRef.current;
     if (!chart) return;
     const bars = barsRef.current;
-    const idx = Math.min(crosshairRef.current ?? bars.length - 1, bars.length - 1);
+    const idx = Math.max(0, Math.min(crosshairRef.current ?? bars.length - 1, bars.length - 1));
     const bar = bars[idx];
     const prev = bars[idx - 1];
     const paneTops: Record<string, number> = {};
@@ -415,6 +429,7 @@ export function KChart({
     });
     syncGap();
     store.set({
+      left: chart.getSize(CANDLE_PANE, "main")?.left ?? 0,
       candle: bar ? { open: bar.open, high: bar.high, low: bar.low, close: bar.close, prevClose: prev?.close ?? null } : null,
       paneTops,
       indicators,
@@ -716,10 +731,16 @@ export function KChart({
     return height > px * 2 ? (px * (1 + BOTTOM_GAP)) / (height - px) : px;
   };
   const applyYAxis = () => {
+    const chart = chartRef.current;
     const { percent, log } = yAxisRef.current;
     gapRef.current = topGap();
-    // overriding the axis also puts it back on auto scale
-    chartRef.current?.overrideYAxis({ paneId: CANDLE_PANE, name: percent ? "percentage" : log ? "logarithm" : "normal", gap: { top: gapRef.current, bottom: BOTTOM_GAP } });
+    const gap = { top: gapRef.current, bottom: BOTTOM_GAP };
+    // overriding the axis also puts it back on auto scale; by id, so the own scales of indicators
+    // moved onto the main pane keep their kind (the left ones keep the legend's band free too)
+    chart?.overrideYAxis({ paneId: CANDLE_PANE, id: candleAxis()?.id, name: percent ? "percentage" : log ? "logarithm" : "normal", gap });
+    for (const axis of chart?.getYAxes({ paneId: CANDLE_PANE }).slice(1) ?? []) {
+      if (axis.position === "left") chart?.overrideYAxis({ paneId: CANDLE_PANE, id: axis.id, gap });
+    }
     patchLogAxis();
     onAutoScaleRef.current(true);
   };
@@ -758,11 +779,20 @@ export function KChart({
       clearTimeout(timer);
       timer = setTimeout(updateBases, 80);
     });
+    // KLineChart 10 hands this only the pointer ({ x, y, paneId }), not the bar under it, and stays
+    // silent when the crosshair goes away: the bar is found from x, and leaving the chart is heard below
     chart.subscribeAction("onCrosshairChange", (data) => {
-      const c = data as Crosshair;
-      crosshairRef.current = typeof c.dataIndex === "number" && c.kLineData ? c.dataIndex : null;
+      const { x, paneId } = data as Crosshair;
+      const point = x === undefined ? undefined : (chart.convertFromPixel([{ x }], { paneId }) as Partial<Point>[])[0];
+      crosshairRef.current = point?.dataIndex ?? null;
       scheduleLegend();
     });
+    // TradingView: off the chart, the legend goes back to the latest bar
+    const onLeave = () => {
+      crosshairRef.current = null;
+      scheduleLegend();
+    };
+    el.addEventListener("mouseleave", onLeave);
     chart.subscribeAction("onPaneDrag", scheduleLegend);
     // Drawing follows the mouse into sub panes; a click there is thrown away and the tool restarts on the main pane.
     const onClick = () =>
@@ -835,6 +865,7 @@ export function KChart({
       clearTimeout(checkTimer);
       cancelAnimationFrame(legendFrame.current);
       el.removeEventListener("click", onClick, true);
+      el.removeEventListener("mouseleave", onLeave);
       window.removeEventListener("keydown", onKey);
       el.removeEventListener("mousedown", onPress, true);
       el.removeEventListener("touchstart", onPress, true);
@@ -973,7 +1004,13 @@ export function KChart({
       if (spec.name.startsWith("F_") && !available.has(spec.name)) continue;
       const visible = !spec.hidden;
       if (spec.pane === "main") {
-        chart.createIndicator({ name: spec.name, calcParams: spec.calcParams, paneId: CANDLE_PANE, visible }, true);
+        // moved up from a pane of its own: its own scale, on the left like TradingView's, or none for volume
+        const yAxisId = spec.ownScale ? `axis_${spec.name}` : undefined;
+        if (yAxisId) chart.createYAxis({ id: yAxisId, paneId: CANDLE_PANE, ...(spec.name === "VOL" ? VOLUME_AXIS : { position: "left", gap: { top: gapRef.current, bottom: BOTTOM_GAP } }) });
+        chart.createIndicator(
+          { name: spec.name, calcParams: spec.calcParams, paneId: CANDLE_PANE, visible, ...(yAxisId ? { yAxisId } : {}), ...(spec.precision !== undefined ? { precision: spec.precision } : {}) },
+          true,
+        );
       } else {
         const paneId = `pane_${spec.name}`;
         chart.createIndicator({ name: spec.name, calcParams: spec.calcParams, paneId, visible, ...(spec.precision !== undefined ? { precision: spec.precision } : {}) });

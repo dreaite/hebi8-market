@@ -407,7 +407,7 @@ export async function saveChartState(key: string, state: ChartState): Promise<Ac
   });
 }
 
-export async function setChartPrefs(partial: Partial<ChartPrefs> & { prices?: Prices }): Promise<ActionResult> {
+export async function setChartPrefs(partial: Partial<Omit<ChartPrefs, "panes">> & { prices?: Prices; panes?: Record<string, "main" | "sub" | null> }): Promise<ActionResult> {
   return attempt(({ dir, vault }) => {
     const cfg = readConfig(dir);
     updateConfig(dir, (doc) => {
@@ -430,6 +430,13 @@ export async function setChartPrefs(partial: Partial<ChartPrefs> & { prices?: Pr
             else if (doc.hasIn(["chart", "params", tf])) setList(doc, ["chart", "params", tf, name], nums);
             else doc.setIn(["chart", "params", tf], flowNode(doc, { [name]: nums }));
           }
+        }
+      }
+      if (partial.panes !== undefined) {
+        for (const [name, pane] of Object.entries(partial.panes)) {
+          if (pane !== "main" && pane !== "sub") doc.deleteIn(["chart", "panes", name]);
+          else if (doc.hasIn(["chart", "panes"])) setScalar(doc, ["chart", "panes", name], pane);
+          else doc.setIn(["chart", "panes"], flowNode(doc, { [name]: pane }));
         }
       }
       if (partial.prices !== undefined) {

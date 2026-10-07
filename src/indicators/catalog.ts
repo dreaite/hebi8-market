@@ -8,6 +8,8 @@ export interface IndicatorDef {
   /** Default calcParams per timeframe, tuned for long-term viewing */
   params: Record<Timeframe, number[]>;
   needsBenchmark?: boolean;
+  /** The params may be left empty (and are by default), so the settings dialog still offers the input */
+  optionalParams?: boolean;
   hint: string;
   /** Decimals on the indicator's axis and legend, overriding KLineChart's default */
   precision?: number;
@@ -26,7 +28,8 @@ export const INDICATORS: IndicatorDef[] = [
   },
   { name: "EMA", label: "EMA", pane: "main", params: { D: [21, 55], W: [21, 55], M: [12, 24], Q: [8, 20] }, hint: "指数移动平均" },
   { name: "BOLL", label: "布林", pane: "main", params: same([20, 2]), hint: "周期, 标准差倍数" },
-  { name: "VOL", label: "成交量", pane: "sub", params: { D: [20], W: [10], M: [6], Q: [4] }, hint: "成交量均线周期" },
+  // TradingView's Volume has no moving average until one is asked for in its settings
+  { name: "VOL", label: "成交量", pane: "sub", params: same([]), optionalParams: true, hint: "成交量均线周期（如 20），留空不画均线" },
   { name: "MACD", label: "MACD", pane: "sub", params: same([12, 26, 9]), hint: "快线, 慢线, 信号线" },
   { name: "RSI", label: "RSI", pane: "sub", params: same([14]), hint: "周期", precision: 2 },
   { name: "DD", label: "回撤", pane: "sub", params: same([]), hint: "距历史最高收盘价的跌幅（无参数）" },

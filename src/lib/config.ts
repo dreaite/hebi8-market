@@ -71,6 +71,8 @@ export interface ChartPrefs {
   /** Enabled indicator names: built-in, custom, or formula ids */
   indicators: string[];
   params: ParamOverrides;
+  /** Indicators moved off their usual pane (legend ⋯ → 移动到), by the same names as `indicators` */
+  panes: Record<string, "main" | "sub">;
 }
 
 export interface Config {
@@ -112,7 +114,7 @@ export const USAGE_LIMITS: Record<keyof UsageLimits, string> = { visitors: "每�
 
 export class ConfigError extends Error {}
 
-export const DEFAULT_CHART: ChartPrefs = { tf: "W", log: true, style: "candle_solid", indicators: ["MA", "VOL"], params: {} };
+export const DEFAULT_CHART: ChartPrefs = { tf: "W", log: true, style: "candle_solid", indicators: ["MA", "VOL"], params: {}, panes: {} };
 
 const obj = (v: unknown): Record<string, unknown> =>
   v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -279,6 +281,7 @@ export function normalizeConfig(raw: unknown): Config {
       style: style as ChartStyle,
       indicators: Array.isArray(chart.indicators) ? chart.indicators.map(String) : DEFAULT_CHART.indicators,
       params: parseParams(chart.params),
+      panes: Object.fromEntries(Object.entries(obj(chart.panes)).filter((e): e is [string, "main" | "sub"] => e[1] === "main" || e[1] === "sub")),
     },
     usage,
     ignored: [],

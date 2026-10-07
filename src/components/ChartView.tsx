@@ -127,6 +127,7 @@ export function ChartView({
   const [prices, setPrices] = useState(initialPrices);
   const [enabled, setEnabled] = useState(prefs.indicators);
   const [overrides, setOverrides] = useState<ParamOverrides>(prefs.params);
+  const [panes, setPanes] = useState(prefs.panes);
   const [hiddenCompares, setHiddenCompares] = useState<string[]>([]);
   const [hiddenIndicators, setHiddenIndicators] = useState<string[]>([]);
   const [pctAxis, setPctAxis] = useLocalStorage("hebi8:chart:pct", false);
@@ -254,7 +255,8 @@ export function ChartView({
     () => [
       ...INDICATORS.filter((d) => enabled.includes(d.name) && (!d.needsBenchmark || hasBench)).map((d) => ({
         name: d.name,
-        pane: d.pane,
+        pane: panes[d.name] ?? d.pane,
+        ownScale: d.pane === "sub",
         calcParams: params[d.name],
         hidden: hiddenIndicators.includes(d.name),
         precision: d.precision,
@@ -263,10 +265,10 @@ export function ChartView({
         .filter((f) => f.program && enabled.includes(f.def.id))
         .map((f) => {
           const name = formulaIndicatorName(f.def.id);
-          return { name, pane: f.def.pane, calcParams: [], hidden: hiddenIndicators.includes(name) };
+          return { name, pane: panes[f.def.id] ?? f.def.pane, ownScale: f.def.pane === "sub", calcParams: [], hidden: hiddenIndicators.includes(name) };
         }),
     ],
-    [enabled, hasBench, params, compiled, hiddenIndicators],
+    [enabled, hasBench, params, compiled, hiddenIndicators, panes],
   );
   const labels = useMemo(
     () => Object.fromEntries([...INDICATORS.map((d) => [d.name, d.label]), ...formulas.map((f) => [formulaIndicatorName(f.id), f.label])]),
@@ -313,11 +315,18 @@ export function ChartView({
   const onOverlaysChange = (overlays: OverlaySpec[]) => void saveState({ overlays });
   const removeCompare = (key: string) => void saveState({ compare: compare.filter((c) => c.key !== key) });
 
-  // legend row actions: eye, gear (or double click), ×
-  const onIndicator = (name: string, action: "toggle" | "settings" | "remove") => {
+  // legend row actions: eye, gear (or double click), ×, and ⋯ → 移动到
+  const onIndicator = (name: string, action: "toggle" | "settings" | "remove" | "move") => {
     const id = isFormulaIndicator(name) ? name.slice(2) : name;
     if (action === "toggle") setHiddenIndicators((h) => (h.includes(name) ? h.filter((n) => n !== name) : [...h, name]));
-    else if (action === "remove") {
+    else if (action === "move") {
+      // between the main pane and a pane of its own; only a move away from the usual pane is kept
+      const home = INDICATORS.find((d) => d.name === id)?.pane ?? formulas.find((f) => f.id === id)?.pane ?? "sub";
+      const next = (panes[id] ?? home) === "main" ? "sub" : "main";
+      const rest = Object.fromEntries(Object.entries(panes).filter(([k]) => k !== id));
+      setPanes(next === home ? rest : { ...rest, [id]: next });
+      persist({ panes: { [id]: next === home ? null : next } });
+    } else if (action === "remove") {
       if (enabled.includes(id)) toggle(id);
     } else if (isFormulaIndicator(name)) {
       const def = formulas.find((f) => f.id === id);

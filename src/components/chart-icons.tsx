@@ -204,6 +204,12 @@ export const IconClose = (p: IconProps) => (
   </Svg>
 );
 
+export const IconMore = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4.5 9h.01M9 9h.01M13.5 9h.01" strokeWidth={2.2} />
+  </Svg>
+);
+
 export const IconBack = (p: IconProps) => (
   <Svg {...p}>
     <path d="M11 3.5 5.5 9l5.5 5.5" />
