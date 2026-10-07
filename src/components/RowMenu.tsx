@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { useMenu, type MenuAnchor } from "./use-menu";
 
 export interface RowMenuProps {
+  at: MenuAnchor;
   /** A visitor: only 打开, plus a way to log in and keep a list of their own */
   readOnly: boolean;
   onLogin: () => void;
@@ -22,33 +24,13 @@ export interface RowMenuProps {
 
 type View = "root" | "move" | "rename" | "bench" | "newGroup";
 
-/** The「⋯」menu of an overview row; also opened by right-clicking the row. */
-export function RowMenu({ readOnly, onLogin, name, group, groups, benchLabel, onOpen, onMove, onRename, onBench, onRemove, onAddAlert, onClose }: RowMenuProps) {
+/** The「⋯」menu of an overview row; also opened by right-clicking the row, at the pointer. */
+export function RowMenu({ at, readOnly, onLogin, name, group, groups, benchLabel, onOpen, onMove, onRename, onBench, onRemove, onAddAlert, onClose }: RowMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View>("root");
   const [text, setText] = useState("");
 
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey, true);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey, true);
-    };
-  }, [onClose]);
-
-  useEffect(() => {
-    ref.current?.querySelector<HTMLElement>("input, [role=menuitem]")?.focus();
-  }, [view]);
+  useMenu(ref, at, view, onClose);
 
   const item = (label: string, onClick: () => void, extra = "") => (
     <button role="menuitem" onClick={onClick} className={`menu-item ${extra}`}>
@@ -79,7 +61,18 @@ export function RowMenu({ readOnly, onLogin, name, group, groups, benchLabel, on
   );
 
   return (
-    <div ref={ref} role="menu" aria-label={`${name} 的操作`} className="menu" onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
+    <div
+      ref={ref}
+      role="menu"
+      aria-label={`${name} 的操作`}
+      className="menu fixed"
+      style={{ right: "auto" }}
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+    >
       {view === "root" && readOnly && (
         <>
           {item("打开", onOpen)}
