@@ -230,7 +230,8 @@ CREATE TABLE usage_alerts (kind TEXT NOT NULL, day INTEGER NOT NULL, PRIMARY KEY
 - **第一次登录**的非 owner：复制根 vault 的 `hebi8.yaml` 作为起点，去掉 `owner`、`sync`、`datasets`、`usage`、`alerts`；notes / journal / charts 为空。之后两边互不影响。
 - **所有写操作**（Server Actions、写文件的 Route Handler）都先取 viewer，`canWrite` 为假就返回「请先登录」；写入路径只来自 viewer 的 vault 目录，不接受客户端传来的目录或 login。读操作同样只读 viewer 的 vault。
 - **同步**：要同步的 key 是所有 vault 的并集（各自的 groups、bench、公式引用、告警、charts 对比列表）。同步后对每个 vault 算一遍 stats 和告警。
-- **页头**：右侧显示当前身份。未登录是「登录」按钮（打开帮助抽屉里同一套 device flow）；登录后是头像 + login，菜单里有「通知设置」、owner 才有的「使用情况」（§1.7）和「退出」。owner 模式下未登录时，总览顶部一行 muted 文字「正在看 <owner> 的列表 · 登录后用自己的」。
+- **页头**：右侧显示当前身份。未登录是「登录」按钮（打开帮助抽屉里同一套 device flow）；登录后是头像 + login，菜单里有「通知设置」、owner 才有的「使用情况」（§1.7）和「退出」。owner 模式下未登录时，总览标题是「示例列表」（内容就是 owner 的列表）。
+- **怎么用**：第一次打开总览时弹出一个三步引导面板（扫描 / 深看 / 记录），每步一张循环小动画，←/→ 翻页；关掉后记在浏览器 localStorage，不再自动出现，帮助抽屉「项目」里的「怎么用」可以再打开。访客的最后一步是「用 GitHub 登录」和「先看看示例」。
 - 登录会话和反馈共用（§5.8），30 天有效；退出只删会话，不动 vault。
 - 会话 cookie 经 HTTPS 来的请求（隧道，`X-Forwarded-Proto: https`）带 `Secure`；Tailscale 直连是 http，不带，照样能登录。两边 Host 不同，cookie 各存各的。
 

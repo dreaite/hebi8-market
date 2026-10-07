@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { addSymbol, removeSymbol } from "@/app/actions";
 import type { SearchContext } from "@/lib/search";
 import { IconHelp } from "./chart-icons";
+import { Guide } from "./Guide";
 import { HelpPanel, type HelpTab } from "./HelpPanel";
 import { SymbolSearch, type PickDetail } from "./SymbolSearch";
 
@@ -25,6 +26,8 @@ interface UiValue {
   openHelp: (tab?: HelpTab) => void;
   /** 登录: the help drawer's GitHub device flow, started right away */
   login: () => void;
+  /** The three-step how-to (opens by itself on the first visit to the overview) */
+  openGuide: () => void;
 }
 
 const UiContext = createContext<UiValue | null>(null);
@@ -33,6 +36,17 @@ export function useUi(): UiValue {
   const value = useContext(UiContext);
   if (!value) throw new Error("useUi outside UiProvider");
   return value;
+}
+
+const GUIDE_SEEN = "hebi8m:guide-seen";
+
+/** This browser has seen the how-to once (closed it, or logged in from it). */
+export function guideSeen(): boolean {
+  try {
+    return window.localStorage.getItem(GUIDE_SEEN) !== null;
+  } catch {
+    return true;
+  }
 }
 
 export const chartHref = (key: string) => `/chart/${encodeURIComponent(key)}`;
@@ -59,6 +73,7 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [help, setHelp] = useState<{ tab: HelpTab | null; notice: string | null; seq: number; autoLogin?: boolean } | null>(null);
+  const [guide, setGuide] = useState(false);
   const seq = useRef(0);
 
   const toast = useCallback((message: string, opts: ToastOptions = {}) => {
@@ -81,6 +96,19 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
   const login = useCallback(() => {
     setSearch(null);
     setHelp({ tab: "notify", notice: null, seq: ++seq.current, autoLogin: true });
+  }, []);
+  const openGuide = useCallback(() => {
+    setSearch(null);
+    setHelp(null);
+    setGuide(true);
+  }, []);
+  const closeGuide = useCallback(() => {
+    try {
+      window.localStorage.setItem(GUIDE_SEEN, "1");
+    } catch {
+      // storage disabled: it opens again next time
+    }
+    setGuide(false);
   }, []);
 
   // `?help=feedback|project|notify` opens the drawer (a link to the feedback form), then leaves the URL
@@ -157,8 +185,8 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
   };
 
   const value = useMemo<UiValue>(
-    () => ({ searchCtx: ctx, openSearch, toast, openHelp: (tab?: HelpTab) => openHelp(tab), login }),
-    [ctx, openSearch, toast, openHelp, login],
+    () => ({ searchCtx: ctx, openSearch, toast, openHelp: (tab?: HelpTab) => openHelp(tab), login, openGuide }),
+    [ctx, openSearch, toast, openHelp, login, openGuide],
   );
 
   return (
@@ -175,6 +203,16 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
             <SymbolSearch key={search.seq} mode="navigate" ctx={ctx} readOnly={readOnly} initialQuery={search.query} busy={busy} error={error} onPick={(d) => void onPick(d)} onClose={closeSearch} />
           </div>
         </div>
+      )}
+      {guide && (
+        <Guide
+          visitor={readOnly}
+          onClose={closeGuide}
+          onLogin={() => {
+            closeGuide();
+            login();
+          }}
+        />
       )}
       {help && <HelpPanel key={help.seq} tab={help.tab} notice={help.notice} autoLogin={help.autoLogin ?? false} onClose={closeHelp} toast={toast} />}
       {toasts.length > 0 && (

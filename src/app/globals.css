@@ -392,3 +392,146 @@ input:focus-visible {
     border-radius: 10px 10px 0 0;
   }
 }
+
+/* The how-to (Guide.tsx): each step's picture loops; under reduced motion it shows the end state. */
+.guide-pic {
+  height: 150px;
+}
+/* focused programmatically so ←/→/Esc reach it; no frame around the whole panel */
+.guide-panel:focus-visible {
+  outline: none;
+}
+.guide-step {
+  animation: guide-in 220ms ease-out;
+}
+@keyframes guide-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+/* step 1: a highlight walks down the rows and stops on the one whose badge just turned on */
+.guide-scan {
+  top: 0;
+  animation: guide-scan 4s ease-in-out infinite;
+}
+@keyframes guide-scan {
+  0% {
+    transform: translateY(16px);
+    opacity: 0;
+  }
+  8%,
+  18% {
+    transform: translateY(16px);
+    opacity: 1;
+  }
+  28%,
+  58% {
+    transform: translateY(46px);
+  }
+  68%,
+  74% {
+    transform: translateY(76px);
+  }
+  84%,
+  90% {
+    transform: translateY(106px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(106px);
+    opacity: 0;
+  }
+}
+.guide-fresh {
+  animation: guide-fresh 4s ease-out infinite;
+}
+@keyframes guide-fresh {
+  0%,
+  26% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  32% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+  38%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.guide-dot {
+  animation: guide-dot 1.2s ease-out infinite;
+}
+@keyframes guide-dot {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+/* step 2: the moving average draws itself, then a horizontal line drops onto the last high */
+.guide-ma {
+  stroke-dasharray: 1;
+  animation: guide-draw 4s ease-in-out infinite;
+}
+@keyframes guide-draw {
+  0% {
+    stroke-dashoffset: 1;
+  }
+  45%,
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+.guide-hline {
+  animation: guide-hline 4s ease-out infinite;
+}
+@keyframes guide-hline {
+  0%,
+  50% {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  62%,
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* step 3: this week's lines type themselves next to last week's */
+.guide-type {
+  transform-origin: left;
+  animation: guide-type 4s ease-out infinite both;
+}
+@keyframes guide-type {
+  0% {
+    transform: scaleX(0);
+  }
+  15%,
+  85% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scaleX(1);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .guide-step,
+  .guide-scan,
+  .guide-fresh,
+  .guide-dot,
+  .guide-ma,
+  .guide-hline,
+  .guide-type {
+    animation: none;
+  }
+  .guide-scan {
+    transform: translateY(46px);
+  }
+}

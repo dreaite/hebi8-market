@@ -13,7 +13,7 @@ import type { HelpInfo } from "@/lib/help-info";
 import { getChartContext } from "@/lib/page-context";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { IconClose, IconExternal } from "./chart-icons";
-import { isEditable, type ToastOptions } from "./UiProvider";
+import { isEditable, useUi, type ToastOptions } from "./UiProvider";
 
 export type HelpTab = "project" | "feedback" | "notify";
 
@@ -224,6 +224,7 @@ function ExtLink({ href, children }: { href: string; children: ReactNode }) {
 
 function ProjectTab({ info }: { info: HelpInfo | null }) {
   const app = info?.app ?? APP_INFO;
+  const { openGuide } = useUi();
   return (
     <>
       <Section title="项目">
@@ -233,7 +234,10 @@ function ProjectTab({ info }: { info: HelpInfo | null }) {
           v{app.version} · {app.commit}
           {app.builtAt && ` · 构建于 ${fmtTime(Date.parse(app.builtAt))}`}
         </p>
-        <p className="mt-1 text-[11px]">
+        <p className="mt-1 flex gap-3 text-[11px]">
+          <button type="button" onClick={openGuide} className="text-accent hover:underline">
+            怎么用
+          </button>
           <Link href="/privacy" className="text-accent hover:underline">
             隐私说明
           </Link>

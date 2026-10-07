@@ -12,7 +12,7 @@ import { SOURCE_LABELS, type Source } from "@/lib/symbols";
 import { Badge } from "./Badge";
 import { RowMenu } from "./RowMenu";
 import { Sparkline } from "./Sparkline";
-import { chartHref, useUi } from "./UiProvider";
+import { chartHref, guideSeen, useUi } from "./UiProvider";
 
 export interface OverviewRow {
   key: string;
@@ -38,9 +38,9 @@ export interface OverviewData {
   firstRun: boolean;
   /** Relative to the working directory, e.g. `vault` */
   vaultPath: string;
-  /** Muted lines above the table: whose list a visitor sees, yaml settings that are ignored */
+  /** Muted lines above the table: yaml settings that are ignored */
   notices: string[];
-  /** A visitor on a shared instance: no way in to changes, display choices stay in the page */
+  /** A visitor on a shared instance: sees the owner's list as the example, display choices stay in the page */
   readOnly: boolean;
 }
 
@@ -146,7 +146,7 @@ function Th({
 
 export function Overview({ data }: { data: OverviewData }) {
   const router = useRouter();
-  const { openSearch, toast, login } = useUi();
+  const { openSearch, toast, login, openGuide } = useUi();
   const readOnly = data.readOnly;
   const [, startTransition] = useTransition();
   const [refreshing, setRefreshing] = useState(false);
@@ -157,6 +157,11 @@ export function Overview({ data }: { data: OverviewData }) {
   const [message, setMessage] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const closeMenu = useCallback(() => setMenuFor(null), []);
+
+  // the how-to opens once per browser, on the first visit to the overview
+  useEffect(() => {
+    if (!guideSeen()) openGuide();
+  }, [openGuide]);
 
   useEffect(() => {
     if (!data.firstRun) return;
@@ -240,7 +245,7 @@ export function Overview({ data }: { data: OverviewData }) {
       ))}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-baseline gap-3">
-          <h1 className="text-base font-medium">自选</h1>
+          <h1 className="text-base font-medium">{readOnly ? "示例列表" : "自选"}</h1>
           <span className="text-xs text-muted">{fmtAgo(data.lastSync)}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
