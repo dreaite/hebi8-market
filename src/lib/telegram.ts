@@ -36,25 +36,27 @@ interface State {
   bindings: Map<string, Binding>;
   /** Next getUpdates offset: everything before it has been seen */
   offset?: number;
-  polling: boolean;
+  /** The polling loop running now; another bot (or none) replaces it, see `resetBindings` */
+  run: { stop: AbortController } | null;
   /** Bot username by token, from getMe */
   botNames: Map<string, string>;
   lastError: string | null;
 }
 
 const g = globalThis as unknown as { hebi8Telegram?: State };
-const state: State = (g.hebi8Telegram ??= { bindings: new Map(), polling: false, botNames: new Map(), lastError: null });
+const state: State = (g.hebi8Telegram ??= { bindings: new Map(), run: null, botNames: new Map(), lastError: null });
 
 const log = (msg: string) => console.log(`[hebi8m] telegram: ${msg}`);
 
-async function call<T>(bot: Bot, method: string, body: Record<string, unknown>, timeoutMs = 15_000): Promise<T> {
+async function call<T>(bot: Bot, method: string, body: Record<string, unknown>, timeoutMs = 15_000, stop?: AbortSignal): Promise<T> {
   let res: Response;
   try {
+    const timeout = AbortSignal.timeout(timeoutMs);
     res = await fetch(`${bot.api}/bot${bot.token}/${method}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: stop ? AbortSignal.any([timeout, stop]) : timeout,
     });
   } catch (err) {
     throw new Error(`Telegram ${method} 请求失败（${err instanceof Error ? err.name : "error"}）`);
@@ -118,27 +120,43 @@ export function cancelBinding(login: string): void {
 }
 
 /**
+ * The owner set or removed the bot: codes still waiting point at the old one, so they stop working
+ * and the old bot's polling ends now (its long poll is aborted). The next code starts a new loop.
+ */
+export function resetBindings(): void {
+  for (const [key, b] of state.bindings) if (!b.chat) state.bindings.delete(key);
+  state.lastError = null;
+  state.run?.stop.abort();
+  state.run = null;
+}
+
+/**
  * One loop per process while a code is waiting. An update is confirmed by asking for the next
  * offset; once nothing waits, a last `timeout: 0` call confirms the final batch (and whatever it
  * returns is handled like any other). A code started meanwhile keeps the same loop going.
  */
 async function pollUpdates(bot: Bot): Promise<void> {
-  if (state.polling) return;
-  state.polling = true;
+  if (state.run) return;
+  const run = { stop: new AbortController() };
+  state.run = run;
+  const current = () => state.run === run;
   // update ids can restart after a quiet week, so an offset is only trusted within one run
   state.offset = undefined;
   let unconfirmed = false;
   try {
     for (;;) {
       const busy = waiting();
-      if (!busy && !unconfirmed) break;
+      if (!current() || (!busy && !unconfirmed)) break;
       try {
         const updates: Update[] = await call<Update[]>(
           bot,
           "getUpdates",
           { offset: state.offset, timeout: busy ? LONG_POLL_S : 0, allowed_updates: ["message"] },
           (LONG_POLL_S + 10) * 1000,
+          run.stop.signal,
         );
+        // the bot changed while this was in flight: its updates are not ours to confirm
+        if (!current()) break;
         state.lastError = null;
         unconfirmed = updates.length > 0;
         for (const u of updates) {
@@ -146,6 +164,7 @@ async function pollUpdates(bot: Bot): Promise<void> {
           await receive(bot, u);
         }
       } catch (err) {
+        if (!current()) break;
         // e.g. 409 when something else reads the same bot: shown in the panel, retried
         state.lastError = err instanceof Error ? err.message : String(err);
         log(state.lastError);
@@ -154,7 +173,7 @@ async function pollUpdates(bot: Bot): Promise<void> {
       }
     }
   } finally {
-    state.polling = false;
+    if (current()) state.run = null;
   }
 }
 

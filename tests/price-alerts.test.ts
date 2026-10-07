@@ -96,6 +96,25 @@ describe("TradingView conditions", () => {
     expect(run(at("outside", [90, 110]), "bar", [95, 111])).toEqual([false, true]);
   });
 
+  it("crossings are strict like cross(): touching the line is not crossing it", () => {
+    const up = at("crossing_up", 100);
+    const down = at("crossing_down", 100);
+    expect(run(up, "bar", [99, 100])).toEqual([false, false]);
+    expect(run(up, "bar", [100, 101])).toEqual([false, true]);
+    expect(run(down, "bar", [101, 100])).toEqual([false, false]);
+    expect(run(down, "bar", [100, 99])).toEqual([false, true]);
+    expect(run(at("crossing", 100), "bar", [99, 100, [101, "new"], [100, "new"], [99, "new"]])).toEqual([false, false, true, false, true]);
+  });
+
+  it("entering / exiting a channel need the strict inside / outside; an edge is neither", () => {
+    const enter = at("entering", [90, 110]);
+    const exit = at("exiting", [90, 110]);
+    expect(run(enter, "bar", [120, 110])).toEqual([false, false]);
+    expect(run(enter, "bar", [110, 109])).toEqual([false, true]);
+    expect(run(exit, "bar", [100, 110])).toEqual([false, false]);
+    expect(run(exit, "bar", [110, 111])).toEqual([false, true]);
+  });
+
   it("bar fires at most once per daily bar; the next bar fires again", () => {
     expect(run(at("greater", 100), "bar", [101, 102, 103, [104, "new"], 105])).toEqual([true, false, false, true, false]);
   });
@@ -164,6 +183,18 @@ describe("quote polling", () => {
       ["post", { at: now - 60 * 60_000, session: "post" as const }],
     ]);
     expect(dueKeys(["new", "open", "crypto", "fresh", "closed", "post"], seen, now)).toEqual(["new", "open", "crypto", "post"]);
+  });
+
+  it("puts a quote on the local day of its trade: crypto on the UTC day, a stock on the exchange's date", async () => {
+    const { withQuote } = await import("@/lib/quotes");
+    const day = Date.UTC(2026, 9, 6) / 1000;
+    const daily = [bar(100, 0), { ...bar(101, 0), t: day }];
+    const quote = (time: number, session: "always" | "open" | "post") => ({ key: BTC, price: 102, time, session, fetchedAt: 2_000_000_000_000 });
+    // 13:00 UTC Binance: the same UTC day, not the next one
+    expect(withQuote(daily, quote(day + 13 * 3600, "always"), "UTC", null).map((b) => b.t)).toEqual([T0, day]);
+    // 15:00 and 21:00 in New York (19:00 and 01:00 UTC): still the exchange's Oct 6
+    expect(withQuote(daily, quote(day + 19 * 3600, "open"), "America/New_York", null).map((b) => b.t)).toEqual([T0, day]);
+    expect(withQuote(daily, quote(day + 25 * 3600, "post"), "America/New_York", null).map((b) => b.t)).toEqual([T0, day]);
   });
 
   it("builds today's bar in memory from the quote and never writes it to bars", async () => {
@@ -253,6 +284,62 @@ describe("quote polling", () => {
       logs.mockRestore();
     });
 
+    it("stamps a quote when it arrives, so a daily sync that ends during the request does not hide it", async () => {
+      const { adapters } = await import("@/lib/sources");
+      const { quoteRound, liveReader } = await import("@/lib/quotes");
+      const { getSymbol, markSynced, readQuotes, writeBars } = await import("@/lib/store");
+      writeBars(BTC, closes(100, 101), "replace");
+      const vaults = vaultsWith([{ key: "BTC", cond: "greater", value: 1000 }]);
+      vi.spyOn(adapters.binance, "quotes").mockImplementation(async () => {
+        markSynced(BTC, { timezone: "UTC" }); // the daily sync finishes while the quote is on its way
+        await new Promise((r) => setTimeout(r, 5));
+        return { BTCUSDT: { price: 123, time: Math.floor(Date.now() / 1000), session: "always" } };
+      });
+      await quoteRound(Date.now(), vaults);
+      expect(readQuotes()[BTC].fetchedAt).toBeGreaterThan(getSymbol(BTC)!.syncedAt!);
+      expect(liveReader()(BTC).at(-1)?.c).toBe(123);
+    });
+
+    it("loads the config when a run starts: a once alert fires once, an alert paused in the queue holds", async () => {
+      const { runAlerts, setAlertsEnabled } = await import("@/lib/alerts");
+      const { readConfig } = await import("@/lib/vault");
+      const { writeBars } = await import("@/lib/store");
+      writeBars(BTC, closes(100, 101), "replace");
+      const vaults = vaultsWith([{ key: "BTC", cond: "greater", value: 50 }], [{ key: "BTC", cond: "greater", value: 50 }]);
+      const logs = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const load = (d: string) => () => readConfig(d);
+
+      // a daily sync and a quote round queued together
+      const both = await Promise.all([runAlerts(vaults[0], load(root), new Map()), runAlerts(vaults[0], load(root), new Map())]);
+      expect(both.map((events) => events.length)).toEqual([1, 0]);
+      expect(readConfig(root).alerts[0].enabled).toBe(false);
+
+      // bob pauses his alert while his run waits behind another one
+      const ahead = runAlerts(vaults[0], load(root), new Map());
+      const queued = runAlerts(vaults[1], load(bob), new Map());
+      setAlertsEnabled(bob, [vaults[1].config.alerts[0].id], false);
+      await ahead;
+      expect(await queued).toEqual([]);
+      logs.mockRestore();
+    });
+
+    it("a once alert whose switch-off never reached the yaml does not fire again; editing the yaml later re-arms it", async () => {
+      const { runAlerts } = await import("@/lib/alerts");
+      const { configMtime, readConfig } = await import("@/lib/vault");
+      const { writeBars } = await import("@/lib/store");
+      const { getDb } = await import("@/lib/db");
+      writeBars(BTC, closes(100, 101), "replace");
+      const vaults = vaultsWith([{ key: "BTC", cond: "greater", value: 50 }]);
+      const alertId = vaults[0].config.alerts[0].id;
+      const logs = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const fired = getDb().prepare("INSERT OR REPLACE INTO alert_state (vault, rule, key, state, fired_at) VALUES ('', ?, ?, 1, ?)");
+      fired.run(alertId, BTC, configMtime(root) + 60_000);
+      expect(await runAlerts(vaults[0], () => readConfig(root), new Map())).toEqual([]);
+      fired.run(alertId, BTC, configMtime(root) - 60_000);
+      expect(await runAlerts(vaults[0], () => readConfig(root), new Map())).toHaveLength(1);
+      logs.mockRestore();
+    });
+
     it("judges each vault on the live bar; once switches itself off in the yaml, comments kept", async () => {
       const { quoteRound } = await import("@/lib/quotes");
       const { readConfig } = await import("@/lib/vault");
@@ -284,7 +371,7 @@ describe("quote polling", () => {
       // bob's cross: below 110 at the first check, above it now
       prices.BTCUSDT = 111;
       const bobOnly = [{ ...vaults[0], config: readConfig(root) }, vaults[1]];
-      const events = await Promise.all([runAlerts(bobOnly[1], bobOnly[1].config, new Map(), (await import("@/lib/quotes")).liveReader())]);
+      const events = await Promise.all([runAlerts(bobOnly[1], () => bobOnly[1].config, new Map(), (await import("@/lib/quotes")).liveReader())]);
       expect(events[0]).toEqual([]); // the stored quote is still 105
       await quoteRound(now + 5 * 60_000, bobOnly);
       expect(logs.mock.calls.flat().join("\n")).toMatch(/1 new alert\(s\) \(bob\): binance:BTCUSDT/);

@@ -310,7 +310,7 @@ describe("stats and alerts per vault", () => {
     const { runAlerts } = await import("@/lib/alerts");
     const { writeBars } = await import("@/lib/store");
     const { getDb } = await import("@/lib/db");
-    const run = async () => ({ root: (await runAlerts({ id: "", dir: root }, rootCfg, new Map())).map((e) => e.rule), alice: (await runAlerts({ id: "alice", dir: path.join(users, "alice") }, aliceCfg, new Map())).map((e) => e.rule) });
+    const run = async () => ({ root: (await runAlerts({ id: "", dir: root }, () => rootCfg, new Map())).map((e) => e.rule), alice: (await runAlerts({ id: "alice", dir: path.join(users, "alice") }, () => aliceCfg, new Map())).map((e) => e.rule) });
 
     writeBars(KEY, bars([90, 95, 101]), "replace");
     expect(await run()).toEqual({ root: [], alice: [] }); // first sighting everywhere

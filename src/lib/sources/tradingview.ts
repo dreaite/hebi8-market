@@ -100,6 +100,8 @@ function fetchQuotes(tickers: string[]): Promise<Record<string, Quote>> {
       clearTimeout(timer);
       session.delete();
       void client.end();
+      // end() leaves a socket that is still connecting (a handshake that timed out) open: close it once it connects
+      if (!client.isOpen) client.onConnected(() => void client.end());
       const out: Record<string, Quote> = {};
       for (const [ticker, d] of Object.entries(data)) {
         const price = d.lp;

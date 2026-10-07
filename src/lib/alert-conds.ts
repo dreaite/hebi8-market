@@ -76,10 +76,11 @@ export function conditionLevels(c: AlertCondition): number[] {
 }
 
 /**
- * What one check sees, as 0/1: the side of the line or channel for events (compared with the
- * previous check), whether the condition holds for states. Null when there is no data.
+ * What one check sees. Events record a position, compared with the previous check's: for a line
+ * -1 below, 0 on it, 1 above; for a channel -1 outside, 0 on an edge, 1 strictly inside. States
+ * record whether they hold (0/1). Null when there is no data.
  */
-export function observe(c: AlertCondition, bars: Bar[]): 0 | 1 | null {
+export function observe(c: AlertCondition, bars: Bar[]): number | null {
   const last = bars.at(-1);
   if (!last) return null;
   const p = last.c;
@@ -88,13 +89,16 @@ export function observe(c: AlertCondition, bars: Bar[]): 0 | 1 | null {
     case "crossing":
     case "crossing_up":
     case "crossing_down":
-      return bit(p >= c.value);
+      return Math.sign(p - c.value);
+    case "entering":
+    case "exiting": {
+      const [lo, hi] = c.value;
+      return p > lo && p < hi ? 1 : p === lo || p === hi ? 0 : -1;
+    }
     case "greater":
       return bit(p > c.value);
     case "less":
       return bit(p < c.value);
-    case "entering":
-    case "exiting":
     case "inside":
       return bit(p >= c.value[0] && p <= c.value[1]);
     case "outside":
@@ -110,17 +114,23 @@ export function observe(c: AlertCondition, bars: Bar[]): 0 | 1 | null {
   }
 }
 
-/** For events: did the move from the previous check's side to this one's fire? */
-export function crossed(cond: AlertCond, prev: 0 | 1, now: 0 | 1): boolean {
+/**
+ * For events, the same strict rule as the formula's `cross()`: 上穿 is above the line now and on or
+ * below it before, 下穿 the reverse, 穿过 either. 进入通道 is strictly inside now and not before;
+ * 离开通道 strictly outside now and not before. Sitting on a line or an edge fires nothing.
+ */
+export function crossed(cond: AlertCond, prev: number, now: number): boolean {
   switch (cond) {
     case "crossing":
-      return prev !== now;
+      return (now > 0 && prev <= 0) || (now < 0 && prev >= 0);
     case "crossing_up":
-    case "entering":
-      return prev === 0 && now === 1;
+      return now > 0 && prev <= 0;
     case "crossing_down":
+      return now < 0 && prev >= 0;
+    case "entering":
+      return now > 0 && prev <= 0;
     case "exiting":
-      return prev === 1 && now === 0;
+      return now < 0 && prev >= 0;
     default:
       return false;
   }

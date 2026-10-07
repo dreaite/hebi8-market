@@ -100,10 +100,12 @@ export function AlertsPanel({
                   <span className="mt-0.5 block truncate" title={a.label}>
                     {a.label}
                   </span>
+                  {/* TradingView: the condition stays visible under any name */}
+                  <span className="mt-0.5 block truncate text-[11px] text-muted" title={a.summary}>
+                    {a.summary} · {a.trigger === "once" ? "仅一次" : "每根 K 线一次"}
+                  </span>
                   <span className="mt-0.5 block text-[11px] text-muted">
-                    {a.trigger === "once" ? "仅一次" : "每根 K 线一次"}
-                    {" · "}
-                    {a.price != null ? `${fmtPrice(a.price)}${a.priceAt ? ` · ${fmtAgo(a.priceAt, "")}` : ""}` : "暂无价格"}
+                    当前 {a.price != null ? `${fmtPrice(a.price)}${a.priceAt ? ` · ${fmtAgo(a.priceAt, "")}` : ""}` : "暂无价格"}
                   </span>
                 </button>
                 <span className="mt-1 flex gap-1">

@@ -48,6 +48,8 @@ declare module "@mathieuc/tradingview" {
       Quote: new (options?: { fields?: "all" | "price"; customFields?: string[] }) => QuoteSession;
     };
     end(): Promise<void>;
+    readonly isOpen: boolean;
+    onConnected(callback: () => void): void;
   }
 
   interface SearchMarketResult {

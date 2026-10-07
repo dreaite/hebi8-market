@@ -80,6 +80,43 @@ describe("alert Server Actions", () => {
     expect(await saveAlert({ id: "alert:gone00", key: "BTC", cond: "less", value: 3, trigger: "once" })).toEqual({ ok: false, error: "这条警报已经不在 hebi8.yaml 里了" });
   });
 
+  it("editing a hand-written alert changes only the fields the dialog has: tf, an explicit id and comments stay", async () => {
+    const { saveAlert } = await import("@/app/actions");
+    const { readConfig } = await import("@/lib/vault");
+    fs.writeFileSync(
+      yamlFile,
+      YAML.replace(
+        "alerts: [] # 图表上建的写在这里\n",
+        `alerts:
+  - key: yahoo:NVDA # 英伟达
+    id: nvda-200
+    tf: W # 周线
+    when: "close < sma(close, 200)" # 200 周
+    note: 自己记的
+`,
+      ),
+    );
+    const before = readConfig(root).alerts[0];
+    expect(before).toMatchObject({ id: "alert:nvda-200", tf: "W", trigger: "once" });
+
+    // only the name and the trigger change in the dialog
+    expect(await saveAlert({ id: before.id, key: "yahoo:NVDA", cond: "formula", when: before.when!, trigger: "bar", label: "破 200 周" })).toEqual({ ok: true });
+    let text = read();
+    for (const kept of ["key: yahoo:NVDA # 英伟达", "id: nvda-200", "tf: W # 周线", 'when: "close < sma(close, 200)" # 200 周', "note: 自己记的", "trigger: bar", "label: 破 200 周"]) {
+      expect(text).toContain(kept);
+    }
+    expect(readConfig(root).alerts[0]).toMatchObject({ id: "alert:nvda-200", tf: "W", trigger: "bar", label: "破 200 周" });
+
+    // turned into a condition: the formula and its tf go, the id and the key's comment stay
+    expect(await saveAlert({ id: before.id, key: "yahoo:NVDA", cond: "less", value: 100, trigger: "bar" })).toEqual({ ok: true });
+    text = read();
+    expect(text).toContain("key: yahoo:NVDA # 英伟达");
+    expect(text).not.toContain("when:");
+    expect(text).not.toContain("tf:");
+    expect(text).not.toContain("label:");
+    expect(readConfig(root).alerts[0]).toMatchObject({ id: "alert:nvda-200", condition: { cond: "less", value: 100 }, tf: "D" });
+  });
+
   it("checks the input and the formula", async () => {
     const { saveAlert } = await import("@/app/actions");
     expect(await saveAlert({ key: "BTC", cond: "greater", value: Number.NaN, trigger: "once" })).toEqual({ ok: false, error: "greater 的 value 应是一个价格" });

@@ -394,6 +394,18 @@ export interface AlertInput {
   enabled?: boolean;
 }
 
+/** Set one field of a yaml map; a scalar is changed in place so the comment on its line stays. */
+function setField(doc: Document, map: YAMLMap, field: string, value: unknown): void {
+  const old = map.get(field, true);
+  if (isScalar(old) && (value === null || typeof value !== "object")) {
+    old.value = value;
+    return;
+  }
+  const node = flowNode(doc, value);
+  if (old && typeof old === "object" && "comment" in old) node.comment = old.comment;
+  map.set(field, node);
+}
+
 /** Create or edit a price alert in the viewer's yaml; an edited alert starts over (TradingView restarts it too). */
 export async function saveAlert(input: AlertInput): Promise<ActionResult> {
   return attempt(({ dir, vault }) => {
@@ -432,17 +444,23 @@ export async function saveAlert(input: AlertInput): Promise<ActionResult> {
       const seq = seqOf(doc.contents as YAMLMap, "alerts", doc);
       // `alerts: []` from the example becomes a block list once it has entries
       seq.flow = false;
-      const node = flowNode(doc, entry);
       if (!input.id) {
-        seq.add(node);
+        seq.add(flowNode(doc, entry));
         return;
       }
       const index = alertIndex(doc, input.id, cfg.aliases);
       if (index < 0) throw new Error("这条警报已经不在 hebi8.yaml 里了");
-      const old = seq.items[index] as YAMLMap;
-      node.comment = old.comment;
-      node.commentBefore = old.commentBefore;
-      seq.items[index] = node;
+      // field by field on the entry as written, so what the dialog does not offer (an explicit id,
+      // a formula's tf, anything else) and the comments on fields stay
+      const node = seq.items[index] as YAMLMap;
+      if (resolveKey(String(node.get("key")), cfg.aliases) !== key) setField(doc, node, "key", entry.key);
+      for (const field of ["cond", "value", "when", "trigger", "label", "enabled"]) {
+        if (field in entry) setField(doc, node, field, entry[field]);
+        else node.delete(field);
+      }
+      // a TradingView condition is always on daily bars
+      if (entry.cond !== undefined) node.delete("tf");
+      id = parseAlert(node.toJSON(), index, cfg.aliases).id;
     });
     forgetAlerts(vault, input.id ? [input.id, id] : [id]);
   });

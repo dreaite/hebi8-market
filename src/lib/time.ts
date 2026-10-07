@@ -28,4 +28,16 @@ export function tradingDay(tsSec: number, timeZone = "UTC"): number {
   return Date.UTC(y, m - 1, d) / 1000;
 }
 
+/**
+ * The calendar day a moment falls on in a timezone, as unix seconds at UTC midnight. For the time
+ * of an actual trade (a quote), unlike `tradingDay`, whose +12h is for daily bars stamped at the open.
+ */
+export function localDay(tsSec: number, timeZone = "UTC"): number {
+  const [y, m, d] = formatterFor(timeZone)
+    .format(new Date(tsSec * 1000))
+    .split("-")
+    .map(Number);
+  return Date.UTC(y, m - 1, d) / 1000;
+}
+
 export const DAY = 86400;

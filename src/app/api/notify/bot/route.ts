@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { instanceBotApi, readNotifyConfig, setInstanceBot, type BotSummary } from "@/lib/notify";
 import { botCaller } from "@/lib/notify-caller";
-import { botName } from "@/lib/telegram";
+import { botName, resetBindings } from "@/lib/telegram";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +47,8 @@ export async function PUT(request: NextRequest) {
   } catch (err) {
     return failed(err, 409);
   }
+  // codes handed out for the old bot would never be answered
+  resetBindings();
   return NextResponse.json({ configured: true, username } satisfies BotSummary);
 }
 
@@ -59,5 +61,6 @@ export async function DELETE(request: NextRequest) {
   } catch (err) {
     return failed(err, 409);
   }
+  resetBindings();
   return NextResponse.json({ configured: false, username: null } satisfies BotSummary);
 }

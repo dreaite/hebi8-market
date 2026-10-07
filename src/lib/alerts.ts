@@ -15,11 +15,14 @@ import { channelNames, channelsFor, deliver, formatDigest, type AlertEvent } fro
 import type { ConditionResult } from "./stats";
 import { listSymbols, readDaily } from "./store";
 import type { Timeframe } from "./symbols";
-import { readConfig, updateConfig, type VaultRef } from "./vault";
+import { configMtime, readConfig, updateConfig, type VaultRef } from "./vault";
 
 export interface StateRow {
-  state: 0 | 1;
+  /** 0/1 for formulas and states; an event's position (-1, 0, 1, see `observe`) */
+  state: number;
   firedBar: number | null;
+  /** When it last fired (ms), as committed */
+  firedAt?: number | null;
 }
 
 type Decision = { fire: boolean; next: StateRow | null };
@@ -43,7 +46,7 @@ export function decide(row: StateRow | undefined, result: Pick<ConditionResult, 
  * first check only records); states fire whenever they hold, the first check included. `bar`
  * fires at most once per daily bar; `once` is switched off by the caller after it fires.
  */
-export function decideCondition(c: AlertCondition, trigger: AlertTrigger, row: StateRow | undefined, seen: 0 | 1 | null, t: number | null): Decision {
+export function decideCondition(c: AlertCondition, trigger: AlertTrigger, row: StateRow | undefined, seen: number | null, t: number | null): Decision {
   if (seen === null) return { fire: false, next: null };
   const firedThisBar = trigger === "bar" && row?.firedBar === t;
   const fire = !firedThisBar && (ALERT_CONDS[c.cond].kind === "event" ? row !== undefined && crossed(c.cond, row.state, seen) : seen === 1);
@@ -107,13 +110,14 @@ function checks(cfg: Config, conditions: Map<string, Record<string, ConditionRes
 const id = (rule: string, key: string) => `${rule}\u0000${key}`;
 
 function readState(vault: string): Map<string, StateRow> {
-  const rows = getDb().prepare("SELECT rule, key, state, fired_bar FROM alert_state WHERE vault = ?").all(vault) as {
+  const rows = getDb().prepare("SELECT rule, key, state, fired_bar, fired_at FROM alert_state WHERE vault = ?").all(vault) as {
     rule: string;
     key: string;
     state: number | null;
     fired_bar: number | null;
+    fired_at: number | null;
   }[];
-  return new Map(rows.map((r) => [id(r.rule, r.key), { state: r.state ? 1 : 0, firedBar: r.fired_bar }]));
+  return new Map(rows.map((r) => [id(r.rule, r.key), { state: r.state ?? 0, firedBar: r.fired_bar, firedAt: r.fired_at }]));
 }
 
 /** Rows whose rule left the yaml (or was switched off) start over; a quote round only prunes alert rows, it never sees the conditions. */
@@ -180,25 +184,32 @@ let queue: Promise<unknown> = Promise.resolve();
 
 /**
  * Judge one vault and deliver its events as one digest. `read` makes it a quote round: alerts only,
- * on live bars. Never throws; returns the events it found.
+ * on live bars. The config is loaded when the run starts, not when it is queued, so a `once` alert
+ * switched off (or an alert paused) by the run before is seen as off. Never throws; returns the events.
  */
-export function runAlerts(vault: VaultRef, cfg: Config, conditions: Map<string, Record<string, ConditionResult>>, read?: DailyReader): Promise<AlertEvent[]> {
-  const job = queue.then(() => judge(vault, cfg, conditions, read));
+export function runAlerts(vault: VaultRef, loadConfig: () => Config, conditions: Map<string, Record<string, ConditionResult>>, read?: DailyReader): Promise<AlertEvent[]> {
+  const job = queue.then(() => judge(vault, loadConfig, conditions, read));
   queue = job.catch(() => undefined);
   return job;
 }
 
-async function judge(vault: VaultRef, cfg: Config, conditions: Map<string, Record<string, ConditionResult>>, read: DailyReader | undefined): Promise<AlertEvent[]> {
+async function judge(vault: VaultRef, loadConfig: () => Config, conditions: Map<string, Record<string, ConditionResult>>, read: DailyReader | undefined): Promise<AlertEvent[]> {
   const who = vault.id ? ` (${vault.id})` : "";
   try {
+    const cfg = loadConfig();
     const list = checks(cfg, conditions, read, who);
     const state = readState(vault.id);
+    let yamlAt: number | undefined;
     const symbols = listSymbols();
     const updates: { rule: string; key: string; row: StateRow; fired: boolean }[] = [];
     const events: AlertEvent[] = [];
     const switchOff: string[] = [];
     for (const c of list) {
-      const { fire, next } = c.decide(state.get(id(c.rule, c.key)));
+      const row = state.get(id(c.rule, c.key));
+      // a `once` alert that fired after its yaml was last written is not switched off there yet
+      // (the write-back failed): the committed firing counts, it does not fire again
+      if (c.once && row?.firedAt && row.firedAt > (yamlAt ??= configMtime(vault.dir))) continue;
+      const { fire, next } = c.decide(row);
       if (next) updates.push({ rule: c.rule, key: c.key, row: next, fired: fire });
       if (!fire) continue;
       if (c.once) switchOff.push(c.rule);

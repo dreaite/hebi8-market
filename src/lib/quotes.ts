@@ -14,8 +14,8 @@ import { getSymbol, readDaily, readQuotes, writeQuotes, type QuoteRow } from "./
 import { isSynthetic, isValidKey, parseKey, type Source } from "./symbols";
 import { parseSynth } from "./synth";
 import { loadVaults, type VaultConfig } from "./sync";
-import { tradingDay } from "./time";
-import { readConfigSafe, vaultDir } from "./vault";
+import { localDay } from "./time";
+import { readConfig, readConfigSafe, vaultDir } from "./vault";
 
 export const ROUND_MS = 5 * 60 * 1000;
 const SLOW_MS = 60 * 60 * 1000;
@@ -84,6 +84,9 @@ export function dueKeys(keys: string[], seen: State["seen"], now: number): strin
   });
 }
 
+/** The trading day of a quote: the exchange's local date of the trade; crypto trades around the clock on UTC days. */
+const quoteDay = (q: Pick<Quote, "time" | "session">, timeZone: string) => localDay(q.time, q.session === "always" ? "UTC" : timeZone);
+
 /**
  * Daily bars with today's unfinished bar from the quote: merged into the last bar when it is the
  * same trading day, appended when it is a new one. A quote older than the last daily sync is
@@ -91,7 +94,7 @@ export function dueKeys(keys: string[], seen: State["seen"], now: number): strin
  */
 export function withQuote(bars: Bar[], quote: QuoteRow | undefined, timeZone: string, syncedAt: number | null, seen?: Intraday): Bar[] {
   if (!quote || (syncedAt !== null && quote.fetchedAt <= syncedAt)) return bars;
-  const t = tradingDay(quote.time, timeZone);
+  const t = quoteDay(quote, timeZone);
   const last = bars.at(-1);
   if (last && t < last.t) return bars;
   const same = last?.t === t ? last : null;
@@ -112,7 +115,7 @@ export function liveReader(): (key: string) => Bar[] {
 }
 
 function remember(key: string, q: Quote, timeZone: string): void {
-  const t = tradingDay(q.time, timeZone);
+  const t = quoteDay(q, timeZone);
   const day = state.intraday.get(key);
   if (day?.t === t) state.intraday.set(key, { t, o: day.o, h: Math.max(day.h, q.price), l: Math.min(day.l, q.price) });
   else state.intraday.set(key, { t, o: q.price, h: q.price, l: q.price });
@@ -134,6 +137,8 @@ async function fetchSource(source: Source, keys: string[], now: number): Promise
     if (count === BACKOFF_AFTER) log(`${source} failed ${count} times in a row, asking hourly: ${err instanceof Error ? err.message : String(err)}`);
     return [];
   }
+  // when the answer arrived, not when the round began: a daily sync that ended in between is older
+  const receivedAt = Date.now();
   if (fail && fail.count >= BACKOFF_AFTER) log(`${source} answers again`);
   state.failures.delete(source);
   const rows: QuoteRow[] = [];
@@ -143,7 +148,7 @@ async function fetchSource(source: Source, keys: string[], now: number): Promise
     state.seen.set(key, { at: now, session: q?.session ?? "closed" });
     if (!q) continue;
     remember(key, q, getSymbol(key)?.timezone ?? "UTC");
-    rows.push({ key, ...q, fetchedAt: now });
+    rows.push({ key, ...q, fetchedAt: receivedAt });
   }
   return rows;
 }
@@ -164,7 +169,7 @@ export async function quoteRound(now = Date.now(), vaults: VaultConfig[] = loadV
   if (rows.length === 0) return rows;
   writeQuotes(rows);
   const read = liveReader();
-  for (const v of vaults) await runAlerts(v, v.config, new Map(), read);
+  for (const v of vaults) await runAlerts(v, () => readConfig(v.dir), new Map(), read);
   return rows;
 }
 

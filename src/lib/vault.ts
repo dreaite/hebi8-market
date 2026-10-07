@@ -120,6 +120,9 @@ export function readConfig(dir: string): Config {
   return config;
 }
 
+/** When a vault's yaml was last written (ms). */
+export const configMtime = (dir: string) => fs.statSync(yamlPath(dir)).mtimeMs;
+
 export function readConfigSafe(dir: string): { config: Config | null; error: string | null } {
   try {
     return { config: readConfig(dir), error: null };

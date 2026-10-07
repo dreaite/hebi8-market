@@ -152,7 +152,7 @@ describe("runAlerts", () => {
       conditions: [{ id: "up", label: "上涨", formula: "close > ref(close, 1)", tf: "D", notify: true }],
       alerts: [{ key: "BTC", label: "站上 100", when: "close > 100", trigger: "bar" }],
     });
-    const run = () => runAlerts({ id: "", dir: dir }, cfg, new Map());
+    const run = () => runAlerts({ id: "", dir: dir }, () => cfg, new Map());
 
     writeBars(key, bars([90, 95, 101]), "replace");
     expect(await run()).toEqual([]); // first sighting: both rules hold, nothing sent

@@ -1,6 +1,6 @@
 /** What the chart's alert lines and alert list show (§5.2), read from the vault, the cache and the quotes table. No network. */
 import type { AlertCond, AlertCondition, AlertTrigger } from "./alert-conds";
-import { conditionLevels } from "./alert-conds";
+import { conditionLevels, describeCondition } from "./alert-conds";
 import { alertFiredAt } from "./alerts";
 import { loadDaily, type DailyReader } from "./bars";
 import type { Config } from "./config";
@@ -14,6 +14,8 @@ export interface AlertView {
   /** Display name of the symbol */
   name: string;
   label: string;
+  /** The condition and its levels (「大于 1」), or the formula; shown under the name whatever the name is */
+  summary: string;
   /** The label as written, null when generated */
   ownLabel: string | null;
   cond: AlertCond | null;
@@ -54,6 +56,7 @@ export function alertViews(vault: string, cfg: Config, symbols: Record<string, S
       key: a.key,
       name: nameOf(cfg, a.key, symbols[a.key]?.name),
       label: a.label,
+      summary: a.condition ? describeCondition(a.condition) : `公式 ${a.when}`,
       ownLabel: a.ownLabel,
       cond: a.condition?.cond ?? null,
       value: a.condition?.value ?? null,
