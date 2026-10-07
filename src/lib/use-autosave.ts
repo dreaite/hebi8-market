@@ -15,6 +15,12 @@ export interface AutosaveOptions {
   delay?: number;
 }
 
+/**
+ * The localStorage key of a draft. On a shared instance drafts belong to a vault, so one person
+ * never restores another's; the root vault keeps the original keys so existing drafts survive.
+ */
+export const draftKey = (vault: string, file: string) => (vault ? `hebi8:draft:users/${vault}/${file}` : `hebi8:draft:${file}`);
+
 export interface Draft {
   text: string;
   at: number;

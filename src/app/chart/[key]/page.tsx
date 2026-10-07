@@ -49,7 +49,9 @@ export default async function ChartPage({ params }: { params: Promise<{ key: str
 
   return (
     <ChartView
-      key={key}
+      // a different person (or a visitor turning into one) gets a fresh chart, not the last one's state
+      key={`${viewer.vault}:${viewer.canWrite ? "w" : "r"}:${key}`}
+      vault={viewer.vault}
       symbolKey={key}
       prefs={config.chart}
       prices={config.prices}

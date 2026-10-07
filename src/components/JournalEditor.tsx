@@ -1,11 +1,11 @@
 "use client";
 
 import { saveJournal } from "@/app/actions";
-import { draftTime, statusText, useAutosave } from "@/lib/use-autosave";
+import { draftKey, draftTime, statusText, useAutosave } from "@/lib/use-autosave";
 
-export function JournalEditor({ week, initial, savedAt }: { week: string; initial: string; savedAt: number | null }) {
+export function JournalEditor({ vault, week, initial, savedAt }: { vault: string; week: string; initial: string; savedAt: number | null }) {
   const { text, setText, status, draft, restoreDraft, discardDraft } = useAutosave({
-    storageKey: `hebi8:draft:journal/${week}.md`,
+    storageKey: draftKey(vault, `journal/${week}.md`),
     initial,
     savedAt,
     save: (body) => saveJournal(week, body),

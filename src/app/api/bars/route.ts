@@ -1,11 +1,10 @@
-import { createHash } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import type { BarsResponse } from "@/lib/api-types";
 import { loadDaily, loadRefs } from "@/lib/bars";
 import { findItem } from "@/lib/config";
 import { aggregate } from "@/lib/series";
 import { pricePrecision } from "@/lib/stats";
-import { getSymbol, maxSyncedAt } from "@/lib/store";
+import { getSymbol } from "@/lib/store";
 import { isSynthetic, isTimeframe, isValidKey, parseKey } from "@/lib/symbols";
 import { SESSION_COOKIE } from "@/lib/github";
 import { readConfigSafe } from "@/lib/vault";
@@ -48,10 +47,6 @@ export async function GET(request: NextRequest) {
   }
 
   const refKeys = [...withKeys, ...(bench && bench !== key ? [bench] : [])];
-  const stamp = [key, tf, prices, refKeys.join(","), maxSyncedAt() ?? 0, daily.length].join("|");
-  const etag = `"${createHash("sha1").update(stamp).digest("hex").slice(0, 16)}"`;
-  const headers = { ETag: etag, "Cache-Control": "no-cache" };
-  if (request.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
 
   const bars = aggregate(daily, tf);
   const refs = loadRefs(bars, refKeys, tf, prices, config);
@@ -80,5 +75,6 @@ export async function GET(request: NextRequest) {
     })),
     refs,
   };
-  return NextResponse.json(body, { headers });
+  // per person (names, benchmarks and synthetic aliases come from their yaml), so never reused
+  return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
 }

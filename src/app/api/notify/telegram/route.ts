@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { channelSummary, setUserChannel } from "@/lib/notify";
 import { notifyCaller } from "@/lib/notify-caller";
-import { instanceBot, startBinding } from "@/lib/telegram";
+import { cancelBinding, instanceBot, startBinding } from "@/lib/telegram";
 
 export const dynamic = "force-dynamic";
 
@@ -17,10 +17,11 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/** 解除绑定 */
+/** 解除绑定, including a code still waiting to be used */
 export async function DELETE(request: NextRequest) {
   const caller = notifyCaller(request);
   if (caller instanceof NextResponse) return caller;
+  cancelBinding(caller.login);
   setUserChannel(caller.login, "telegram", null);
   return NextResponse.json(channelSummary(caller.vault, caller.owner));
 }

@@ -110,21 +110,32 @@ export function bindingStatus(login: string, now = Date.now()): BindingStatus {
 
 const waiting = () => [...state.bindings.values()].some((b) => !b.chat && b.expiresAt > Date.now());
 
+/** 取消 or 解除绑定: the waiting code stops working, and with nobody else waiting the polling ends. */
+export function cancelBinding(login: string): void {
+  const key = login.toLowerCase();
+  if (!state.bindings.get(key)?.chat) state.bindings.delete(key);
+}
+
 /**
- * One loop per process, only while a code is waiting. An update is confirmed by asking for the
- * next offset; the last batch is confirmed on the way out so Telegram does not hand it out again.
+ * One loop per process while a code is waiting. An update is confirmed by asking for the next
+ * offset; once nothing waits, a last `timeout: 0` call confirms the final batch (and whatever it
+ * returns is handled like any other). A code started meanwhile keeps the same loop going.
  */
 async function pollUpdates(bot: Bot): Promise<void> {
   if (state.polling) return;
   state.polling = true;
+  // update ids can restart after a quiet week, so an offset is only trusted within one run
+  state.offset = undefined;
   let unconfirmed = false;
   try {
-    while (waiting()) {
+    for (;;) {
+      const busy = waiting();
+      if (!busy && !unconfirmed) break;
       try {
-        const updates = await call<Update[]>(
+        const updates: Update[] = await call<Update[]>(
           bot,
           "getUpdates",
-          { offset: state.offset, timeout: LONG_POLL_S, allowed_updates: ["message"] },
+          { offset: state.offset, timeout: busy ? LONG_POLL_S : 0, allowed_updates: ["message"] },
           (LONG_POLL_S + 10) * 1000,
         );
         state.lastError = null;
@@ -137,10 +148,10 @@ async function pollUpdates(bot: Bot): Promise<void> {
         // e.g. 409 when something else reads the same bot: shown in the panel, retried
         state.lastError = err instanceof Error ? err.message : String(err);
         log(state.lastError);
+        if (!busy) break;
         await new Promise((r) => setTimeout(r, RETRY_MS));
       }
     }
-    if (unconfirmed) await call(bot, "getUpdates", { offset: state.offset, timeout: 0 }).catch((err) => log(err instanceof Error ? err.message : String(err)));
   } finally {
     state.polling = false;
   }

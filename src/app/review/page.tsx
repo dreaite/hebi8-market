@@ -53,7 +53,7 @@ export default async function ReviewPage() {
     <main className="mx-auto w-full max-w-[1400px] px-5 py-5">
       <div className="grid gap-5 lg:grid-cols-[1fr_1fr]">
         <section>
-          <JournalEditor key={week} week={week} initial={current} savedAt={journalMtime(viewer.dir, week)} />
+          <JournalEditor key={`${viewer.vault}:${week}`} vault={viewer.vault} week={week} initial={current} savedAt={journalMtime(viewer.dir, week)} />
         </section>
         <section className="flex flex-col gap-5">
           <div className="rounded-lg border border-line bg-card">

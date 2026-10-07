@@ -521,6 +521,7 @@ function AccountBlock({
       <DeviceLogin
         key={login.flowId}
         login={login}
+        shared={info.shared}
         toast={toast}
         onCancel={cancelLogin}
         onFailed={endLogin}
@@ -713,7 +714,15 @@ function NotifySettings({ toast }: { toast: (message: string, opts?: ToastOption
                 打开 Telegram 点 Start
                 <IconExternal size={12} />
               </a>
-              <button type="button" className="btn" onClick={() => setBinding(null)}>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setBinding(null);
+                  // the link must stop working too, not just the waiting here
+                  void act(() => request("/api/notify/telegram/cancel", "POST", {}));
+                }}
+              >
                 取消
               </button>
             </div>
@@ -805,12 +814,15 @@ function NotifySettings({ toast }: { toast: (message: string, opts?: ToastOption
 /** 登录中: the user code, a link to github.com/login/device, a countdown; polls our server every `interval` s. */
 function DeviceLogin({
   login,
+  shared,
   toast,
   onCancel,
   onFailed,
   onDone,
 }: {
   login: PendingLogin;
+  /** On a shared instance the login is mainly about whose list you see */
+  shared: boolean;
   toast: (message: string, opts?: ToastOptions) => void;
   onCancel: () => void;
   onFailed: (message: string) => void;
@@ -878,7 +890,11 @@ function DeviceLogin({
 
   return (
     <div className="mb-3 flex flex-col gap-2 rounded border border-line px-3 py-2.5" aria-live="polite">
-      <p className="leading-relaxed">在 GitHub 上输入下面的代码，授权 hebi8 以你的名义提交 issue：</p>
+      <p className="leading-relaxed">
+        {shared
+          ? "在 GitHub 上输入下面的代码登录。登录后用你自己的列表、画线、笔记和通知，反馈也会以你的名义提交："
+          : "在 GitHub 上输入下面的代码，授权 hebi8 以你的名义提交 issue："}
+      </p>
       <div className="flex items-center gap-2">
         <code className="rounded bg-fg/5 px-2 py-1 font-mono text-xl tracking-widest select-all" aria-label="登录代码">
           {login.userCode}

@@ -20,6 +20,8 @@ interface Update {
 }
 let updates: Update[] = [];
 const calls: { method: string; body: Record<string, unknown> }[] = [];
+/** Runs when the bot is asked to confirm its last batch (`timeout: 0`), before it answers */
+let onConfirm: (() => Promise<void>) | null = null;
 const hooks: string[] = [];
 
 const server = http.createServer((req, res) => {
@@ -43,6 +45,11 @@ const server = http.createServer((req, res) => {
     if (m[2] === "getMe") return reply({ id: 1, is_bot: true, username: "hebi8_test_bot" });
     if (m[2] === "sendMessage") return reply({ message_id: 1 });
     if (m[2] === "getUpdates") {
+      if (body.timeout === 0 && onConfirm) {
+        const hook = onConfirm;
+        onConfirm = null;
+        await hook();
+      }
       // like Telegram: an offset confirms everything before it; hold briefly when there is nothing
       const offset = Number(body.offset ?? 0);
       updates = updates.filter((u) => u.update_id >= offset);
@@ -188,6 +195,53 @@ describe("Telegram binding", () => {
     logs.mockRestore();
   });
 
+  it("cancelling makes the link useless, and a new run does not reuse an old offset", async () => {
+    const { startBinding, bindingStatus, cancelBinding } = await import("@/lib/telegram");
+    const { readNotifyUsers } = await import("@/lib/notify");
+    const codeOf = (url: string) => new URL(url).searchParams.get("start")!;
+
+    const carol = codeOf((await startBinding("carol")).url);
+    await until(() => calls.some((c) => c.method === "getUpdates" && c.body.timeout === 25 && c.body.offset === undefined));
+    cancelBinding("Carol");
+    expect(bindingStatus("carol")).toEqual({ status: "expired" });
+
+    // nobody waits: the bot is left alone
+    await new Promise((r) => setTimeout(r, 200));
+    const polls = calls.filter((c) => c.method === "getUpdates").length;
+    await new Promise((r) => setTimeout(r, 200));
+    expect(calls.filter((c) => c.method === "getUpdates").length).toBe(polls);
+
+    // the next run starts without an offset (update ids may have restarted) and ignores carol's old link
+    calls.length = 0;
+    const dave = codeOf((await startBinding("dave")).url);
+    await until(() => calls.some((c) => c.method === "getUpdates"));
+    expect(calls.find((c) => c.method === "getUpdates")!.body.offset).toBeUndefined();
+    updates.push(
+      { update_id: 30, message: { chat: { id: 301, type: "private" }, text: `/start ${carol}` } },
+      { update_id: 31, message: { chat: { id: 302, type: "private" }, text: `/start ${dave}` } },
+    );
+    await until(() => readNotifyUsers().dave !== undefined);
+    expect(readNotifyUsers()).toEqual({ dave: { telegram: { chat: "302" } } });
+    await until(() => bindingStatus("dave").status === "bound");
+  });
+
+  it("keeps polling for a code started while the last batch is being confirmed", async () => {
+    const { startBinding, bindingStatus } = await import("@/lib/telegram");
+    const codeOf = (url: string) => new URL(url).searchParams.get("start")!;
+    const erin = codeOf((await startBinding("erin")).url);
+    let frank: string | null = null;
+    onConfirm = async () => {
+      frank = codeOf((await startBinding("frank")).url);
+    };
+    updates.push({ update_id: 40, message: { chat: { id: 401, type: "private" }, text: `/start ${erin}` } });
+    await until(() => frank !== null);
+    expect(bindingStatus("erin")).toEqual({ status: "bound", chat: "401" });
+    updates.push({ update_id: 41, message: { chat: { id: 402, type: "private" }, text: `/start ${frank}` } });
+    let status = bindingStatus("frank");
+    await until(() => (status = bindingStatus("frank")).status !== "pending");
+    expect(status).toEqual({ status: "bound", chat: "402" });
+  });
+
   it("refuses without a bot in notify.json", async () => {
     const { startBinding } = await import("@/lib/telegram");
     writeNotify({});
@@ -209,9 +263,11 @@ describe("/api/notify", () => {
     const { GET } = await import("@/app/api/notify/route");
     const telegram = await import("@/app/api/notify/telegram/route");
     const poll = await import("@/app/api/notify/telegram/poll/route");
+    const cancel = await import("@/app/api/notify/telegram/cancel/route");
     const webhook = await import("@/app/api/notify/webhook/route");
     const test = await import("@/app/api/notify/test/route");
     for (const res of [
+      await cancel.POST(req("/api/notify/telegram/cancel", { method: "POST" })),
       await GET(req("/api/notify")),
       await telegram.POST(req("/api/notify/telegram", { method: "POST" })),
       await telegram.DELETE(req("/api/notify/telegram", { method: "DELETE" })),
@@ -278,6 +334,14 @@ describe("/api/notify", () => {
     });
     // the chat id stays on the server
     expect(reply).toEqual({ status: "bound" });
+    expect(readNotifyUsers()).toEqual({ bob: { telegram: { chat: "888" } } });
+
+    // 取消 through the route: the code stops working
+    expect((await telegram.POST(req("/api/notify/telegram", { method: "POST", session: sessions.bob }))).status).toBe(200);
+    const cancel = await import("@/app/api/notify/telegram/cancel/route");
+    expect(await (await cancel.POST(req("/api/notify/telegram/cancel", { method: "POST", session: sessions.bob }))).json()).toEqual({ ok: true });
+    expect(await (await poll.POST(req("/api/notify/telegram/poll", { method: "POST", session: sessions.bob }))).json()).toEqual({ status: "expired" });
+    // a chat already bound survives 取消; 解除绑定 removes it
     expect(readNotifyUsers()).toEqual({ bob: { telegram: { chat: "888" } } });
 
     const after = await telegram.DELETE(req("/api/notify/telegram", { method: "DELETE", session: sessions.bob }));

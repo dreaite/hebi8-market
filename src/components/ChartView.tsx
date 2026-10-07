@@ -98,6 +98,8 @@ interface ChartViewProps {
   noteSavedAt: number | null;
   /** A visitor on a shared instance: preferences stay in this page, drawings and notes need a login */
   readOnly: boolean;
+  /** The viewer's vault ('' = root), for per-person drafts */
+  vault: string;
 }
 
 export function ChartView({
@@ -116,6 +118,7 @@ export function ChartView({
   noteHtml,
   noteSavedAt,
   readOnly,
+  vault,
 }: ChartViewProps) {
   const router = useRouter();
   const { openSearch, openHelp, searchCtx } = useUi();
@@ -491,7 +494,7 @@ export function ChartView({
       readOnly ? (
         <LoginPrompt text="登录后看自己的笔记" onClose={() => togglePanel("notes")} className="h-full" />
       ) : (
-        <NotesPanel symbolKey={symbolKey} note={note} html={noteHtml} savedAt={noteSavedAt} onClose={() => togglePanel("notes")} className="h-full" />
+        <NotesPanel key={vault} vault={vault} symbolKey={symbolKey} note={note} html={noteHtml} savedAt={noteSavedAt} onClose={() => togglePanel("notes")} className="h-full" />
       )
     ) : null;
 

@@ -40,6 +40,8 @@ export interface OverviewData {
   vaultPath: string;
   /** Muted lines above the table: whose list a visitor sees, yaml settings that are ignored */
   notices: string[];
+  /** A visitor on a shared instance: no way in to changes, display choices stay in the page */
+  readOnly: boolean;
 }
 
 type SortKey = "last" | "ddAth" | "pos52" | ChangePeriod;
@@ -144,7 +146,8 @@ function Th({
 
 export function Overview({ data }: { data: OverviewData }) {
   const router = useRouter();
-  const { openSearch, toast } = useUi();
+  const { openSearch, toast, login } = useUi();
+  const readOnly = data.readOnly;
   const [, startTransition] = useTransition();
   const [refreshing, setRefreshing] = useState(false);
   const [sort, setSort] = useState<Sort>(null);
@@ -177,7 +180,7 @@ export function Overview({ data }: { data: OverviewData }) {
     setUpdownState(next);
     if (next === "red-up") document.documentElement.dataset.updown = "red-up";
     else delete document.documentElement.dataset.updown;
-    act(() => setUpdown(next));
+    if (!readOnly) act(() => setUpdown(next));
   };
 
   const remove = (row: OverviewRow, group: string) => {
@@ -201,6 +204,11 @@ export function Overview({ data }: { data: OverviewData }) {
   const menu = (row: OverviewRow, group: string) =>
     menuFor === row.key && (
       <RowMenu
+        readOnly={readOnly}
+        onLogin={() => {
+          closeMenu();
+          login();
+        }}
         name={row.name}
         group={group}
         groups={groupNames}
@@ -250,23 +258,27 @@ export function Overview({ data }: { data: OverviewData }) {
               红涨
             </button>
           </div>
-          <button
-            onClick={() => {
-              setRefreshing(true);
-              startTransition(async () => {
-                const result = await refresh();
-                setMessage(result.ok ? null : result.error);
-                setRefreshing(false);
-              });
-            }}
-            disabled={refreshing}
-            className="btn"
-          >
-            {refreshing ? "同步中…" : "刷新"}
-          </button>
-          <button onClick={() => openSearch()} className="btn btn-secondary">
-            + 添加
-          </button>
+          {!readOnly && (
+            <>
+              <button
+                onClick={() => {
+                  setRefreshing(true);
+                  startTransition(async () => {
+                    const result = await refresh();
+                    setMessage(result.ok ? null : result.error);
+                    setRefreshing(false);
+                  });
+                }}
+                disabled={refreshing}
+                className="btn"
+              >
+                {refreshing ? "同步中…" : "刷新"}
+              </button>
+              <button onClick={() => openSearch()} className="btn btn-secondary">
+                + 添加
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -275,7 +287,7 @@ export function Overview({ data }: { data: OverviewData }) {
           value={periods}
           onChange={(next) => {
             setPeriodsState(next);
-            act(() => setPeriods(next));
+            if (!readOnly) act(() => setPeriods(next));
           }}
         />
       )}

@@ -3,11 +3,13 @@
 import { useState } from "react";
 import { saveNote } from "@/app/actions";
 import { fileKey } from "@/lib/symbols";
-import { draftTime, statusText, useAutosave } from "@/lib/use-autosave";
+import { draftKey, draftTime, statusText, useAutosave } from "@/lib/use-autosave";
 import { IconClose } from "./chart-icons";
 import { LoginButton } from "./UiProvider";
 
 interface NotesPanelProps {
+  /** The viewer's vault ('' = root): drafts are kept per person */
+  vault: string;
   symbolKey: string;
   note: string | null;
   html: string | null;
@@ -19,12 +21,12 @@ interface NotesPanelProps {
 }
 
 /** The thesis for a symbol: rendered markdown, with a self-saving textarea behind「编辑」. */
-export function NotesPanel({ symbolKey, note, html, savedAt, onClose, closeSeq = 0, className = "" }: NotesPanelProps) {
+export function NotesPanel({ vault, symbolKey, note, html, savedAt, onClose, closeSeq = 0, className = "" }: NotesPanelProps) {
   const [editState, setEditState] = useState({ seq: 0, on: false });
   const editing = editState.seq === closeSeq && editState.on;
   const setEditing = (on: boolean) => setEditState({ seq: closeSeq, on });
   const { text, setText, status, draft, restoreDraft, discardDraft, flush } = useAutosave({
-    storageKey: `hebi8:draft:notes/${fileKey(symbolKey)}.md`,
+    storageKey: draftKey(vault, `notes/${fileKey(symbolKey)}.md`),
     initial: note ?? "",
     savedAt,
     save: (body) => saveNote(symbolKey, body),

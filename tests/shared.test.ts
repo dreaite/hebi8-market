@@ -182,6 +182,14 @@ describe("Server Actions write as the viewer", () => {
   });
 });
 
+describe("drafts", () => {
+  it("are kept per vault, with the root vault's keys as before", async () => {
+    const { draftKey } = await import("@/lib/use-autosave");
+    expect(draftKey("", "notes/yahoo_NVDA.md")).toBe("hebi8:draft:notes/yahoo_NVDA.md");
+    expect(draftKey("alice", "journal/2026-W41.md")).toBe("hebi8:draft:users/alice/journal/2026-W41.md");
+  });
+});
+
 describe("sync across vaults", () => {
   it("fetches the union of every vault's keys and comparisons, skipping broken and stale vaults", async () => {
     const { loadVaults, unionSyncKeys } = await import("@/lib/sync");
@@ -246,6 +254,18 @@ describe("stats and alerts per vault", () => {
     expect(readAllStats("carol")).toEqual({});
     expect(statsFor("carol", aliceCfg)[KEY].conditions.down.now).toBe(false);
     expect(Object.keys(readAllStats("carol"))).toEqual([KEY]);
+  });
+
+  it("/api/bars answers per person, never from a shared conditional cache", async () => {
+    const { NextRequest } = await import("next/server");
+    const { GET } = await import("@/app/api/bars/route");
+    const get = (session?: string) =>
+      GET(new NextRequest(`http://h/api/bars?key=${encodeURIComponent(KEY)}&tf=D`, { headers: { ...(session ? { cookie: `hebi8_session=${session}` } : {}), "if-none-match": '"x"' } }));
+    for (const res of [await get(), await get(sessions.alice)]) {
+      expect(res.status).toBe(200);
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      expect(res.headers.get("etag")).toBeNull();
+    }
   });
 
   it("judges each vault's rules against its own state", async () => {

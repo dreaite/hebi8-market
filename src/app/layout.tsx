@@ -34,15 +34,15 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         <ErrorCapture />
         <UiProvider ctx={searchCtx}>
           <header className="site-header border-b border-line">
-            <div className="mx-auto flex h-12 max-w-[1400px] items-center gap-4 px-5">
+            <div className="mx-auto flex h-12 max-w-[1400px] items-center gap-3 px-3 sm:gap-4 sm:px-5">
               <Link href="/" className="flex shrink-0 items-baseline gap-3" title="hebi（蛇）首尾相衔，七天一个轮回；多出来的第八天，用来观测市场">
                 <span className="font-mono text-sm tracking-tight">hebi8 market</span>
                 <span className="hidden text-[11px] text-muted lg:inline">第八天，观测市场</span>
               </Link>
-              <div className="flex flex-1 justify-center">
+              <div className="flex min-w-0 flex-1 justify-center">
                 <SearchTrigger />
               </div>
-              <nav className="flex shrink-0 items-center gap-4 text-xs text-muted">
+              <nav className="flex shrink-0 items-center gap-3 text-xs text-muted sm:gap-4">
                 <Link href="/" className="hover:text-fg">
                   总览
                 </Link>

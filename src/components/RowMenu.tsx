@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 
 export interface RowMenuProps {
+  /** A visitor: only 打开, plus a way to log in and keep a list of their own */
+  readOnly: boolean;
+  onLogin: () => void;
   name: string;
   group: string;
   groups: string[];
@@ -18,7 +21,7 @@ export interface RowMenuProps {
 type View = "root" | "move" | "rename" | "bench" | "newGroup";
 
 /** The「⋯」menu of an overview row; also opened by right-clicking the row. */
-export function RowMenu({ name, group, groups, benchLabel, onOpen, onMove, onRename, onBench, onRemove, onClose }: RowMenuProps) {
+export function RowMenu({ readOnly, onLogin, name, group, groups, benchLabel, onOpen, onMove, onRename, onBench, onRemove, onClose }: RowMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View>("root");
   const [text, setText] = useState("");
@@ -75,7 +78,13 @@ export function RowMenu({ name, group, groups, benchLabel, onOpen, onMove, onRen
 
   return (
     <div ref={ref} role="menu" aria-label={`${name} 的操作`} className="menu" onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
-      {view === "root" && (
+      {view === "root" && readOnly && (
+        <>
+          {item("打开", onOpen)}
+          {item("登录后整理自己的列表", onLogin, "text-muted")}
+        </>
+      )}
+      {view === "root" && !readOnly && (
         <>
           {item("打开", onOpen)}
           {item("移到分组 ▸", () => setView("move"))}

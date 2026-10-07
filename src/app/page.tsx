@@ -56,6 +56,7 @@ export default async function Home() {
     firstRun,
     vaultPath: path.relative(process.cwd(), viewer.dir) || ".",
     notices,
+    readOnly: !viewer.canWrite,
   };
   return <Overview data={data} />;
 }

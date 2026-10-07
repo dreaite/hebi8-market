@@ -293,10 +293,11 @@ export function Account({ user, enabled }: { user: { login: string; avatarUrl: s
   };
   return (
     <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="menu" className="btn gap-1.5" title={`已登录为 ${user.login}`}>
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="menu" aria-label={user.login} className="btn gap-1.5" title={`已登录为 ${user.login}`}>
         {/* eslint-disable-next-line @next/next/no-img-element -- GitHub avatar, no optimisation wanted */}
         <img src={`${user.avatarUrl}${user.avatarUrl.includes("?") ? "&" : "?"}s=40`} alt="" width={18} height={18} className="rounded-full" />
-        <span className="max-w-[10rem] truncate">{user.login}</span>
+        {/* narrow screens: the avatar alone, so the header never scrolls sideways */}
+        <span className="hidden max-w-[10rem] truncate sm:inline">{user.login}</span>
       </button>
       {open && (
         <div role="menu" aria-label="账号" className="menu mt-1">
