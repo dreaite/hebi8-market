@@ -123,6 +123,14 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
     }
     setGuide(false);
   }, []);
+  // leaving the page (a row behind the guide, search, back) dismisses the guide like closing it
+  const guidePath = useRef(pathname);
+  useEffect(() => {
+    if (guidePath.current === pathname) return;
+    guidePath.current = pathname;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- follows the route, which lives outside React state
+    if (guide) closeGuide();
+  }, [pathname, guide, closeGuide]);
 
   // `?help=feedback|project` opens the drawer (a link to the feedback form), then leaves the URL
   useEffect(() => {
