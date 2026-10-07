@@ -601,7 +601,7 @@ function GroupRows({
                 <AlertBadgeList badges={row.badges} onOpen={(id) => openAlert(row, id)} />
               </td>
               <td className={`${cell} wide-col py-1`}>{s && <Sparkline values={s.spark} width={180} height={26} className="w-[180px]" />}</td>
-              <td className={`${cell} rounded-r-md px-0 text-right`}>
+              <td className="rounded-r-md border-t border-line py-1.5 text-right">
                 <button
                   onClick={(e) => {
                     e.stopPropagation();

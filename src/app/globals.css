@@ -349,6 +349,10 @@ input:focus-visible {
   overflow: hidden;
   white-space: nowrap;
 }
+/* hidden, so a clipped header is not reached by Tab */
+.wide-col > * {
+  visibility: hidden;
+}
 @media (min-width: 1280px) {
   :root {
     --col-spark: 200px;
@@ -356,6 +360,9 @@ input:focus-visible {
   .wide-col {
     padding-left: 0.5rem;
     padding-right: 0.5rem;
+  }
+  .wide-col > * {
+    visibility: visible;
   }
 }
 
