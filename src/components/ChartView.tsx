@@ -374,11 +374,12 @@ export function ChartView({
       // Esc works from inside an editor's own input too; the search overlay stops its own Esc
       if (e.key === "Escape") {
         setDialog(null);
+        control.current?.closeDialog();
         setDrawTool(null);
         if (isEditable(e.target)) (e.target as HTMLElement).blur();
         return;
       }
-      if (isEditable(e.target) || dialog) return;
+      if (isEditable(e.target) || dialog || control.current?.dialogOpen()) return;
       if (e.altKey && !e.ctrlKey && !e.metaKey) {
         const tool = DRAW_TOOLS.find((t) => t.code === e.code);
         if (tool) {
@@ -442,6 +443,8 @@ export function ChartView({
   const bars = data?.bars;
   const meta = data?.symbol;
   const alertLines = useMemo(() => alerts.filter((a) => a.key === symbolKey).flatMap((a) => a.levels.map((price) => ({ id: a.id, price }))), [alerts, symbolKey]);
+  // a log axis has no place for zero or negative prices (a data: series can have them): the button is off, the saved preference stays
+  const nonPositive = useMemo(() => Boolean(bars?.some((b) => b.low <= 0)), [bars]);
   const forcedPercent = compare.some((c) => c.mode === "percent" && !hiddenCompares.includes(c.key));
   const percentOn = forcedPercent || pctAxis;
   const compareWithHidden = useMemo(() => compare.map((c) => ({ ...c, hidden: hiddenCompares.includes(c.key) })), [compare, hiddenCompares]);
@@ -753,7 +756,7 @@ export function ChartView({
                 tf={dataTf}
                 bars={bars ?? null}
                 pricePrecision={data?.pricePrecision ?? 2}
-                log={log}
+                log={log && !nonPositive}
                 percentAxis={pctAxis}
                 chartStyle={chartStyle}
                 indicators={specs}
@@ -806,7 +809,7 @@ export function ChartView({
               type="button"
               onClick={() => {
                 if (forcedPercent) return;
-                if (!pctAxis && log) {
+                if (!pctAxis && log && !nonPositive) {
                   setLog(false);
                   persist({ log: false });
                 }
@@ -826,10 +829,10 @@ export function ChartView({
                 setLog(!log);
                 persist({ log: !log });
               }}
-              aria-pressed={log && !percentOn}
-              disabled={forcedPercent}
+              aria-pressed={log && !percentOn && !nonPositive}
+              disabled={forcedPercent || nonPositive}
               className="tb-btn h-6 px-1.5 text-xs"
-              title={forcedPercent ? "比较模式下使用百分比坐标" : "对数坐标"}
+              title={nonPositive ? "价格里有 0 或负数，不能用对数坐标" : forcedPercent ? "比较模式下使用百分比坐标" : "对数坐标"}
             >
               log
             </button>
