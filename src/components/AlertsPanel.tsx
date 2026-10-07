@@ -50,10 +50,11 @@ export function AlertsPanel({
           void saveAlert({
             key: a.key,
             cond: a.cond ?? "formula",
-            ...(a.cond ? { value: a.value! } : { when: a.when! }),
+            ...(a.cond ? { value: a.value! } : { when: a.when!, tf: a.tf }),
             trigger: a.trigger,
             label: a.ownLabel ?? "",
             enabled: a.enabled,
+            notify: a.notify,
           }).then(report),
       },
     });
@@ -88,9 +89,11 @@ export function AlertsPanel({
         <ul className="min-h-0 flex-1 divide-y divide-line overflow-y-auto">
           {alerts.map((a) => {
             const status = STATUS[a.status];
+            // an alert on the whole watchlist has no chart of its own
+            const opens = a.key !== null && a.key !== current ? a.key : null;
             return (
               <li key={a.id} className={`group px-3 py-2 ${a.key === current ? "bg-fg/5" : ""}`}>
-                <button type="button" className="block w-full text-left" onClick={() => a.key !== current && router.push(chartHref(a.key))} title={a.key !== current ? `打开 ${a.name}` : undefined}>
+                <button type="button" className="block w-full text-left" onClick={() => opens && router.push(chartHref(opens))} title={opens ? `打开 ${a.name}` : undefined}>
                   <span className="flex items-center gap-2">
                     <span className="min-w-0 flex-1 truncate text-[13px] font-medium" title={a.name}>
                       {a.name}
@@ -102,11 +105,14 @@ export function AlertsPanel({
                   </span>
                   {/* TradingView: the condition stays visible under any name */}
                   <span className="mt-0.5 block truncate text-[11px] text-muted" title={a.summary}>
-                    {a.summary} · {a.trigger === "once" ? "仅一次" : "每根 K 线一次"}
+                    {a.summary} · {a.key === null ? "每个标的每根 K 线最多一次" : a.trigger === "once" ? "仅一次" : "每根 K 线一次"}
+                    {!a.notify && " · 不推送"}
                   </span>
-                  <span className="mt-0.5 block text-[11px] text-muted">
-                    当前 {a.price != null ? `${fmtPrice(a.price)}${a.priceAt ? ` · ${fmtAgo(a.priceAt, "")}` : ""}` : "暂无价格"}
-                  </span>
+                  {a.key !== null && (
+                    <span className="mt-0.5 block text-[11px] text-muted">
+                      当前 {a.price != null ? `${fmtPrice(a.price)}${a.priceAt ? ` · ${fmtAgo(a.priceAt, "")}` : ""}` : "暂无价格"}
+                    </span>
+                  )}
                 </button>
                 <span className="mt-1 flex gap-1">
                   <button type="button" className="btn h-6 px-1.5" onClick={() => onEdit(a)}>

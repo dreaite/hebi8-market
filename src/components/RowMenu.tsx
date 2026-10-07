@@ -15,13 +15,15 @@ export interface RowMenuProps {
   onRename: (name: string) => void;
   onBench: (bench: string | null) => void;
   onRemove: () => void;
+  /** Opens the alert dialog on this symbol */
+  onAddAlert: () => void;
   onClose: () => void;
 }
 
 type View = "root" | "move" | "rename" | "bench" | "newGroup";
 
 /** The「⋯」menu of an overview row; also opened by right-clicking the row. */
-export function RowMenu({ readOnly, onLogin, name, group, groups, benchLabel, onOpen, onMove, onRename, onBench, onRemove, onClose }: RowMenuProps) {
+export function RowMenu({ readOnly, onLogin, name, group, groups, benchLabel, onOpen, onMove, onRename, onBench, onRemove, onAddAlert, onClose }: RowMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View>("root");
   const [text, setText] = useState("");
@@ -96,6 +98,7 @@ export function RowMenu({ readOnly, onLogin, name, group, groups, benchLabel, on
             setText(benchLabel ?? "");
             setView("bench");
           })}
+          {item("添加警报…", onAddAlert)}
           {item("移除", onRemove, "text-down")}
         </>
       )}

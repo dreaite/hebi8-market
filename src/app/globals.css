@@ -210,7 +210,7 @@ input:focus-visible {
   .input[aria-invalid="true"] {
     border-color: var(--down);
   }
-  /* Condition badges. */
+  /* Alert badges: muted when not fired, solid when fired or holding. */
   .badge {
     display: inline-flex;
     align-items: center;
@@ -218,6 +218,7 @@ input:focus-visible {
     height: 20px;
     padding: 0 6px;
     border: 1px solid var(--line);
+    max-width: 100%;
     border-radius: 9999px;
     font-size: 11px;
     line-height: 1;
@@ -236,9 +237,19 @@ input:focus-visible {
       background: color-mix(in srgb, var(--accent) 15%, transparent);
     }
   }
-  .badge-off {
+  .badge-on {
+    border-color: color-mix(in srgb, var(--fg) 35%, transparent);
+    color: var(--fg);
+  }
+  .badge-stopped {
     border-style: dashed;
     opacity: 0.55;
+  }
+  .badge-button {
+    cursor: pointer;
+  }
+  .badge-button:hover {
+    border-color: var(--accent);
   }
   /*
    * Chart toolbars (TradingView layout): icon or icon+short-text buttons with a 30px hit area,

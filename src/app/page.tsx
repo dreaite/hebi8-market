@@ -1,6 +1,7 @@
 import path from "node:path";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
 import { Overview, type OverviewData, type OverviewRow } from "@/components/Overview";
+import { alertBadges, alertViews } from "@/lib/alert-view";
 import { benchLabel, nameOf } from "@/lib/names";
 import { hasBars, listSymbols, maxSyncedAt } from "@/lib/store";
 import { isSynthetic, parseKey, tickerOf } from "@/lib/symbols";
@@ -21,6 +22,8 @@ export default async function Home() {
   const stats = statsFor(viewer.vault, config);
   const firstRun = !hasBars();
   if (firstRun) void syncAll().catch(() => undefined);
+  // alerts are personal like notes: a visitor sees none
+  const badges = viewer.canWrite ? alertBadges(viewer.vault, config) : {};
 
   const groups = config.groups.map((g) => ({
     name: g.name,
@@ -37,6 +40,7 @@ export default async function Home() {
         benchLabel: item.bench ? benchLabel(config, item.bench, symbols[item.bench]?.name) : null,
         stats: stats[item.key] ?? null,
         syncError: row?.syncError ?? null,
+        badges: badges[item.key] ?? [],
       };
     }),
   }));
@@ -47,7 +51,8 @@ export default async function Home() {
     groups,
     periods: config.periods,
     updown: config.updown,
-    conditions: config.conditions.map(({ id, label }) => ({ id, label })),
+    alerts: viewer.canWrite ? alertViews(viewer.vault, config, symbols) : [],
+    aliases: config.aliases,
     lastReviewDays: journal ? daysAgo(journal.mtimeMs) : null,
     lastSync: maxSyncedAt(),
     firstRun,

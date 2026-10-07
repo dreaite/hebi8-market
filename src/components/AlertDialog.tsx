@@ -1,11 +1,11 @@
 "use client";
 
 import { useMemo, useState, type FocusEvent, type ReactNode } from "react";
-import { saveAlert, type AlertInput } from "@/app/actions";
+import { deleteAlert, saveAlert, type AlertInput } from "@/app/actions";
 import { compileFormula } from "@/indicators/formula-indicators";
-import { ALERT_CONDS, describeCondition, parseCondition, type AlertCond, type AlertCondition, type AlertTrigger } from "@/lib/alert-conds";
+import { ALERT_CONDS, WATCHLIST, describeCondition, parseCondition, type AlertCond, type AlertCondition, type AlertTrigger } from "@/lib/alert-conds";
 import type { AlertView } from "@/lib/alert-view";
-import { tickerOf } from "@/lib/symbols";
+import { TF_LABELS, TIMEFRAMES, tickerOf, type Timeframe } from "@/lib/symbols";
 import { Dialog } from "./Dialog";
 import { LoginButton } from "./UiProvider";
 
@@ -28,8 +28,9 @@ export function AlertLoginDialog({ onClose }: { onClose: () => void }) {
 }
 
 /**
- * 新建警报 / 编辑警报, TradingView's dialog: the symbol, 条件 with the value inputs that condition
- * needs, 触发 (仅一次 | 每根 K 线一次) and an optional name whose placeholder is the generated one.
+ * 新建警报 / 编辑警报, TradingView's dialog: the symbol (or 全部自选), 条件 with the value inputs
+ * that condition needs, 触发 (仅一次 | 每根 K 线一次), an optional name whose placeholder is the
+ * generated one, and whether it is pushed. The chart and the overview open the same dialog.
  */
 export function AlertDialog({
   symbolKey,
@@ -40,6 +41,7 @@ export function AlertDialog({
   aliases,
   bench,
   onSaved,
+  onDeleted,
   onClose,
 }: {
   symbolKey: string;
@@ -52,6 +54,8 @@ export function AlertDialog({
   aliases: Record<string, string>;
   bench: string | null;
   onSaved: () => void;
+  /** Given, an edited alert can be deleted here too */
+  onDeleted?: () => void;
   onClose: () => void;
 }) {
   const start = price ?? 0;
@@ -63,8 +67,12 @@ export function AlertDialog({
   const [pct, setPct] = useState(v && typeof v === "object" && !Array.isArray(v) ? String(v.pct) : "5");
   const [bars, setBars] = useState(v && typeof v === "object" && !Array.isArray(v) ? String(v.bars) : "1");
   const [when, setWhen] = useState(alert?.when ?? "close > sma(close, 200)");
+  const [tf, setTf] = useState<Timeframe>(alert?.tf ?? "D");
   const [trigger, setTrigger] = useState<AlertTrigger>(alert?.trigger ?? "once");
   const [label, setLabel] = useState(alert?.ownLabel ?? "");
+  /** On every watched symbol instead of this one */
+  const [all, setAll] = useState(alert ? alert.key === null : false);
+  const [notify, setNotify] = useState(alert?.notify ?? true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,9 +87,18 @@ export function AlertDialog({
       return { error: shape === "move" ? "百分比要大于 0，K 线数是正整数" : "请输入数字" };
     }
   }, [cond, shape, level, low, high, pct, bars]);
-  const formulaError = cond === "formula" ? compileFormula(when, { aliases, bench }).error : null;
+  // on the whole watchlist `bench` is each symbol's own
+  const formulaError = cond === "formula" ? compileFormula(when, { aliases, bench: all ? undefined : bench }).error : null;
   const short = Object.entries(aliases).find(([, k]) => k === symbolKey)?.[0] ?? tickerOf(symbolKey);
-  const autoName = parsed && "condition" in parsed ? `${short} ${describeCondition(parsed.condition)}` : cond === "formula" ? when.trim() : "";
+  const what = parsed && "condition" in parsed ? describeCondition(parsed.condition) : cond === "formula" ? when.trim() : "";
+  const autoName = what && !all && cond !== "formula" ? `${short} ${what}` : what;
+  /** A price or a channel only means something on one symbol */
+  const needsSymbol = (c: CondChoice) => c !== "formula" && ALERT_CONDS[c].value !== "move";
+
+  const chooseScope = (next: boolean) => {
+    setAll(next);
+    if (next && needsSymbol(cond)) setCond("formula");
+  };
 
   const submit = async () => {
     if (busy) return;
@@ -89,17 +106,27 @@ export function AlertDialog({
     if (formulaError) return setError(formulaError);
     const input: AlertInput = {
       ...(alert ? { id: alert.id } : {}),
-      key: symbolKey,
+      key: all ? null : symbolKey,
       cond,
-      ...(parsed && "condition" in parsed ? { value: parsed.condition.value } : { when }),
+      ...(parsed && "condition" in parsed ? { value: parsed.condition.value } : { when, tf }),
       trigger,
       label,
+      notify,
     };
     setBusy(true);
     setError(null);
     const result = await saveAlert(input);
     setBusy(false);
     if (result.ok) onSaved();
+    else setError(result.error);
+  };
+
+  const remove = async () => {
+    if (busy || !alert || !onDeleted) return;
+    setBusy(true);
+    const result = await deleteAlert(alert.id);
+    setBusy(false);
+    if (result.ok) onDeleted();
     else setError(result.error);
   };
 
@@ -117,15 +144,22 @@ export function AlertDialog({
         }}
       >
         <Field label="商品">
-          <span className="truncate">
-            <span className="font-medium">{short}</span>
-            {symbolName !== short && <span className="text-muted"> · {symbolName}</span>}
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="seg shrink-0" role="group" aria-label="商品">
+              <button type="button" aria-pressed={!all} onClick={() => chooseScope(false)} title={symbolName}>
+                {short}
+              </button>
+              <button type="button" aria-pressed={all} onClick={() => chooseScope(true)} title="对每个自选标的分别判断">
+                {WATCHLIST}
+              </button>
+            </span>
+            {!all && symbolName !== short && <span className="truncate text-muted">{symbolName}</span>}
           </span>
         </Field>
         <Field label="条件">
           <select className="input w-full" value={cond} onChange={(e) => setCond(e.target.value as CondChoice)} aria-label="条件">
             {(Object.keys(ALERT_CONDS) as AlertCond[]).map((c) => (
-              <option key={c} value={c}>
+              <option key={c} value={c} disabled={all && needsSymbol(c)}>
                 {ALERT_CONDS[c].label}
               </option>
             ))}
@@ -167,26 +201,55 @@ export function AlertDialog({
                 autoFocus
                 spellCheck={false}
               />
-              <span className={formulaError ? "text-down" : "text-muted"}>{formulaError ?? "布尔公式，新成立时触发，按日线判断；明确的上穿写 cross(close, X)"}</span>
+              <span className={formulaError ? "text-down" : "text-muted"}>{formulaError ?? "布尔公式，新成立时触发；明确的上穿写 cross(close, X)"}</span>
             </span>
           </Field>
         )}
+        {shape === "formula" && (
+          <Field label="周期">
+            <div className="seg" role="group" aria-label="公式的周期">
+              {TIMEFRAMES.map((t) => (
+                <button key={t} type="button" aria-pressed={tf === t} onClick={() => setTf(t)}>
+                  {TF_LABELS[t]}线
+                </button>
+              ))}
+            </div>
+          </Field>
+        )}
         <Field label="触发">
-          <div className="seg" role="group" aria-label="触发">
-            <button type="button" aria-pressed={trigger === "once"} onClick={() => setTrigger("once")}>
-              仅一次
-            </button>
-            <button type="button" aria-pressed={trigger === "bar"} onClick={() => setTrigger("bar")}>
-              每根 K 线一次
-            </button>
-          </div>
+          {all ? (
+            <span className="text-muted">每个标的每根 K 线最多一次</span>
+          ) : (
+            <div className="seg" role="group" aria-label="触发">
+              <button type="button" aria-pressed={trigger === "once"} onClick={() => setTrigger("once")}>
+                仅一次
+              </button>
+              <button type="button" aria-pressed={trigger === "bar"} onClick={() => setTrigger("bar")}>
+                每根 K 线一次
+              </button>
+            </div>
+          )}
         </Field>
         <Field label="名称">
           <input className="input w-full" value={label} placeholder={autoName} onChange={(e) => setLabel(e.target.value)} onFocus={selectAll} aria-label="名称" maxLength={80} />
         </Field>
-        <p className="text-[11px] text-muted">盘中每 5 分钟取一次最新价判断（休市时每小时），触发时推到你的通知通道。</p>
+        <Field label="通知">
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} />
+            推到我的通知通道
+            {!notify && <span className="text-muted">（只在总览显示）</span>}
+          </label>
+        </Field>
+        <p className="text-[11px] text-muted">
+          {all ? "每次日线同步后对每个自选标的判断，总览上在成立的标的旁显示这个名字。" : "盘中每 5 分钟取一次最新价判断（休市时每小时），总览上这个标的旁显示这个名字。"}
+        </p>
         {error && <p className="text-down">{error}</p>}
         <div className="-mx-4 -mb-4 flex justify-end gap-2 border-t border-line px-4 py-3">
+          {alert && onDeleted && (
+            <button type="button" className="btn mr-auto text-down" onClick={() => void remove()} disabled={busy}>
+              删除
+            </button>
+          )}
           <button type="button" className="btn" onClick={onClose}>
             取消
           </button>

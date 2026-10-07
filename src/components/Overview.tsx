@@ -4,12 +4,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { addSymbol, moveSymbol, refresh, removeSymbol, renameSymbol, setBench, setPeriods, setUpdown } from "@/app/actions";
+import type { AlertBadge, AlertView } from "@/lib/alert-view";
 import type { UpDown } from "@/lib/config";
 import { changeColor, fmtAgo, fmtPct, fmtPrice } from "@/lib/format";
 import { CHANGE_PERIODS, MAX_PERIODS, type ChangePeriod } from "@/lib/periods";
-import type { Stats } from "@/lib/stats";
+import { pricePrecision, type Stats } from "@/lib/stats";
 import { SOURCE_LABELS, type Source } from "@/lib/symbols";
-import { Badge } from "./Badge";
+import { AlertDialog } from "./AlertDialog";
+import { AlertBadgeList, AlertLegend } from "./AlertBadges";
 import { RowMenu } from "./RowMenu";
 import { Sparkline } from "./Sparkline";
 import { chartHref, guideSeen, useUi } from "./UiProvider";
@@ -26,13 +28,17 @@ export interface OverviewRow {
   benchLabel: string | null;
   stats: Stats | null;
   syncError: string | null;
+  /** The viewer's alerts on this symbol, and the whole-watchlist ones where they hold */
+  badges: AlertBadge[];
 }
 
 export interface OverviewData {
   groups: { name: string; rows: OverviewRow[] }[];
   periods: ChangePeriod[];
   updown: UpDown;
-  conditions: { id: string; label: string }[];
+  /** Every alert of the viewer's vault, for the dialog (none for a visitor) */
+  alerts: AlertView[];
+  aliases: Record<string, string>;
   lastReviewDays: number | null;
   lastSync: number | null;
   firstRun: boolean;
@@ -94,20 +100,8 @@ function PeriodPicker({ value, onChange }: { value: ChangePeriod[]; onChange: (n
   );
 }
 
-function Badges({ row, conditions }: { row: OverviewRow; conditions: OverviewData["conditions"] }) {
-  const results = row.stats?.conditions ?? {};
-  return (
-    <div className="flex flex-wrap gap-1">
-      {conditions.map(({ id, label }) => {
-        const r = results[id];
-        if (!r) return null;
-        if (r.now) return <Badge key={id} label={label} state={r.prev === false ? "fresh" : "on"} title={r.prev === false ? `${label}：本周新触发` : label} />;
-        if (r.prev && r.now === false) return <Badge key={id} label={label} state="off" title={`${label}：本周失效`} />;
-        return null;
-      })}
-    </div>
-  );
-}
+/** The alert dialog of a row: a new alert on its symbol, or one of its badges. */
+type AlertTarget = { row: OverviewRow; alert: AlertView | null };
 
 function Th({
   label,
@@ -157,6 +151,8 @@ export function Overview({ data }: { data: OverviewData }) {
   const [message, setMessage] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const closeMenu = useCallback(() => setMenuFor(null), []);
+  const [alertTarget, setAlertTarget] = useState<AlertTarget | null>(null);
+  const openAlert = (row: OverviewRow, id: string) => setAlertTarget({ row, alert: data.alerts.find((a) => a.id === id) ?? null });
 
   // the how-to opens once per browser, on the first visit to the overview
   useEffect(() => {
@@ -232,6 +228,10 @@ export function Overview({ data }: { data: OverviewData }) {
           act(() => setBench(row.key, bench));
         }}
         onRemove={() => remove(row, group)}
+        onAddAlert={() => {
+          closeMenu();
+          setAlertTarget({ row, alert: null });
+        }}
         onClose={closeMenu}
       />
     );
@@ -327,14 +327,16 @@ export function Overview({ data }: { data: OverviewData }) {
               ))}
               <Th label="距高点" sortKey="ddAth" sort={sort} onSort={onSort} className="text-right" />
               <Th label="52周" sortKey="pos52" sort={sort} onSort={onSort} className="wide-col" />
-              <Th label="条件" sort={sort} onSort={onSort} />
+              <th className="p-0 text-[11px] font-normal text-muted">
+                <AlertLegend readOnly={readOnly} />
+              </th>
               <Th label="两年" sort={sort} onSort={onSort} className="wide-col" />
               <th />
             </tr>
           </thead>
           <tbody>
             {data.groups.map((group) => (
-              <GroupRows key={group.name} group={group} sort={sort} colCount={colCount} shownPeriods={shownPeriods} conditions={data.conditions} menuFor={menuFor} setMenuFor={setMenuFor} menu={menu} />
+              <GroupRows key={group.name} group={group} sort={sort} colCount={colCount} shownPeriods={shownPeriods} openAlert={openAlert} menuFor={menuFor} setMenuFor={setMenuFor} menu={menu} />
             ))}
           </tbody>
         </table>
@@ -362,10 +364,13 @@ export function Overview({ data }: { data: OverviewData }) {
                         </span>
                       ))}
                     </div>
-                    <div className="mt-1">
-                      <Badges row={row} conditions={data.conditions} />
-                    </div>
                   </Link>
+                  {/* outside the link: a badge is a button */}
+                  {row.badges.length > 0 && (
+                    <div className="-mt-1 px-3 pb-2">
+                      <AlertBadgeList badges={row.badges} onOpen={(id) => openAlert(row, id)} />
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
@@ -374,8 +379,29 @@ export function Overview({ data }: { data: OverviewData }) {
       </div>
 
       <p className="mt-8 text-[11px] text-muted">
-        同步时间、别名、条件在 <code className="text-fg">{data.vaultPath}/hebi8.yaml</code> 里直接改。
+        同步时间、别名在 <code className="text-fg">{data.vaultPath}/hebi8.yaml</code> 里直接改。
       </p>
+
+      {alertTarget && (
+        <AlertDialog
+          symbolKey={alertTarget.row.key}
+          symbolName={alertTarget.row.name}
+          alert={alertTarget.alert}
+          price={alertTarget.row.stats?.last ?? null}
+          precision={alertTarget.row.stats ? pricePrecision(alertTarget.row.stats.last) : 2}
+          aliases={data.aliases}
+          bench={alertTarget.row.bench}
+          onSaved={() => {
+            toast(alertTarget.alert ? "已保存警报" : "已创建警报");
+            setAlertTarget(null);
+          }}
+          onDeleted={() => {
+            toast(`已删除警报「${alertTarget.alert?.label}」`);
+            setAlertTarget(null);
+          }}
+          onClose={() => setAlertTarget(null)}
+        />
+      )}
     </main>
   );
 }
@@ -385,7 +411,7 @@ function GroupRows({
   sort,
   colCount,
   shownPeriods,
-  conditions,
+  openAlert,
   menuFor,
   setMenuFor,
   menu,
@@ -394,7 +420,7 @@ function GroupRows({
   sort: Sort;
   colCount: number;
   shownPeriods: (typeof CHANGE_PERIODS)[number][];
-  conditions: OverviewData["conditions"];
+  openAlert: (row: OverviewRow, id: string) => void;
   menuFor: string | null;
   setMenuFor: (key: string | null) => void;
   menu: (row: OverviewRow, group: string) => React.ReactNode;
@@ -462,7 +488,7 @@ function GroupRows({
               )}
             </td>
             <td className={cell}>
-              <Badges row={row} conditions={conditions} />
+              <AlertBadgeList badges={row.badges} onOpen={(id) => openAlert(row, id)} />
             </td>
             <td className={`${cell} wide-col py-1`}>{s && <Sparkline values={s.spark} width={180} height={26} className="w-[180px]" />}</td>
             <td className={`relative ${cell} rounded-r-md px-0 text-right`}>

@@ -85,7 +85,7 @@ function JournalPicture() {
 const STEPS: { title: string; text: string; picture: ReactNode }[] = [
   {
     title: "扫描：这周变了什么",
-    text: "总览把自选按组排成一张表：各周期涨跌、离高点多远、条件徽标。带蓝点的条件是本周新触发，虚线变淡的是本周失效，先看这些。",
+    text: "总览把自选按组排成一张表：各周期涨跌、离高点多远，以及你自己建的警报，用你起的名字显示。带蓝点的是本周新触发的，先看这些。",
     picture: <ScanPicture />,
   },
   {
@@ -95,7 +95,7 @@ const STEPS: { title: string; text: string; picture: ReactNode }[] = [
   },
   {
     title: "记录：写下这周的判断",
-    text: "在「复盘」写本周日志，旁边摆着上周写的和本周所有条件变化。下周打开时，先看看上周是怎么想的。",
+    text: "在「复盘」写本周日志，旁边摆着上周写的和本周触发的警报。下周打开时，先看看上周是怎么想的。",
     picture: <JournalPicture />,
   },
 ];

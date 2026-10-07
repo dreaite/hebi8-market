@@ -3,11 +3,12 @@ import { Badge } from "@/components/Badge";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
 import { JournalEditor } from "@/components/JournalEditor";
 import { LoginButton } from "@/components/UiProvider";
+import { alertBadges } from "@/lib/alert-view";
+import { allItems } from "@/lib/config";
 import { plainFirstLine, renderMarkdown } from "@/lib/markdown";
 import { nameOf as displayNameOf } from "@/lib/names";
 import { listSymbols } from "@/lib/store";
 import { JOURNAL_TEMPLATE, journalMtime, listNotes, readConfigSafe, readJournal } from "@/lib/vault";
-import { statsFor } from "@/lib/sync";
 import { getViewer } from "@/lib/viewer";
 import { currentWeekId, shiftWeek } from "@/lib/week";
 
@@ -33,19 +34,16 @@ export default async function ReviewPage() {
   const previous = readJournal(viewer.dir, lastWeek);
 
   const symbols = listSymbols();
-  const stats = statsFor(viewer.vault, config);
   const nameOf = (key: string) => displayNameOf(config, key, symbols[key]?.name);
-  const labels = Object.fromEntries(config.conditions.map((c) => [c.id, c.label]));
 
-  // every condition that flipped between last week's bar and this week's
-  const changes = config.groups.map((g) => ({
-    name: g.name,
-    items: g.symbols.flatMap((s) =>
-      Object.entries(stats[s.key]?.conditions ?? {})
-        .filter(([, r]) => r.now !== null && r.prev !== null && r.now !== r.prev)
-        .map(([id, r]) => ({ key: s.key, name: nameOf(s.key), label: labels[id] ?? id, on: r.now === true })),
-    ),
-  })).filter((g) => g.items.length > 0);
+  // every alert that fired this week, by group; alerts on symbols that are not watched come last
+  const badges = alertBadges(viewer.vault, config);
+  const watched = new Set(allItems(config).map((s) => s.key));
+  const firedIn = (keys: string[]) => keys.flatMap((key) => (badges[key] ?? []).filter((b) => b.state === "fresh").map((b) => ({ key, name: nameOf(key), badge: b })));
+  const changes = [
+    ...config.groups.map((g) => ({ name: g.name, items: firedIn(g.symbols.map((s) => s.key)) })),
+    { name: "不在自选里", items: firedIn(Object.keys(badges).filter((key) => !watched.has(key))) },
+  ].filter((g) => g.items.length > 0);
 
   const notes = listNotes(viewer.dir).map((n) => ({ ...n, name: nameOf(n.key), summary: plainFirstLine(n.body) }));
 
@@ -66,24 +64,20 @@ export default async function ReviewPage() {
           </div>
 
           <div className="rounded-lg border border-line bg-card">
-            <div className="border-b border-line px-3 py-2 text-xs font-medium">本周变化</div>
+            <div className="border-b border-line px-3 py-2 text-xs font-medium">本周触发的警报</div>
             {changes.length === 0 ? (
-              <p className="p-3 text-xs text-muted">条件没有变化。</p>
+              <p className="p-3 text-xs text-muted">这周没有警报触发。</p>
             ) : (
               <div className="p-3 text-xs">
                 {changes.map((g) => (
                   <div key={g.name} className="mb-2">
                     <div className="mb-1 text-muted">{g.name}</div>
                     <ul className="flex flex-wrap gap-1.5">
-                      {g.items.map((it, i) => (
-                        <li key={i}>
-                          <Link
-                            href={`/chart/${encodeURIComponent(it.key)}`}
-                            className="flex h-7 items-center gap-1.5 rounded px-1.5 hover:bg-bg/60"
-                            title={`${it.name}：${it.label}${it.on ? " 本周新触发" : " 本周失效"}`}
-                          >
+                      {g.items.map((it) => (
+                        <li key={`${it.key}:${it.badge.id}`}>
+                          <Link href={`/chart/${encodeURIComponent(it.key)}`} className="flex h-7 items-center gap-1.5 rounded px-1.5 hover:bg-bg/60" title={`${it.name}\n${it.badge.title}`}>
                             <span>{it.name}</span>
-                            <Badge label={it.label} state={it.on ? "fresh" : "off"} />
+                            <Badge label={it.badge.label} state="fresh" />
                           </Link>
                         </li>
                       ))}
