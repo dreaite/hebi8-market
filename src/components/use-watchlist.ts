@@ -1,6 +1,6 @@
 "use client";
 
-import { useOptimistic, useTransition } from "react";
+import { useEffect, useOptimistic, useRef, useTransition } from "react";
 import { addGroup, deleteGroup, moveGroup, moveSymbol, renameGroup, type ActionResult } from "@/app/actions";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { applyOp, COLLAPSED_KEY, mergeTarget, type ListGroup, type WatchlistOp } from "@/lib/watchlist";
@@ -17,6 +17,11 @@ export function useWatchlist<T extends { key: string }>(groups: ListGroup<T>[], 
   const [list, apply] = useOptimistic(groups, (state: ListGroup<T>[], op: WatchlistOp) => applyOp(state, op));
   const [, startTransition] = useTransition();
   const [collapsed, setCollapsed] = useLocalStorage<string[]>(COLLAPSED_KEY, []);
+  // what is folded when an action comes back, not when it was sent
+  const latestCollapsed = useRef(collapsed);
+  useEffect(() => {
+    latestCollapsed.current = collapsed;
+  });
 
   const run = (op: WatchlistOp, action: () => Promise<ActionResult>, done?: () => void) =>
     startTransition(async () => {
@@ -32,7 +37,8 @@ export function useWatchlist<T extends { key: string }>(groups: ListGroup<T>[], 
     addGroup: (name: string) => run({ type: "addGroup", name }, () => addGroup(name)),
     renameGroup: (name: string, next: string) =>
       run({ type: "renameGroup", name, next }, () => renameGroup(name, next), () => {
-        if (collapsed.includes(name)) setCollapsed(collapsed.map((n) => (n === name ? next : n)));
+        const now = latestCollapsed.current;
+        if (now.includes(name)) setCollapsed(now.map((n) => (n === name ? next : n)));
       }),
     deleteGroup: (name: string) => {
       const into = mergeTarget(list, name);
@@ -48,6 +54,7 @@ export function useWatchlist<T extends { key: string }>(groups: ListGroup<T>[], 
     collapsed,
     enabled: !readOnly && !sorted,
     onDrop: (d) => (d.kind === "symbol" ? edit.moveSymbol(d.key, d.group, d.index) : edit.moveGroup(d.name, d.index)),
+    expand: (name) => setCollapsed(latestCollapsed.current.filter((n) => n !== name)),
   });
 
   return { groups: list, collapsed, toggle, edit, drag, readOnly, canDrag: !readOnly && !sorted };
