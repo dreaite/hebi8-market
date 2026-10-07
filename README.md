@@ -148,20 +148,34 @@ vault/
 
 ## 通知
 
-每次定时同步或点「刷新」之后，hebi8 检查两种规则，**从不成立变成成立**的那一刻推一条摘要。加标的时的单个同步不推。
+两种提醒，都推一条摘要：
+
+- **条件**：标了 `notify` 的条件，每次定时同步或点「刷新」之后检查，**从不成立变成成立**的那一刻推送。规则第一次出现（新加的规则、新加的标的、删过缓存库）只记下当前状态；同一根 K 线只推一次，周线条件在本周内来回真假也只响一次。加标的时的单个同步不推。
+- **价格警报**：照搬 TradingView 的警报。有启用警报的标的，盘中每 5 分钟取一次最新价（加密和正在交易的市场每 5 分钟，盘前盘后和休市每小时），把它当作今天还没收完的日线来判断；这根 K 线只在内存里，库里只有日线。日线同步收尾时也判断一遍。
 
 ```yaml
 conditions:
   - { id: below_200w, label: 破200周, formula: "close < sma(close, 200)", notify: true }   # 对每个自选标的检查
 
-alerts:                                                    # 只对一个标的检查，tf 默认 D
-  - { key: BTC, label: BTC 站上 13 万, when: "close > 130000" }
-  - { key: NVDA, when: "close < sma(close, 200)", tf: W }
+alerts:
+  - { key: BTC, cond: crossing_up, value: 130000 }                     # 上穿 130,000，仅一次
+  - { key: SPY, cond: entering, value: [500, 520], trigger: bar }      # 进入通道，每根 K 线一次
+  - { key: NVDA, label: 跌破 200 日线, when: "close < sma(close, 200)" } # 自定义公式
+  - { key: GPU4090, cond: less, value: 11000, enabled: false }         # 暂停中
 ```
 
-- 规则第一次出现（新加的规则、新加的标的、删过缓存库）只记下当前状态，不推送，所以不会一上来把所有已成立的条件推一遍。
-- 同一根 K 线只推一次。周线条件在本周内来回真假，也只响一次。
-- 所有通道都发送失败时不记账，下次同步再试；没配通道时只写日志。
+| `cond` | 叫法 | `value` | 什么时候触发 |
+|---|---|---|---|
+| `crossing` / `crossing_up` / `crossing_down` | 穿过 / 上穿 / 下穿 | 价格 | 和上一次检查相比穿过了这条线（第一次检查只记录） |
+| `entering` / `exiting` | 进入通道 / 离开通道 | `[低, 高]` | 和上一次检查相比进入 / 离开了通道 |
+| `greater` / `less` | 大于 / 小于 | 价格 | 只要成立就触发，新建时已成立也会立刻触发 |
+| `inside` / `outside` | 在通道内 / 在通道外 | `[低, 高]` | 同上 |
+| `moving_up_pct` / `moving_down_pct` | 上涨 % / 下跌 % | `{ pct, bars }` | 最近 `bars` 根日线内涨跌超过 `pct`% |
+
+- `trigger`：`once`（默认）触发后把这条写成 `enabled: false`（注释保留）；`bar` 每根日线最多一次。`enabled: false` 是暂停。
+- `when` 公式沿用条件的「新成立才推送」；要明确的上穿下穿写 `cross(close, X)`。`label` 省了按条件自动生成。
+- `data:` 数据集只有日线，跟着日线同步判断。
+- 所有通道都发送失败时不记账，下次再试；没配通道时只写日志。
 
 通道写在 `~/.config/hebi8/market/notify.json`（不在 vault 里，权限设成 600），两种可以同时开：
 
@@ -261,7 +275,9 @@ src/
     ├── sync.ts scheduler.ts  同步、同步后算 stats 和通知、每日定时
     ├── series.ts synth.ts    周/月/季线合成、对齐、合成标的
     ├── stats.ts conditions.ts 总览统计与条件
-    ├── alerts.ts notify.ts   同步后通知：规则判定与状态（按 vault）、每个人的通道、Telegram / webhook 投递
+    ├── alerts.ts notify.ts   通知：规则判定与状态（按 vault）、每个人的通道、Telegram / webhook 投递
+    ├── alert-conds.ts        价格警报的九种条件（纯函数，图表的警报对话框也用）
+    ├── quotes.ts             盘中轮询：5 分钟 / 1 小时取最新价，内存里拼今天的日线，判断警报
     ├── telegram.ts           Telegram 绑定：一次性码、getMe、有待绑定码时才长轮询 getUpdates
     └── time.ts tz.ts week.ts 交易日换算、时区、ISO 周
 vault.example/hebi8.yaml      首次运行的起点

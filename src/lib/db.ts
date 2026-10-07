@@ -75,6 +75,20 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
         PRIMARY KEY (vault, rule, key)
       ) WITHOUT ROWID;
     `),
+  (db) =>
+    db.exec(`
+      -- The latest price per symbol from the 5-minute quote polling (src/lib/quotes.ts). Not bars:
+      -- today's unfinished daily bar is built from it in memory only.
+      CREATE TABLE quotes (
+        key        TEXT PRIMARY KEY,
+        price      REAL    NOT NULL,
+        time       INTEGER NOT NULL,
+        day_high   REAL,
+        day_low    REAL,
+        session    TEXT    NOT NULL,
+        fetched_at INTEGER NOT NULL
+      );
+    `),
 ];
 
 const dbFile = () => process.env.HEBI8_DB ?? path.join(process.cwd(), "data", "hebi8.db");

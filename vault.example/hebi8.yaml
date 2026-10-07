@@ -56,7 +56,15 @@ conditions:                    # 总览条件徽标；同步时按周线计算�
 datasets: {}                   # 自定义数据集：名字 → git 地址或本机目录，key 写 data:名字/序列，见 README
 #  gpu: https://github.com/you/gpu-prices
 
-alerts: []                     # 单个标的的价位规则，同步后新成立就推送；tf 默认 D；通道在 ~/.config/hebi8/market/notify.json
+# 价格警报：有警报的标的盘中每 5 分钟取一次最新价判断；通道在 ~/.config/hebi8/market/notify.json。图表上「警报」建的就是这种写法
+# cond：crossing 穿过 / crossing_up 上穿 / crossing_down 下穿 / greater 大于 / less 小于（value 是价格）
+#       entering 进入通道 / exiting 离开通道 / inside 在通道内 / outside 在通道外（value 是 [低, 高]）
+#       moving_up_pct 上涨 % / moving_down_pct 下跌 %（value 是 { pct, bars }）
+# trigger：once 仅一次（默认，触发后写成 enabled: false）/ bar 每根 K 线一次；也可以不写 cond，写 when 公式
+#   - { key: BTC, cond: crossing_up, value: 130000 }
+#   - { key: SPY, cond: entering, value: [500, 520], trigger: bar }
+#   - { key: NVDA, label: 跌破 200 日线, when: "close < sma(close, 200)" }
+alerts: []
 #  - { key: BTC, label: BTC 站上 13 万, when: "close > 130000" }
 #  - { key: NVDA, when: "close < sma(close, 200)", tf: W }
 

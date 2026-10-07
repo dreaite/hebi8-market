@@ -1,6 +1,6 @@
 import { DAY } from "../time";
 import type { Bar } from "../series";
-import type { SourceAdapter } from "./types";
+import type { Quote, SourceAdapter } from "./types";
 
 const BASE_URL = process.env.BINANCE_API_URL ?? "https://api.binance.com";
 const PAGE = 1000;
@@ -42,6 +42,23 @@ export const binance: SourceAdapter = {
       meta: { name: ticker, exchange: "Binance", currency: quote, timezone: "UTC", kind: "crypto" },
       mode: since === null ? "replace" : "merge",
     };
+  },
+
+  /**
+   * Last trade of every pair in one request. The 24h high/low is a rolling window, not the UTC
+   * day the daily bar covers, so it is left out.
+   */
+  async quotes(tickers) {
+    const url = `${BASE_URL}/api/v3/ticker/24hr?type=MINI&symbols=${encodeURIComponent(JSON.stringify(tickers))}`;
+    const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(20_000) });
+    if (!res.ok) throw new Error(`Binance ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const rows = (await res.json()) as { symbol: string; lastPrice: string; closeTime: number }[];
+    const out: Record<string, Quote> = {};
+    for (const r of rows) {
+      const price = Number(r.lastPrice);
+      if (Number.isFinite(price) && price > 0) out[r.symbol] = { price, time: Math.floor(r.closeTime / 1000), session: "always" };
+    }
+    return out;
   },
 
   /** Spot USDT pairs whose base starts with the query; the exact pair first. */

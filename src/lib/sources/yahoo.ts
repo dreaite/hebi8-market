@@ -1,7 +1,9 @@
 import YahooFinance from "yahoo-finance2";
 import { dedupeBars, type Bar } from "../series";
 import { tradingDay } from "../time";
-import type { SourceAdapter } from "./types";
+import { weekdaySession, type Quote, type QuoteSession, type SourceAdapter } from "./types";
+
+const SESSIONS: Record<string, QuoteSession> = { REGULAR: "open", PRE: "pre", PREPRE: "pre", POST: "post", POSTPOST: "post", CLOSED: "closed" };
 
 const yf = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 
@@ -39,6 +41,27 @@ export const yahoo: SourceAdapter = {
       },
       mode: "replace",
     };
+  },
+
+  /** One request for every ticker; Yahoo leaves out symbols it does not know. */
+  async quotes(tickers) {
+    const rows = await yf.quote(tickers, {
+      return: "array",
+      fields: ["symbol", "regularMarketPrice", "regularMarketTime", "regularMarketDayHigh", "regularMarketDayLow", "marketState", "quoteType"],
+    });
+    const out: Record<string, Quote> = {};
+    for (const q of rows) {
+      if (q.regularMarketPrice == null || !q.regularMarketTime) continue;
+      const session = q.quoteType === "CRYPTOCURRENCY" ? "always" : (SESSIONS[q.marketState ?? ""] ?? weekdaySession(Date.now()));
+      out[q.symbol] = {
+        price: q.regularMarketPrice,
+        time: Math.floor(q.regularMarketTime.getTime() / 1000),
+        ...(q.regularMarketDayHigh != null ? { dayHigh: q.regularMarketDayHigh } : {}),
+        ...(q.regularMarketDayLow != null ? { dayLow: q.regularMarketDayLow } : {}),
+        session,
+      };
+    }
+    return out;
   },
 
   async search(query) {

@@ -248,7 +248,7 @@ describe("stats and alerts per vault", () => {
     aliases: { BTC: KEY },
     groups: [{ name: "加密", symbols: ["BTC"] }],
     conditions: [{ id: "up", label: "上涨", formula: "close > ref(close, 1)", tf: "D" }],
-    alerts: [{ key: "BTC", label: "站上 100", when: "close > 100" }],
+    alerts: [{ key: "BTC", label: "站上 100", when: "close > 100", trigger: "bar" }],
   });
   const aliceCfg = normalizeConfig({
     aliases: { BTC: KEY },
@@ -310,7 +310,7 @@ describe("stats and alerts per vault", () => {
     const { runAlerts } = await import("@/lib/alerts");
     const { writeBars } = await import("@/lib/store");
     const { getDb } = await import("@/lib/db");
-    const run = async () => ({ root: (await runAlerts("", rootCfg, new Map())).map((e) => e.rule), alice: (await runAlerts("alice", aliceCfg, new Map())).map((e) => e.rule) });
+    const run = async () => ({ root: (await runAlerts({ id: "", dir: root }, rootCfg, new Map())).map((e) => e.rule), alice: (await runAlerts({ id: "alice", dir: path.join(users, "alice") }, aliceCfg, new Map())).map((e) => e.rule) });
 
     writeBars(KEY, bars([90, 95, 101]), "replace");
     expect(await run()).toEqual({ root: [], alice: [] }); // first sighting everywhere

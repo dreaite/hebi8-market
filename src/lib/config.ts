@@ -1,8 +1,9 @@
 /** Typed view of `vault/hebi8.yaml`; pure so it can be tested without a file system. */
 import { compile } from "@/indicators/formula";
+import { describeCondition, parseCondition, type AlertCondition, type AlertTrigger } from "./alert-conds";
 import { CHANGE_PERIODS, DEFAULT_PERIODS, MAX_PERIODS, type ChangePeriod } from "./periods";
 import type { Prices } from "./series";
-import { DATA_ID, hash6, isSynthetic, isTimeframe, isValidKey, type Timeframe } from "./symbols";
+import { DATA_ID, hash6, isSynthetic, isTimeframe, isValidKey, tickerOf, type Timeframe } from "./symbols";
 import { parseSynth } from "./synth";
 
 export type UpDown = "green-up" | "red-up";
@@ -43,14 +44,22 @@ export interface ConditionDef {
   notify: boolean;
 }
 
-/** A rule on one symbol, pushed after a sync when it newly holds. */
+/** A price alert on one symbol (§2.6): a TradingView-style condition or a formula. */
 export interface AlertDef {
-  /** `alert:<id>` when given in the yaml, else a hash of key, formula and timeframe */
+  /** `alert:<id>` when given in the yaml, else a hash of the key and the condition (or formula and timeframe) */
   id: string;
   key: string;
+  /** As written, or generated: 「BTC 上穿 130,000」 */
   label: string;
-  when: string;
+  /** What a message says after the symbol's name: the written label, else the condition or formula */
+  text: string;
+  /** Exactly one of `condition` and `when` is set */
+  condition: AlertCondition | null;
+  when: string | null;
+  /** Always D for conditions */
   tf: Timeframe;
+  trigger: AlertTrigger;
+  enabled: boolean;
 }
 
 export type ParamOverrides = Partial<Record<Timeframe, Record<string, number[]>>>;
@@ -208,22 +217,10 @@ export function normalizeConfig(raw: unknown): Config {
     return [{ id, label: text(d.label) ?? id, formula, tf: isTimeframe(d.tf) ? d.tf : ("W" as const), notify: d.notify === true }];
   });
 
-  const alerts = list(root.alerts).map((raw, i): AlertDef => {
-    const d = obj(raw);
-    const where = `alerts[${i}]`;
-    const ref = text(d.key);
-    const when = text(d.when);
-    if (!ref || !when) throw new ConfigError(`${where}：需要 key 和 when`);
-    const key = resolveKey(ref, aliases);
-    checkKey(key, aliases, `${where}.key`);
-    const tf = isTimeframe(d.tf) ? d.tf : ("D" as const);
-    const own = text(d.id);
-    if (own && !/^[A-Za-z0-9_-]+$/.test(own)) throw new ConfigError(`${where}：id「${own}」只能用字母、数字、下划线、横线`);
-    return { id: `alert:${own ?? hash6(`${key}|${when}|${tf}`)}`, key, label: text(d.label) ?? when, when, tf };
-  });
+  const alerts = list(root.alerts).map((raw, i) => parseAlert(raw, i, aliases));
   const ids = new Set<string>();
   for (const a of alerts) {
-    if (ids.has(a.id)) throw new ConfigError(`alerts：重复的规则「${a.id.slice(6)}」，同一标的同一公式只写一次，或给每条写不同的 id`);
+    if (ids.has(a.id)) throw new ConfigError(`alerts：重复的规则「${a.id.slice(6)}」，同一标的同一条件只写一次，或给每条写不同的 id`);
     ids.add(a.id);
   }
 
@@ -276,6 +273,51 @@ export function normalizeUserConfig(raw: unknown, root: Config): Config {
   return { ...normalizeConfig(own), owners: root.owners, owner: root.owner, sync: root.sync, datasets: root.datasets, ignored };
 }
 
+/** The short name an alert's generated label uses: the alias, else the ticker. */
+const shortName = (key: string, aliases: Record<string, string>) => Object.entries(aliases).find(([, k]) => k === key)?.[0] ?? tickerOf(key);
+
+/** One entry of `alerts`; exported so a write-back can find an entry by its id. */
+export function parseAlert(raw: unknown, i: number, aliases: Record<string, string>): AlertDef {
+  const d = obj(raw);
+  const where = `alerts[${i}]`;
+  const ref = text(d.key);
+  if (!ref) throw new ConfigError(`${where}：需要 key`);
+  const key = resolveKey(ref, aliases);
+  checkKey(key, aliases, `${where}.key`);
+  const when = text(d.when);
+  if (when && d.cond !== undefined) throw new ConfigError(`${where}：when 和 cond 只能写一个`);
+  if (!when && d.cond === undefined) throw new ConfigError(`${where}：需要 cond + value，或 when 公式`);
+  let condition: AlertCondition | null = null;
+  if (!when) {
+    try {
+      condition = parseCondition(d.cond, d.value);
+    } catch (err) {
+      throw new ConfigError(`${where}：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const trigger = d.trigger ?? "once";
+  if (trigger !== "once" && trigger !== "bar") throw new ConfigError(`${where}：trigger 应为 once 或 bar`);
+  if (d.enabled !== undefined && typeof d.enabled !== "boolean") throw new ConfigError(`${where}：enabled 应为 true 或 false`);
+  const tf = when && isTimeframe(d.tf) ? d.tf : ("D" as const);
+  const own = text(d.id);
+  if (own && !/^[A-Za-z0-9_-]+$/.test(own)) throw new ConfigError(`${where}：id「${own}」只能用字母、数字、下划线、横线`);
+  // pausing or switching the trigger keeps the id, so the alert keeps its state
+  const identity = condition ? `${key}|${condition.cond}|${JSON.stringify(condition.value)}` : `${key}|${when}|${tf}`;
+  const label = text(d.label);
+  const what = condition ? describeCondition(condition) : when!;
+  return {
+    id: `alert:${own ?? hash6(identity)}`,
+    key,
+    label: label ?? (condition ? `${shortName(key, aliases)} ${what}` : what),
+    text: label ?? what,
+    condition,
+    when,
+    tf,
+    trigger,
+    enabled: d.enabled !== false,
+  };
+}
+
 /** Remote repos are cloned into the cache; anything path-like is read in place. */
 export const isRemoteDataset = (location: string) => /^(https:\/\/|ssh:\/\/|file:\/\/|git@[^:]+:)/.test(location);
 const isDatasetLocation = (location: string) => isRemoteDataset(location) || /^(\/|~\/|\.\.?\/)/.test(location);
@@ -307,7 +349,7 @@ export function syncKeys(cfg: Config, extra: string[] = []): string[] {
     add(item.key);
     if (item.bench) add(item.bench);
   }
-  for (const formula of [...cfg.indicators, ...cfg.conditions].map((d) => d.formula).concat(cfg.alerts.map((a) => a.when))) {
+  for (const formula of [...cfg.indicators, ...cfg.conditions].map((d) => d.formula).concat(cfg.alerts.flatMap((a) => (a.when ? [a.when] : [])))) {
     try {
       compile(formula, { aliases: cfg.aliases }).refs.forEach(add);
     } catch {

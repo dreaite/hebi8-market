@@ -28,9 +28,26 @@ export interface SearchHit {
   kind?: string;
 }
 
+export type QuoteSession = "open" | "closed" | "pre" | "post" | "always";
+
+/** The latest trade, for price alerts between daily syncs (§2.6). */
+export interface Quote {
+  price: number;
+  /** When it traded, unix seconds */
+  time: number;
+  dayHigh?: number;
+  dayLow?: number;
+  session: QuoteSession;
+}
+
 export interface SourceAdapter {
   /** @param since time of the latest stored bar, for incremental sources */
   fetchDaily(ticker: string, since: number | null): Promise<FetchResult>;
   /** @param filter source-specific category, e.g. TradingView's `index` / `cfd` / `stock` / `bond` */
   search?(query: string, filter?: string): Promise<SearchHit[]>;
+  /** Latest prices for many tickers in one request; tickers the source does not know are left out */
+  quotes?(tickers: string[]): Promise<Record<string, Quote>>;
 }
+
+/** When a source does not say: weekdays count as trading, weekends as closed. */
+export const weekdaySession = (nowMs: number): QuoteSession => ([0, 6].includes(new Date(nowMs).getUTCDay()) ? "closed" : "open");

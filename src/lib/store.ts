@@ -1,6 +1,6 @@
 import { getDb } from "./db";
 import type { Bar } from "./series";
-import type { SourceMeta } from "./sources/types";
+import type { Quote, QuoteSession, SourceMeta } from "./sources/types";
 import type { Stats } from "./stats";
 import { parseKey, type Source } from "./symbols";
 
@@ -127,4 +127,38 @@ export function maxSyncedAt(): number | null {
 
 export function hasBars(): boolean {
   return getDb().prepare("SELECT 1 FROM bars LIMIT 1").get() !== undefined;
+}
+
+export interface QuoteRow extends Quote {
+  key: string;
+  /** ms */
+  fetchedAt: number;
+}
+
+export function writeQuotes(rows: QuoteRow[]): void {
+  const db = getDb();
+  const upsert = db.prepare(
+    `INSERT OR REPLACE INTO quotes (key, price, time, day_high, day_low, session, fetched_at) VALUES (@key, @price, @time, @dayHigh, @dayLow, @session, @fetchedAt)`,
+  );
+  db.transaction(() => {
+    for (const r of rows) upsert.run({ ...r, dayHigh: r.dayHigh ?? null, dayLow: r.dayLow ?? null });
+  })();
+}
+
+export function readQuotes(): Record<string, QuoteRow> {
+  const rows = getDb().prepare("SELECT * FROM quotes").all() as {
+    key: string;
+    price: number;
+    time: number;
+    day_high: number | null;
+    day_low: number | null;
+    session: QuoteSession;
+    fetched_at: number;
+  }[];
+  return Object.fromEntries(
+    rows.map((r) => [
+      r.key,
+      { key: r.key, price: r.price, time: r.time, session: r.session, fetchedAt: r.fetched_at, ...(r.day_high !== null ? { dayHigh: r.day_high } : {}), ...(r.day_low !== null ? { dayLow: r.day_low } : {}) },
+    ]),
+  );
 }

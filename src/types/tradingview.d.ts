@@ -30,8 +30,23 @@ declare module "@mathieuc/tradingview" {
     delete(): void;
   }
 
+  interface QuoteMarket {
+    onData(callback: (data: Record<string, unknown>) => void): void;
+    onLoaded(callback: () => void): void;
+    onError(callback: (...args: unknown[]) => void): void;
+    close(): void;
+  }
+
+  interface QuoteSession {
+    Market: new (symbol: string, session?: "regular" | "extended") => QuoteMarket;
+    delete(): void;
+  }
+
   interface Client {
-    Session: { Chart: new () => ChartSession };
+    Session: {
+      Chart: new () => ChartSession;
+      Quote: new (options?: { fields?: "all" | "price"; customFields?: string[] }) => QuoteSession;
+    };
     end(): Promise<void>;
   }
 

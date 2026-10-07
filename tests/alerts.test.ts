@@ -43,7 +43,17 @@ describe("alerts in hebi8.yaml", () => {
     expect(cfg.alerts[0]).toMatchObject({ key: "binance:BTCUSDT", label: "close > 130000", when: "close > 130000", tf: "D" });
     expect(cfg.alerts[0].id).toMatch(/^alert:[0-9a-f]{6}$/);
     expect(normalizeConfig({ ...base, alerts: [{ key: "BTC", when: "close > 130000" }] }).alerts[0].id).toBe(cfg.alerts[0].id);
-    expect(cfg.alerts[1]).toEqual({ id: "alert:spy-200", key: "yahoo:SPY", label: "破 200 日", when: "close < sma(close, 200)", tf: "W" });
+    expect(cfg.alerts[1]).toEqual({
+      id: "alert:spy-200",
+      key: "yahoo:SPY",
+      label: "破 200 日",
+      text: "破 200 日",
+      condition: null,
+      when: "close < sma(close, 200)",
+      tf: "W",
+      trigger: "once",
+      enabled: true,
+    });
   });
 
   it("syncs alert keys that are not watched, and their references", () => {
@@ -139,9 +149,9 @@ describe("runAlerts", () => {
       aliases: { BTC: key },
       groups: [{ name: "加密", symbols: [{ key: "BTC", name: "比特币" }] }],
       conditions: [{ id: "up", label: "上涨", formula: "close > ref(close, 1)", tf: "D", notify: true }],
-      alerts: [{ key: "BTC", label: "站上 100", when: "close > 100" }],
+      alerts: [{ key: "BTC", label: "站上 100", when: "close > 100", trigger: "bar" }],
     });
-    const run = () => runAlerts("", cfg, new Map());
+    const run = () => runAlerts({ id: "", dir: dir }, cfg, new Map());
 
     writeBars(key, bars([90, 95, 101]), "replace");
     expect(await run()).toEqual([]); // first sighting: both rules hold, nothing sent
