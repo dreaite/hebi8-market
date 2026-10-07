@@ -53,6 +53,8 @@ export interface AlertDef {
   label: string;
   /** What a message says after the symbol's name: the written label, else the condition or formula */
   text: string;
+  /** The label as written in the yaml, null when generated */
+  ownLabel: string | null;
   /** Exactly one of `condition` and `when` is set */
   condition: AlertCondition | null;
   when: string | null;
@@ -310,6 +312,7 @@ export function parseAlert(raw: unknown, i: number, aliases: Record<string, stri
     key,
     label: label ?? (condition ? `${shortName(key, aliases)} ${what}` : what),
     text: label ?? what,
+    ownLabel: label,
     condition,
     when,
     tf,

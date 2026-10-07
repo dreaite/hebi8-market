@@ -40,6 +40,7 @@ const SHORTCUTS: { group: string; rows: [string, string][] }[] = [
       ["Alt+V", "垂直线"],
       ["Alt+F", "斐波那契回撤"],
       ["Delete  ·  Backspace", "删除选中的画线"],
+      ["Alt+A", "新建警报（右键主图：在该价位添加）"],
       ["Alt+R", "重置图表视图"],
       ["Esc", "退出画线、关闭弹窗"],
     ],

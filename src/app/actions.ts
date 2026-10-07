@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { isMap, isScalar, isSeq, type Document, type YAMLMap, type YAMLSeq } from "yaml";
 import { compile } from "@/indicators/formula";
 import { describeError } from "@/indicators/formula-indicators";
-import { CHART_STYLES, findItem, resolveKey, type ChartPrefs, type ConditionDef, type FormulaDef } from "@/lib/config";
+import type { AlertCond, AlertCondition, AlertTrigger } from "@/lib/alert-conds";
+import { alertIndex, forgetAlerts, setAlertsEnabled } from "@/lib/alerts";
+import { CHART_STYLES, findItem, parseAlert, resolveKey, type ChartPrefs, type ConditionDef, type FormulaDef } from "@/lib/config";
 import { CHANGE_PERIODS, MAX_PERIODS } from "@/lib/periods";
 import type { Prices } from "@/lib/series";
 import { getSymbol } from "@/lib/store";
@@ -374,5 +376,93 @@ export async function setUpdown(mode: string): Promise<ActionResult> {
   return attempt(({ dir }) => {
     if (mode !== "green-up" && mode !== "red-up") throw new Error("无效的涨跌色");
     updateConfig(dir, (doc) => setScalar(doc, ["updown"], mode));
+  });
+}
+
+export interface AlertInput {
+  /** The alert being edited; absent for a new one */
+  id?: string;
+  key: string;
+  /** A TradingView condition, or `formula` for a custom formula in `when` */
+  cond: AlertCond | "formula";
+  value?: AlertCondition["value"];
+  when?: string;
+  trigger: AlertTrigger;
+  /** Empty for the generated name */
+  label?: string;
+  /** Undoing a delete puts a paused alert back paused */
+  enabled?: boolean;
+}
+
+/** Create or edit a price alert in the viewer's yaml; an edited alert starts over (TradingView restarts it too). */
+export async function saveAlert(input: AlertInput): Promise<ActionResult> {
+  return attempt(({ dir, vault }) => {
+    const cfg = readConfig(dir);
+    const key = resolveKey(str(input.key), cfg.aliases);
+    if (!isValidKey(key)) throw new Error("无效的 key");
+    // written the way a person would: the alias when there is one
+    const entry: Record<string, unknown> = { key: Object.entries(cfg.aliases).find(([, k]) => k === key)?.[0] ?? key };
+    if (input.cond === "formula") {
+      const when = str(input.when);
+      if (!when) throw new Error("公式为空");
+      try {
+        compile(when, { aliases: cfg.aliases, bench: findItem(cfg, key)?.bench ?? null });
+      } catch (err) {
+        throw new Error(describeError(err));
+      }
+      entry.when = when;
+    } else {
+      entry.cond = input.cond;
+      entry.value = input.value;
+    }
+    entry.trigger = input.trigger === "bar" ? "bar" : "once";
+    const label = str(input.label);
+    if (label) entry.label = label;
+    if (input.enabled === false) entry.enabled = false;
+    let id: string;
+    try {
+      const parsed = parseAlert(entry, 0, cfg.aliases);
+      id = parsed.id;
+      // a channel is written low first, however it was typed
+      if (parsed.condition) entry.value = parsed.condition.value;
+    } catch (err) {
+      throw new Error(err instanceof Error ? err.message.replace(/^alerts\[0\]：/, "") : String(err));
+    }
+    updateConfig(dir, (doc) => {
+      const seq = seqOf(doc.contents as YAMLMap, "alerts", doc);
+      // `alerts: []` from the example becomes a block list once it has entries
+      seq.flow = false;
+      const node = flowNode(doc, entry);
+      if (!input.id) {
+        seq.add(node);
+        return;
+      }
+      const index = alertIndex(doc, input.id, cfg.aliases);
+      if (index < 0) throw new Error("这条警报已经不在 hebi8.yaml 里了");
+      const old = seq.items[index] as YAMLMap;
+      node.comment = old.comment;
+      node.commentBefore = old.commentBefore;
+      seq.items[index] = node;
+    });
+    forgetAlerts(vault, input.id ? [input.id, id] : [id]);
+  });
+}
+
+export async function deleteAlert(id: string): Promise<ActionResult> {
+  return attempt(({ dir, vault }) => {
+    const aliases = readConfig(dir).aliases;
+    updateConfig(dir, (doc) => {
+      const index = alertIndex(doc, str(id), aliases);
+      if (index >= 0) doc.deleteIn(["alerts", index]);
+    });
+    forgetAlerts(vault, [str(id)]);
+  });
+}
+
+/** 暂停 / 恢复; a resumed alert starts over. */
+export async function setAlertEnabled(id: string, enabled: boolean): Promise<ActionResult> {
+  return attempt(({ dir, vault }) => {
+    setAlertsEnabled(dir, [str(id)], Boolean(enabled));
+    if (enabled) forgetAlerts(vault, [str(id)]);
   });
 }

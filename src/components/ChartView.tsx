@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { deleteIndicator, saveChartState, saveIndicator, setChartPrefs } from "@/app/actions";
+import type { AlertView } from "@/lib/alert-view";
 import { INDICATORS } from "@/indicators/catalog";
 import { compileFormula, formulaIndicatorName, formulaTemplate, isFormulaIndicator } from "@/indicators/formula-indicators";
 import type { BarsResponse } from "@/lib/api-types";
@@ -34,6 +35,7 @@ import {
   IconLock,
   IconMagnet,
   IconNotes,
+  IconAlarm,
   IconPencil,
   IconPlus,
   IconRay,
@@ -46,6 +48,8 @@ import {
   IconWatchlist,
 } from "./chart-icons";
 import { COMPARE_COLORS, DRAW_TOOLS, RANGES, SUB_PANE_HEIGHT, type ChartControl, type IndicatorSpec } from "./chart-types";
+import { AlertDialog, AlertLoginDialog } from "./AlertDialog";
+import { AlertsPanel } from "./AlertsPanel";
 import { CompareDialog } from "./CompareDialog";
 import { Dialog, Dropdown } from "./Dialog";
 import { IndicatorDialog, ParamDialog } from "./IndicatorDialog";
@@ -74,8 +78,15 @@ const TOOL_ICONS: Record<string, (p: { size?: number }) => ReactNode> = {
   simpleAnnotation: IconText,
 };
 
-type Panel = "watchlist" | "notes";
-type DialogState = { kind: "indicators"; formula?: FormulaDef | "new" } | { kind: "compare" } | { kind: "params"; name: string } | { kind: "clear" } | null;
+type Panel = "watchlist" | "notes" | "alerts";
+type DialogState =
+  | { kind: "indicators"; formula?: FormulaDef | "new" }
+  | { kind: "compare" }
+  | { kind: "params"; name: string }
+  | { kind: "clear" }
+  /** 新建警报 at a price, or 编辑警报 */
+  | { kind: "alert"; alert: AlertView | null; price: number | null }
+  | null;
 
 const DEFAULT_DRAWING: DrawingModes = { magnet: false, locked: false, hidden: false };
 
@@ -100,6 +111,10 @@ interface ChartViewProps {
   readOnly: boolean;
   /** The viewer's vault ('' = root), for per-person drafts */
   vault: string;
+  /** Every alert of the viewer's vault (none for a visitor) */
+  alerts: AlertView[];
+  /** The latest price of this symbol, where a new alert starts */
+  livePrice: number | null;
 }
 
 export function ChartView({
@@ -119,9 +134,11 @@ export function ChartView({
   noteSavedAt,
   readOnly,
   vault,
+  alerts,
+  livePrice,
 }: ChartViewProps) {
   const router = useRouter();
-  const { openSearch, openHelp, searchCtx } = useUi();
+  const { openSearch, openHelp, searchCtx, toast } = useUi();
   const [tf, setTf] = useState(prefs.tf);
   const [log, setLog] = useState(prefs.log);
   const [chartStyle, setChartStyle] = useState(prefs.style);
@@ -212,6 +229,8 @@ export function ChartView({
     return () => document.removeEventListener("fullscreenchange", onChange);
   }, []);
 
+  /** TradingView: a new alert starts at the latest price unless it came from a price on the chart */
+  const openAlert = (price?: number) => setDialog({ kind: "alert", alert: null, price: price ?? livePrice ?? data?.bars.at(-1)?.close ?? null });
   const report = (result: { ok: boolean; error?: string }) => setMessage(result.ok ? null : (result.error ?? "操作失败"));
   const persist = (partial: Parameters<typeof setChartPrefs>[0]) => {
     if (!readOnly) void setChartPrefs(partial).then(report);
@@ -361,6 +380,9 @@ export function ChartView({
         } else if (e.code === "KeyR") {
           e.preventDefault();
           control.current?.reset();
+        } else if (e.code === "KeyA") {
+          e.preventDefault();
+          openAlert();
         }
         return;
       }
@@ -412,6 +434,7 @@ export function ChartView({
 
   const bars = data?.bars;
   const meta = data?.symbol;
+  const alertLines = useMemo(() => alerts.filter((a) => a.key === symbolKey).flatMap((a) => a.levels.map((price) => ({ id: a.id, price }))), [alerts, symbolKey]);
   const forcedPercent = compare.some((c) => c.mode === "percent" && !hiddenCompares.includes(c.key));
   const percentOn = forcedPercent || pctAxis;
   const compareWithHidden = useMemo(() => compare.map((c) => ({ ...c, hidden: hiddenCompares.includes(c.key) })), [compare, hiddenCompares]);
@@ -490,6 +513,16 @@ export function ChartView({
         onClose={() => togglePanel("watchlist")}
         className="h-full"
       />
+    ) : panel === "alerts" ? (
+      <AlertsPanel
+        alerts={alerts}
+        current={symbolKey}
+        readOnly={readOnly}
+        onCreate={() => openAlert()}
+        onEdit={(alert) => setDialog({ kind: "alert", alert, price: null })}
+        onClose={() => togglePanel("alerts")}
+        className="h-full"
+      />
     ) : panel === "notes" ? (
       readOnly ? (
         <LoginPrompt text="登录后看自己的笔记" onClose={() => togglePanel("notes")} className="h-full" />
@@ -553,6 +586,10 @@ export function ChartView({
           <span className="font-serif text-[15px] italic">fx</span>
           <span>指标</span>
         </button>
+        <button type="button" onClick={() => openAlert()} className="tb-btn px-2" title="创建警报 · Alt+A">
+          <IconAlarm />
+          <span className="hidden sm:inline">警报</span>
+        </button>
         {/* narrow screens: drawing tools and the side panels live in the top bar */}
         <span className="tb-sep md:hidden" />
         <span className="flex md:hidden">
@@ -564,6 +601,9 @@ export function ChartView({
           </button>
           <button type="button" onClick={() => togglePanel("notes")} aria-pressed={panel === "notes"} className="tb-btn" title="笔记" aria-label="笔记">
             <IconNotes />
+          </button>
+          <button type="button" onClick={() => togglePanel("alerts")} aria-pressed={panel === "alerts"} className="tb-btn" title="警报列表" aria-label="警报列表">
+            <IconAlarm />
           </button>
         </span>
         <span className="min-w-2 flex-1" />
@@ -670,6 +710,12 @@ export function ChartView({
                 controlRef={control}
                 onAutoScaleChange={setAutoScale}
                 legend={{ title: name, subtitle, names, labels, hiddenIndicators, onIndicator, onCompare }}
+                alertLines={alertLines}
+                onAddAlert={openAlert}
+                onEditAlert={(id) => {
+                  const alert = alerts.find((a) => a.id === id);
+                  if (alert) setDialog({ kind: "alert", alert, price: null });
+                }}
               />
             </div>
           </div>
@@ -749,6 +795,9 @@ export function ChartView({
           <button type="button" onClick={() => togglePanel("notes")} aria-pressed={panel === "notes"} className="tb-btn" title="笔记" aria-label="笔记">
             <IconNotes />
           </button>
+          <button type="button" onClick={() => togglePanel("alerts")} aria-pressed={panel === "alerts"} className="tb-btn" title="警报" aria-label="警报列表">
+            <IconAlarm />
+          </button>
         </div>
       </div>
 
@@ -795,6 +844,25 @@ export function ChartView({
           onClose={() => setDialog(null)}
         />
       )}
+      {dialog?.kind === "alert" &&
+        (readOnly ? (
+          <AlertLoginDialog onClose={() => setDialog(null)} />
+        ) : (
+          <AlertDialog
+            symbolKey={dialog.alert?.key ?? symbolKey}
+            symbolName={dialog.alert?.name ?? name}
+            alert={dialog.alert}
+            price={dialog.price}
+            precision={data?.pricePrecision ?? 2}
+            aliases={aliases}
+            bench={bench}
+            onSaved={() => {
+              toast(dialog.alert ? "已保存警报" : "已创建警报");
+              setDialog(null);
+            }}
+            onClose={() => setDialog(null)}
+          />
+        ))}
       {dialog?.kind === "clear" && (
         <Dialog title="删除所有绘图" onClose={() => setDialog(null)} className="max-w-[360px]">
           <div className="p-4 text-sm">删除这个标的的全部 {chartState.overlays.length} 个绘图？</div>

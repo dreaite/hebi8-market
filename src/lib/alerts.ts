@@ -136,6 +136,18 @@ function writeState(vault: string, updates: { rule: string; key: string; row: St
   })();
 }
 
+/** When each of a vault's alerts last fired (ms), by alert id. */
+export function alertFiredAt(vault: string): Map<string, number> {
+  const rows = getDb().prepare("SELECT rule, fired_at FROM alert_state WHERE vault = ? AND rule LIKE 'alert:%' AND fired_at IS NOT NULL").all(vault) as { rule: string; fired_at: number }[];
+  return new Map(rows.map((r) => [r.rule, r.fired_at]));
+}
+
+/** An edited or resumed alert starts over: events record their side again, nothing counts as fired. */
+export function forgetAlerts(vault: string, ids: string[]): void {
+  const remove = getDb().prepare("DELETE FROM alert_state WHERE vault = ? AND rule = ?");
+  for (const alertId of ids) remove.run(vault, alertId);
+}
+
 /** Where an alert sits in the yaml's `alerts` list, found by the id it parses to; -1 when gone. */
 export function alertIndex(doc: Document, alertId: string, aliases: Record<string, string>): number {
   const seq = doc.get("alerts");
@@ -198,7 +210,8 @@ async function judge(vault: VaultRef, cfg: Config, conditions: Map<string, Recor
       }
       events.push({ rule: c.rule, key: c.key, name: nameOf(cfg, c.key, symbols[c.key]?.name), label: c.text, tf: c.tf, close });
     }
-    const keep = new Set(list.map((c) => id(c.rule, c.key)));
+    // a switched-off alert keeps its row, so the list can tell 已触发 from 已停止
+    const keep = new Set([...list.map((c) => id(c.rule, c.key)), ...cfg.alerts.map((a) => id(a.id, a.key))]);
     const commit = (delivered: boolean) => {
       // nothing got through: leave the fired rows (and `once` alerts) as they were so the next check tries again
       writeState(vault.id, delivered ? updates : updates.filter((u) => !u.fired), keep, Boolean(read));

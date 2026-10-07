@@ -241,3 +241,11 @@ export const IconExternal = (p: IconProps) => (
     <path d="M10.5 3.5h4v4M14.5 3.5 8 10M12.5 10.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3" />
   </Svg>
 );
+
+/** TradingView's 警报 glyph: an alarm clock. */
+export const IconAlarm = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="9" cy="10" r="5.5" />
+    <path d="M9 7v3l2 1.5M3 4.5 5 2.8M15 4.5 13 2.8M5.2 14.6 4 16M12.8 14.6 14 16" />
+  </Svg>
+);

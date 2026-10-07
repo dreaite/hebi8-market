@@ -48,6 +48,7 @@ describe("alerts in hebi8.yaml", () => {
       key: "yahoo:SPY",
       label: "破 200 日",
       text: "破 200 日",
+      ownLabel: "破 200 日",
       condition: null,
       when: "close < sma(close, 200)",
       tf: "W",

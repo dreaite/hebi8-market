@@ -5,6 +5,7 @@ import {
   dispose,
   init,
   registerIndicator,
+  registerOverlay,
   type Chart,
   type Crosshair,
   type DeepPartial,
@@ -14,6 +15,7 @@ import {
   type KLineData,
   type Overlay,
   type OverlayCreate,
+  type OverlayFigure,
   type Styles,
 } from "klinecharts";
 import { customIndicators } from "@/indicators/custom";
@@ -23,6 +25,7 @@ import type { ChartStyle } from "@/lib/config";
 import type { Timeframe } from "@/lib/symbols";
 import type { CompareEntry, OverlaySpec } from "@/lib/vault";
 import { ChartLegend, createLegendStore, type ChartLegendProps } from "./ChartLegend";
+import { IconAlarm, IconTrash } from "./chart-icons";
 import { COMPARE_COLORS, type ChartControl, type IndicatorSpec, type LegendValue } from "./chart-types";
 
 export interface DrawingModes {
@@ -59,7 +62,18 @@ interface KChartProps {
   onAutoScaleChange: (auto: boolean) => void;
   /** Everything the in-chart legend needs besides the live values */
   legend: Omit<ChartLegendProps, "store" | "onMainHeight" | "pricePrecision" | "compare">;
+  /** This symbol's price alert levels: dashed lines with an alarm label on the price axis, never saved as drawings */
+  alertLines: { id: string; price: number }[];
+  /** 添加警报 at a price: right click on the main pane, or the alarm on a selected horizontal line */
+  onAddAlert: (price: number) => void;
+  /** The alarm label of an alert line was clicked */
+  onEditAlert: (id: string) => void;
 }
+
+/** Alert lines live in their own overlay group, apart from the drawings. */
+const ALERT_GROUP = "price_alerts";
+/** Drawings whose floating toolbar offers 添加警报 (the line's price is copied). */
+const PRICE_LINES = new Set(["horizontalStraightLine", "horizontalRayLine"]);
 
 const PERIODS = {
   D: { type: "day", span: 1 },
@@ -97,6 +111,32 @@ let registered = false;
 function registerTemplates() {
   if (registered) return;
   registered = true;
+  // TradingView's alert line: dashed across the pane, ⏰ and the price on the axis (clicking it edits)
+  registerOverlay<{ id: string }>({
+    name: "priceAlert",
+    totalStep: 2,
+    needDefaultPointFigure: false,
+    needDefaultXAxisFigure: false,
+    needDefaultYAxisFigure: false,
+    createPointFigures: ({ coordinates, bounding }) => ({
+      type: "line",
+      attrs: { coordinates: [{ x: 0, y: coordinates[0].y }, { x: bounding.width, y: coordinates[0].y }] },
+      ignoreEvent: true,
+    }),
+    // the label starts at the axis' left edge; the clock is drawn, not an emoji, so every font shows it
+    createYAxisFigures: ({ chart, overlay, coordinates }) => {
+      const y = coordinates[0].y;
+      const value = overlay.points[0]?.value ?? 0;
+      const precision = chart.getSymbol()?.pricePrecision ?? 2;
+      const still: OverlayFigure["ignoreEvent"] = ["onPressedMoveStart", "onPressedMoving", "onPressedMoveEnd", "onRightClick", "onDoubleClick"];
+      const ink = { color: "#ffffff", size: 1 };
+      return [
+        { type: "text", attrs: { x: 0, y, text: fmtValue(value, precision, false), align: "left", baseline: "middle" }, ignoreEvent: still },
+        { type: "circle", attrs: { x: 10, y, r: 4 }, styles: { style: "stroke", borderColor: "#ffffff", borderSize: 1 }, ignoreEvent: true },
+        { type: "line", attrs: { coordinates: [{ x: 10, y: y - 2.5 }, { x: 10, y }, { x: 12, y: y + 1 }] }, styles: ink, ignoreEvent: true },
+      ];
+    },
+  });
   customIndicators.forEach((template) => registerIndicator(template as Parameters<typeof registerIndicator>[0]));
   for (let slot = 0; slot < MAX_COMPARE; slot++) {
     registerIndicator<{ v?: number }, number>({
@@ -189,7 +229,7 @@ function applyTheme(chart: Chart, style: ChartStyle) {
 /** Finished drawings on the main pane; `except` is one being removed right now. */
 function serializeOverlays(chart: Chart, keepLock: boolean, except?: string): OverlaySpec[] {
   return chart.getOverlays().flatMap((o) => {
-    if (o.paneId !== CANDLE_PANE || o.id === except) return [];
+    if (o.paneId !== CANDLE_PANE || o.id === except || o.groupId === ALERT_GROUP) return [];
     const points = o.points
       .filter((p) => typeof p.timestamp === "number" && typeof p.value === "number")
       .map((p) => ({ timestamp: p.timestamp!, value: p.value! }));
@@ -273,6 +313,9 @@ export function KChart({
   controlRef,
   onAutoScaleChange,
   legend,
+  alertLines,
+  onAddAlert,
+  onEditAlert,
 }: KChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<Chart | null>(null);
@@ -294,18 +337,26 @@ export function KChart({
   const legendFrame = useRef(0);
   const [store] = useState(createLegendStore);
   const [legendHeight, setLegendHeight] = useState(24);
-  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  /** A drawing's menu (删除), or the chart's own (在 X 添加警报) */
+  const [menu, setMenu] = useState<({ kind: "overlay"; id: string } | { kind: "chart"; price: number }) & { x: number; y: number } | null>(null);
+  /** The selected drawing, for its floating toolbar */
+  const [selected, setSelected] = useState<{ id: string; name: string } | null>(null);
+  const overlayMenuRef = useRef(false);
+  const onAddAlertRef = useRef(onAddAlert);
+  const onEditAlertRef = useRef(onEditAlert);
   /** Text for the 文字 tool while it is being typed; null when the box is closed */
   const [textDraft, setTextDraft] = useState<string | null>(null);
   // Latest props for the chart callbacks; declared first so later effects see the new values.
   useEffect(() => {
     onOverlaysChangeRef.current = onOverlaysChange;
     onDrawDoneRef.current = onDrawDone;
+    onAddAlertRef.current = onAddAlert;
+    onEditAlertRef.current = onEditAlert;
     onAutoScaleRef.current = onAutoScaleChange;
     compareRef.current = compare;
     overlaysRef.current = overlays;
     precisionRef.current = pricePrecision;
-  }, [onOverlaysChange, onDrawDone, onAutoScaleChange, compare, overlays, pricePrecision]);
+  }, [onOverlaysChange, onDrawDone, onAutoScaleChange, compare, overlays, pricePrecision, onAddAlert, onEditAlert]);
 
   const computeLegend = () => {
     const chart = chartRef.current;
@@ -400,23 +451,28 @@ export function KChart({
     onPressedMoveEnd: () => persistOverlays(),
     // KLineChart calls this before the overlay leaves its list, so it is excluded by id
     onRemoved: (e) => {
-      if (selectedRef.current === e.overlay.id) selectedRef.current = null;
+      if (selectedRef.current === e.overlay.id) select(null);
       persistOverlays(e.overlay.id);
     },
-    onSelected: (e) => {
-      selectedRef.current = e.overlay.id;
-    },
+    onSelected: (e) => select(e.overlay),
     onDeselected: (e) => {
-      if (selectedRef.current === e.overlay.id) selectedRef.current = null;
+      if (selectedRef.current === e.overlay.id) select(null);
     },
     // TradingView: right click opens a menu instead of deleting
     onRightClick: (e) => {
       e.preventDefault?.();
+      // the chart's own menu (添加警报) must not open on top of this one
+      overlayMenuRef.current = true;
       if (drawingRef.current?.id === e.overlay.id) return;
-      selectedRef.current = e.overlay.id;
-      setMenu({ id: e.overlay.id, x: (e.pageX ?? 0) - window.scrollX, y: (e.pageY ?? 0) - window.scrollY });
+      select(e.overlay);
+      setMenu({ kind: "overlay", id: e.overlay.id, x: (e.pageX ?? 0) - window.scrollX, y: (e.pageY ?? 0) - window.scrollY });
     },
   });
+
+  const select = (o: Pick<Overlay, "id" | "name"> | null) => {
+    selectedRef.current = o?.id ?? null;
+    setSelected(o ? { id: o.id, name: o.name } : null);
+  };
 
   const startDrawing = (tool: string, extendData?: unknown) => {
     const chart = chartRef.current;
@@ -505,8 +561,22 @@ export function KChart({
         if (d?.overlay && d.overlay.paneId !== CANDLE_PANE) restartDrawing();
       }, 0);
     el.addEventListener("click", onClick, true);
-    // the browser menu is no use on a canvas; drawings bring their own (onRightClick)
-    const onContextMenu = (e: MouseEvent) => e.preventDefault();
+    // the browser menu is no use on a canvas; drawings bring their own (onRightClick), the main pane offers 添加警报
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      if (overlayMenuRef.current) {
+        overlayMenuRef.current = false;
+        return;
+      }
+      const box = el.getBoundingClientRect();
+      const x = e.clientX - box.left;
+      const y = e.clientY - box.top;
+      const pane = chart.getSize(CANDLE_PANE, "main");
+      if (!pane || x < pane.left || x > pane.left + pane.width || y < pane.top || y > pane.top + pane.height) return;
+      const point = chart.convertFromPixel([{ x, y }], { paneId: CANDLE_PANE, absolute: true }) as Partial<{ value: number }>[];
+      const price = point[0]?.value;
+      if (typeof price === "number" && Number.isFinite(price)) setMenu({ kind: "chart", price, x: e.clientX, y: e.clientY });
+    };
     el.addEventListener("contextmenu", onContextMenu);
     // dragging or double-clicking the price axis switches its auto scale; report it for the 自动 button
     let checkTimer: ReturnType<typeof setTimeout> | undefined;
@@ -584,7 +654,7 @@ export function KChart({
         const id = selectedRef.current;
         if (!id || !chartRef.current) return false;
         chartRef.current.removeOverlay({ id });
-        selectedRef.current = null;
+        select(null);
         return true;
       },
     };
@@ -606,7 +676,7 @@ export function KChart({
     // Drawings are stored by timestamp, so they land on the nearest bar of any timeframe.
     restoringRef.current = true;
     drawingRef.current = null;
-    selectedRef.current = null;
+    select(null);
     chart.removeOverlay();
     if (overlaysRef.current.length) {
       chart.createOverlay(
@@ -705,7 +775,7 @@ export function KChart({
     if (!chart) return;
     const m = overlayModes();
     for (const o of chart.getOverlays({ paneId: CANDLE_PANE })) {
-      if (o.id === drawingRef.current?.id) continue;
+      if (o.id === drawingRef.current?.id || o.groupId === ALERT_GROUP) continue;
       chart.overrideOverlay({ id: o.id, mode: m.mode, visible: m.visible, lock: m.lock });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the three flags
@@ -727,11 +797,36 @@ export function KChart({
     if (!chart || clearSeq === 0) return;
     restoringRef.current = true;
     drawingRef.current = null;
-    selectedRef.current = null;
-    chart.removeOverlay();
+    select(null);
+    // every drawing, not the alert lines
+    for (const o of chart.getOverlays({ paneId: CANDLE_PANE })) if (o.groupId !== ALERT_GROUP) chart.removeOverlay({ id: o.id });
     restoringRef.current = false;
     onOverlaysChangeRef.current([]);
   }, [clearSeq]);
+
+  // alert lines: after the bars effect above, which clears every overlay when the data changes
+  const alertKey = JSON.stringify(alertLines);
+  useEffect(() => {
+    const chart = chartRef.current;
+    const last = bars?.at(-1);
+    if (!chart || !last) return;
+    chart.removeOverlay({ groupId: ALERT_GROUP });
+    const accent = cssVar("--accent");
+    for (const line of JSON.parse(alertKey) as KChartProps["alertLines"]) {
+      chart.createOverlay({
+        name: "priceAlert",
+        groupId: ALERT_GROUP,
+        paneId: CANDLE_PANE,
+        points: [{ timestamp: last.timestamp, value: line.price }],
+        extendData: { id: line.id },
+        styles: {
+          line: { style: "dashed", dashedValue: [4, 3], size: 1, color: accent },
+          text: { color: "#ffffff", backgroundColor: accent, borderColor: accent, borderRadius: 2, size: 11, family: MONO, paddingLeft: 18, paddingRight: 4, paddingTop: 2, paddingBottom: 2 },
+        },
+        onClick: (e) => onEditAlertRef.current((e.overlay.extendData as { id: string }).id),
+      });
+    }
+  }, [alertKey, bars, symbolKey, tf, clearSeq]);
 
   useEffect(() => {
     if (!menu) return;
@@ -802,23 +897,67 @@ export function KChart({
           </button>
         </form>
       )}
+      {selected && PRICE_LINES.has(selected.name) && !menu && (
+        // TradingView's floating toolbar for a selected drawing; a horizontal line can become an alert
+        <div className="absolute top-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-0.5 rounded-md border border-line bg-card p-0.5 shadow-lg" role="toolbar" aria-label="画线工具条">
+          <button
+            type="button"
+            className="tb-btn"
+            title="添加警报"
+            aria-label="添加警报"
+            onClick={() => {
+              const value = chartRef.current?.getOverlays({ id: selected.id })[0]?.points[0]?.value;
+              if (typeof value === "number") onAddAlertRef.current(value);
+            }}
+          >
+            <IconAlarm />
+          </button>
+          <button
+            type="button"
+            className="tb-btn"
+            title="删除 · Del"
+            aria-label="删除"
+            onClick={() => {
+              chartRef.current?.removeOverlay({ id: selected.id });
+              select(null);
+            }}
+          >
+            <IconTrash />
+          </button>
+        </div>
+      )}
       {menu && (
         <div
           role="menu"
           className="menu fixed min-w-[8rem]"
-          style={{ left: Math.min(menu.x, window.innerWidth - 140), top: Math.min(menu.y, window.innerHeight - 50), right: "auto" }}
+          style={{ left: Math.min(menu.x, window.innerWidth - 200), top: Math.min(menu.y, window.innerHeight - 50), right: "auto" }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <button
-            role="menuitem"
-            className="menu-item flex items-center justify-between gap-4"
-            onClick={() => {
-              chartRef.current?.removeOverlay({ id: menu.id });
-              setMenu(null);
-            }}
-          >
-            删除 <span className="text-[11px] text-muted">Del</span>
-          </button>
+          {menu.kind === "overlay" ? (
+            <button
+              role="menuitem"
+              className="menu-item flex items-center justify-between gap-4"
+              onClick={() => {
+                chartRef.current?.removeOverlay({ id: menu.id });
+                setMenu(null);
+              }}
+            >
+              删除 <span className="text-[11px] text-muted">Del</span>
+            </button>
+          ) : (
+            <button
+              role="menuitem"
+              className="menu-item flex items-center gap-2"
+              onClick={() => {
+                onAddAlertRef.current(menu.price);
+                setMenu(null);
+              }}
+            >
+              <IconAlarm size={16} />
+              在 {fmtValue(menu.price, pricePrecision, false)} 添加警报
+              <span className="ml-auto pl-3 text-[11px] text-muted">Alt+A</span>
+            </button>
+          )}
         </div>
       )}
     </div>

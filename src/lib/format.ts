@@ -14,14 +14,15 @@ export function fmtDate(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toISOString().slice(0, 10);
 }
 
-export function fmtAgo(ms: number | null): string {
-  if (!ms) return "从未同步";
+/** 「3 分钟前同步」; `what` is what happened then (empty for just 「3 分钟前」). */
+export function fmtAgo(ms: number | null, what = "同步"): string {
+  if (!ms) return `从未${what}`;
   const minutes = Math.round((Date.now() - ms) / 60000);
-  if (minutes < 1) return "刚刚同步";
-  if (minutes < 60) return `${minutes} 分钟前同步`;
+  if (minutes < 1) return `刚刚${what}`;
+  if (minutes < 60) return `${minutes} 分钟前${what}`;
   const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours} 小时前同步`;
-  return `${Math.round(hours / 24)} 天前同步`;
+  if (hours < 48) return `${hours} 小时前${what}`;
+  return `${Math.round(hours / 24)} 天前${what}`;
 }
 
 /** Tailwind text color for a signed change. */

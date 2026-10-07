@@ -1,4 +1,5 @@
 import { ChartView } from "@/components/ChartView";
+import { alertViews, latestPrice } from "@/lib/alert-view";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
 import { allItems, findItem } from "@/lib/config";
 import { renderMarkdown } from "@/lib/markdown";
@@ -47,6 +48,9 @@ export default async function ChartPage({ params }: { params: Promise<{ key: str
     items: g.symbols.map((i) => ({ key: i.key, name: names[i.key], last: stats[i.key]?.last ?? null, change: stats[i.key]?.changes[period] ?? null })),
   }));
 
+  // alerts are personal like notes: a visitor sees none
+  const alerts = viewer.canWrite ? alertViews(viewer.vault, config, symbols) : [];
+
   return (
     <ChartView
       // a different person (or a visitor turning into one) gets a fresh chart, not the last one's state
@@ -67,6 +71,8 @@ export default async function ChartPage({ params }: { params: Promise<{ key: str
       noteHtml={note ? renderMarkdown(note) : null}
       noteSavedAt={viewer.canWrite ? noteMtime(viewer.dir, key) : null}
       readOnly={!viewer.canWrite}
+      alerts={alerts}
+      livePrice={latestPrice(key, config).price}
     />
   );
 }
