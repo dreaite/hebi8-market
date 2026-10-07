@@ -24,7 +24,7 @@ export default async function Home() {
 
   const groups = config.groups.map((g) => ({
     name: g.name,
-    rows: g.symbols.map((item): OverviewRow => {
+    items: g.symbols.map((item): OverviewRow => {
       const row = symbols[item.key];
       return {
         key: item.key,

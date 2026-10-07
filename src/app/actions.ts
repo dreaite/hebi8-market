@@ -81,15 +81,29 @@ function entryAsMap(doc: Document, symbols: YAMLSeq, index: number): YAMLMap {
   return node;
 }
 
+/** A group's name as the page shows it: an unnamed one is「组 N」, like the config reader says. */
+const groupName = (group: unknown, index: number) => (isMap(group) && String(group.get("name") ?? "").trim()) || `组 ${index + 1}`;
+
+/** The `groups` list and where the group shown as `name` sits in it. */
+function findGroup(doc: Document, name: string): { groups: YAMLSeq; index: number } {
+  const groups = doc.get("groups");
+  const index = isSeq(groups) ? groups.items.findIndex((g, i) => isMap(g) && groupName(g, i) === name) : -1;
+  if (index < 0) throw new Error(`没有「${name}」这个分组`);
+  return { groups: groups as YAMLSeq, index };
+}
+
 function groupNode(doc: Document, name: string): YAMLMap {
   const groups = seqOf(doc.contents as YAMLMap, "groups", doc);
-  let node = groups.items.find((g) => isMap(g) && g.get("name") === name) as YAMLMap | undefined;
+  let node = groups.items.find((g, i) => isMap(g) && groupName(g, i) === name) as YAMLMap | undefined;
   if (!node) {
     node = doc.createNode({ name, symbols: [] }) as YAMLMap;
     groups.add(node);
   }
   return node;
 }
+
+/** A drop position from the page, inside 0..length. */
+const position = (index: unknown, length: number) => (Number.isInteger(index) ? Math.min(Math.max(index as number, 0), length) : length);
 
 export async function refresh(): Promise<ActionResult> {
   return attempt(async () => {
@@ -167,7 +181,8 @@ export async function loadSymbol(key: string): Promise<ActionResult> {
   });
 }
 
-export async function moveSymbol(key: string, group: string): Promise<ActionResult> {
+/** Into `group` (created when new) at `index`, counted without the moved entry; the end when omitted. */
+export async function moveSymbol(key: string, group: string, index?: number): Promise<ActionResult> {
   return attempt(({ dir }) => {
     const target = str(group);
     if (!target) throw new Error("请选择分组");
@@ -175,7 +190,62 @@ export async function moveSymbol(key: string, group: string): Promise<ActionResu
       const found = locateEntry(doc, key, readConfig(dir).aliases);
       if (!found) throw new Error(`${key} 不在自选里`);
       const [item] = found.symbols.items.splice(found.index, 1);
-      seqOf(groupNode(doc, target), "symbols", doc).add(item);
+      const symbols = seqOf(groupNode(doc, target), "symbols", doc);
+      // `[GOLD]` becomes a block list, so an entry with a comment stays on one line
+      symbols.flow = false;
+      symbols.items.splice(position(index, symbols.items.length), 0, item);
+    });
+  });
+}
+
+export async function moveGroup(name: string, index: number): Promise<ActionResult> {
+  return attempt(({ dir }) => {
+    updateConfig(dir, (doc) => {
+      const { groups, index: from } = findGroup(doc, str(name));
+      const [node] = groups.items.splice(from, 1);
+      groups.items.splice(position(index, groups.items.length), 0, node);
+    });
+  });
+}
+
+export async function addGroup(name: string): Promise<ActionResult> {
+  return attempt(({ dir }) => {
+    const next = str(name);
+    if (!next) throw new Error("分组名不能为空");
+    if (readConfig(dir).groups.some((g) => g.name === next)) throw new Error(`已经有「${next}」分组了`);
+    updateConfig(dir, (doc) => void groupNode(doc, next));
+  });
+}
+
+export async function renameGroup(name: string, next: string): Promise<ActionResult> {
+  return attempt(({ dir }) => {
+    const to = str(next);
+    if (!to) throw new Error("分组名不能为空");
+    if (to === str(name)) return;
+    if (readConfig(dir).groups.some((g) => g.name === to)) throw new Error(`已经有「${to}」分组了`);
+    updateConfig(dir, (doc) => {
+      const { index } = findGroup(doc, str(name));
+      setScalar(doc, ["groups", index, "name"], to);
+    });
+  });
+}
+
+/** Like removing a section in TradingView: the group goes, its symbols join the group above (the one below for the first). */
+export async function deleteGroup(name: string): Promise<ActionResult> {
+  return attempt(({ dir }) => {
+    updateConfig(dir, (doc) => {
+      const { groups, index } = findGroup(doc, str(name));
+      const symbols = (groups.items[index] as YAMLMap).get("symbols");
+      const moving = isSeq(symbols) ? symbols.items : [];
+      if (moving.length) {
+        const neighbour = groups.items[index - 1] ?? groups.items[index + 1];
+        if (!isMap(neighbour)) throw new Error("这是唯一的分组，先移除里面的标的");
+        const into = seqOf(neighbour, "symbols", doc);
+        into.flow = false;
+        if (index > 0) into.items.push(...moving);
+        else into.items.unshift(...moving);
+      }
+      groups.delete(index);
     });
   });
 }

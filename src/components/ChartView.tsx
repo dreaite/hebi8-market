@@ -532,10 +532,12 @@ export function ChartView({
         groups={watchlist}
         changeLabel={changeLabel}
         current={symbolKey}
+        readOnly={readOnly}
         onPick={(key) => {
           if (!wide) setSheet(null);
           if (key !== symbolKey) router.push(chartHref(key));
         }}
+        onAdd={() => openSearch("", "add")}
         onClose={() => togglePanel("watchlist")}
         className="h-full"
       />

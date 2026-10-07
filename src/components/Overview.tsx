@@ -3,16 +3,20 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, useTransition } from "react";
-import { addSymbol, moveSymbol, refresh, removeSymbol, renameSymbol, setBench, setPeriods, setUpdown } from "@/app/actions";
+import { addSymbol, refresh, removeSymbol, renameSymbol, setBench, setPeriods, setUpdown } from "@/app/actions";
 import type { UpDown } from "@/lib/config";
 import { changeColor, fmtAgo, fmtPct, fmtPrice } from "@/lib/format";
 import { CHANGE_PERIODS, MAX_PERIODS, type ChangePeriod } from "@/lib/periods";
 import type { Stats } from "@/lib/stats";
 import { SOURCE_LABELS, type Source } from "@/lib/symbols";
+import { mergeTarget } from "@/lib/watchlist";
 import { Badge } from "./Badge";
 import { RowMenu } from "./RowMenu";
 import { Sparkline } from "./Sparkline";
 import { chartHref, guideSeen, useUi } from "./UiProvider";
+import { rowAttrs } from "./use-drag-sort";
+import { useWatchlist } from "./use-watchlist";
+import { DragHandle, FoldButton, GroupMenu, NewGroup } from "./WatchlistParts";
 
 export interface OverviewRow {
   key: string;
@@ -29,7 +33,7 @@ export interface OverviewRow {
 }
 
 export interface OverviewData {
-  groups: { name: string; rows: OverviewRow[] }[];
+  groups: { name: string; items: OverviewRow[] }[];
   periods: ChangePeriod[];
   updown: UpDown;
   conditions: { id: string; label: string }[];
@@ -85,7 +89,7 @@ const SINCE: Record<ChangePeriod, string> = {
 };
 
 const HINTS = {
-  name: "标的名称，下一行是代码 · 数据源 · 币种",
+  name: "标的名称，下一行是代码 · 数据源 · 币种。拖动行或分组标题调整顺序，顺序写回 hebi8.yaml",
   last: "最新价：最近一根日线的收盘价",
   high: "距高点：最新价比历史最高收盘低多少，0% 就是在历史高点。\n下面的短条是 52 周区间位置：最左是近 52 周最低价，最右是最高价，竖线是现在的价格",
   spark: "近两年的周收盘走势",
@@ -190,6 +194,7 @@ export function Overview({ data }: { data: OverviewData }) {
   const [message, setMessage] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const closeMenu = useCallback(() => setMenuFor(null), []);
+  const wl = useWatchlist(data.groups, { readOnly, sorted: sort !== null });
 
   // the how-to opens once per browser, on the first visit to the overview
   useEffect(() => {
@@ -236,7 +241,8 @@ export function Overview({ data }: { data: OverviewData }) {
   };
 
   const shownPeriods = CHANGE_PERIODS.filter((p) => periods.includes(p.key));
-  const groupNames = data.groups.map((g) => g.name);
+  const groups = wl.groups;
+  const groupNames = groups.map((g) => g.name);
   const colCount = 6 + shownPeriods.length;
 
   const menu = (row: OverviewRow, group: string) =>
@@ -254,7 +260,8 @@ export function Overview({ data }: { data: OverviewData }) {
         onOpen={() => router.push(chartHref(row.key))}
         onMove={(target) => {
           closeMenu();
-          act(() => moveSymbol(row.key, target), () => toast(`${row.name} 已移到 ${target}`));
+          wl.edit.moveSymbol(row.key, target, groups.find((g) => g.name === target)?.items.length ?? 0);
+          toast(`${row.name} 已移到 ${target}`);
         }}
         onRename={(name) => {
           closeMenu();
@@ -268,6 +275,26 @@ export function Overview({ data }: { data: OverviewData }) {
         onClose={closeMenu}
       />
     );
+
+  const groupHead = (group: OverviewData["groups"][number]) => {
+    const open = !wl.collapsed.includes(group.name);
+    return (
+      <>
+        {wl.canDrag && <DragHandle label={`分组「${group.name}」`} onKeyDown={(e) => wl.drag.onHandleKeyDown(e, { kind: "group", name: group.name })} />}
+        <FoldButton name={group.name} open={open} count={group.items.length} onToggle={() => wl.toggle(group.name)} />
+        <span className="flex-1" />
+        {!readOnly && (
+          <GroupMenu
+            name={group.name}
+            count={group.items.length}
+            mergeInto={mergeTarget(groups, group.name)}
+            onRename={(next) => wl.edit.renameGroup(group.name, next)}
+            onDelete={() => wl.edit.deleteGroup(group.name)}
+          />
+        )}
+      </>
+    );
+  };
 
   return (
     <main className="mx-auto w-full max-w-[1400px] px-5 py-5">
@@ -331,11 +358,12 @@ export function Overview({ data }: { data: OverviewData }) {
       )}
       {message && <p className="mb-3 text-xs text-down">{message}</p>}
       {data.firstRun && <p className="mb-3 text-sm text-muted">首次拉取中，正在从数据源获取全部历史，稍等几秒…</p>}
-      {data.groups.length === 0 && (
+      {groups.length === 0 && (
         <p className="mb-3 text-sm text-muted">
           还没有自选。点「+ 添加」，或按 <kbd className="rounded border border-line px-1 font-mono">/</kbd> 搜索后点结果行上的 +。
         </p>
       )}
+      {sort && !readOnly && <p className="mb-2 text-[11px] text-muted">按列排序时不能拖动；再点表头直到恢复默认顺序，就可以拖动调整了。</p>}
 
       <div className="overflow-x-auto">
         <table className="hidden w-full table-fixed border-separate border-spacing-0 text-xs md:table">
@@ -352,7 +380,7 @@ export function Overview({ data }: { data: OverviewData }) {
           </colgroup>
           <thead>
             <tr className="text-left">
-              <Th label="名称" hint={HINTS.name} sort={sort} onSort={onSort} />
+              <Th label="名称" hint={readOnly ? HINTS.name.split("。")[0] : HINTS.name} sort={sort} onSort={onSort} />
               <Th label="价格" hint={HINTS.last} sortKey="last" sort={sort} onSort={onSort} className="text-right" />
               {shownPeriods.map((p) => (
                 <Th key={p.key} label={p.label} hint={`${p.label}涨跌：最新价相对 ${SINCE[p.key]}收盘的涨跌幅`} sortKey={p.key} sort={sort} onSort={onSort} className="text-right" />
@@ -363,45 +391,74 @@ export function Overview({ data }: { data: OverviewData }) {
               <th />
             </tr>
           </thead>
-          <tbody>
-            {data.groups.map((group) => (
-              <GroupRows key={group.name} group={group} sort={sort} colCount={colCount} shownPeriods={shownPeriods} conditions={data.conditions} menuFor={menuFor} setMenuFor={setMenuFor} menu={menu} />
+          <tbody {...wl.drag.rootProps}>
+            {groups.map((group) => (
+              <GroupRows
+                key={group.name}
+                group={group}
+                head={groupHead(group)}
+                open={!wl.collapsed.includes(group.name)}
+                sort={sort}
+                colCount={colCount}
+                shownPeriods={shownPeriods}
+                conditions={data.conditions}
+                menuFor={menuFor}
+                setMenuFor={setMenuFor}
+                menu={menu}
+                wl={wl}
+              />
             ))}
           </tbody>
         </table>
       </div>
 
       {/* Narrow screens: one card per symbol, three lines. */}
-      <div className="md:hidden">
-        {data.groups.map((group) => (
-          <section key={group.name} className="mb-4">
-            <h2 className="mb-1 px-1 text-xs font-medium text-muted">{group.name}</h2>
-            <ul className="divide-y divide-line rounded-lg border border-line bg-card">
-              {group.rows.length === 0 && <li className="px-3 py-2 text-xs text-muted">这组还没有标的</li>}
-              {sortRows(group.rows, sort).map((row) => (
-                <li key={row.key} className="relative">
-                  <Link href={chartHref(row.key)} className="block px-3 py-2 text-xs">
-                    <div className="flex items-baseline justify-between gap-3">
-                      <span className="truncate text-sm">{row.name}</span>
-                      <span className="tabular shrink-0 text-sm">{row.stats ? fmtPrice(row.stats.last) : "—"}</span>
-                    </div>
-                    <div className="mt-0.5 flex flex-wrap gap-x-3 font-mono text-[11px]">
-                      <span className="text-muted">{row.ticker}</span>
-                      {shownPeriods.map((p) => (
-                        <span key={p.key} className={`tabular ${changeColor(row.stats?.changes[p.key])}`}>
-                          {p.label} {fmtPct(row.stats?.changes[p.key])}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="mt-1">
-                      <Badges row={row} conditions={data.conditions} />
-                    </div>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))}
+      <div className="md:hidden" {...wl.drag.rootProps}>
+        {groups.map((group) => {
+          const open = !wl.collapsed.includes(group.name);
+          return (
+            <section key={group.name} className="mb-4">
+              <h2 {...rowAttrs(`g:${group.name}`, group.name, wl.drag)} className="mb-1 flex items-center gap-1 rounded px-1 text-xs font-medium">
+                {groupHead(group)}
+              </h2>
+              {open && (
+                <ul className="divide-y divide-line rounded-lg border border-line bg-card">
+                  {group.items.length === 0 && (
+                    <li {...rowAttrs(`e:${group.name}`, group.name, wl.drag)} className="px-3 py-2 text-xs text-muted">
+                      这组还没有标的
+                    </li>
+                  )}
+                  {sortRows(group.items, sort).map((row) => (
+                    <li key={row.key} {...rowAttrs(`s:${row.key}`, group.name, wl.drag)} className="relative flex items-center">
+                      {wl.canDrag && <DragHandle label={row.name} onKeyDown={(e) => wl.drag.onHandleKeyDown(e, { kind: "symbol", key: row.key })} className="ml-1" />}
+                      <Link href={chartHref(row.key)} className="block min-w-0 flex-1 px-3 py-2 text-xs">
+                        <div className="flex items-baseline justify-between gap-3">
+                          <span className="truncate text-sm">{row.name}</span>
+                          <span className="tabular shrink-0 text-sm">{row.stats ? fmtPrice(row.stats.last) : "—"}</span>
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap gap-x-3 font-mono text-[11px]">
+                          <span className="text-muted">{row.ticker}</span>
+                          {shownPeriods.map((p) => (
+                            <span key={p.key} className={`tabular ${changeColor(row.stats?.changes[p.key])}`}>
+                              {p.label} {fmtPct(row.stats?.changes[p.key])}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="mt-1">
+                          <Badges row={row} conditions={data.conditions} />
+                        </div>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          );
+        })}
+      </div>
+      {!readOnly && <NewGroup onAdd={wl.edit.addGroup} className="mt-3 h-6" />}
+      <div aria-live="polite" className="sr-only">
+        {wl.drag.announcement}
       </div>
 
       <p className="mt-8 text-[11px] text-muted">
@@ -413,6 +470,8 @@ export function Overview({ data }: { data: OverviewData }) {
 
 function GroupRows({
   group,
+  head,
+  open,
   sort,
   colCount,
   shownPeriods,
@@ -420,8 +479,11 @@ function GroupRows({
   menuFor,
   setMenuFor,
   menu,
+  wl,
 }: {
   group: OverviewData["groups"][number];
+  head: React.ReactNode;
+  open: boolean;
   sort: Sort;
   colCount: number;
   shownPeriods: (typeof CHANGE_PERIODS)[number][];
@@ -429,87 +491,99 @@ function GroupRows({
   menuFor: string | null;
   setMenuFor: (key: string | null) => void;
   menu: (row: OverviewRow, group: string) => React.ReactNode;
+  wl: ReturnType<typeof useWatchlist<OverviewRow>>;
 }) {
   const router = useRouter();
   const cell = "border-t border-line px-2 py-1.5";
   return (
     <>
-      <tr>
-        <td colSpan={colCount} className="pt-4 pb-1 text-xs font-medium text-muted">
-          {group.name}
+      <tr {...rowAttrs(`g:${group.name}`, group.name, wl.drag)}>
+        <td colSpan={colCount} className="pt-4 pb-1 text-[13px] font-medium">
+          <div className="flex items-center gap-1">{head}</div>
         </td>
       </tr>
-      {group.rows.length === 0 && (
-        <tr>
+      {open && group.items.length === 0 && (
+        <tr {...rowAttrs(`e:${group.name}`, group.name, wl.drag)}>
           <td colSpan={colCount} className={`${cell} text-muted`}>
             这组还没有标的
           </td>
         </tr>
       )}
-      {sortRows(group.rows, sort).map((row) => {
-        const s = row.stats;
-        const href = chartHref(row.key);
-        return (
-          <tr
-            key={row.key}
-            onClick={() => router.push(href)}
-            onAuxClick={(e) => {
-              if (e.button === 1) window.open(href, "_blank");
-            }}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setMenuFor(row.key);
-            }}
-            className="group cursor-pointer bg-card hover:bg-bg/60"
-          >
-            <td className={`${cell} rounded-l-md`}>
-              <Link href={href} onClick={(e) => e.stopPropagation()} className="block min-w-0">
-                <div className="truncate text-sm" title={row.name}>
-                  {row.name}
+      {open &&
+        sortRows(group.items, sort).map((row) => {
+          const s = row.stats;
+          const href = chartHref(row.key);
+          return (
+            <tr
+              key={row.key}
+              {...rowAttrs(`s:${row.key}`, group.name, wl.drag)}
+              onClick={() => router.push(href)}
+              onAuxClick={(e) => {
+                if (e.button === 1) window.open(href, "_blank");
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setMenuFor(row.key);
+              }}
+              className="group cursor-pointer bg-card hover:bg-bg/60"
+            >
+              <td className={`${cell} rounded-l-md`}>
+                <div className="flex min-w-0 items-center gap-1">
+                  {!wl.readOnly && (
+                    <DragHandle
+                      label={row.name}
+                      onKeyDown={(e) => wl.drag.onHandleKeyDown(e, { kind: "symbol", key: row.key })}
+                      className={`-ml-1 ${wl.canDrag ? "" : "invisible"}`}
+                    />
+                  )}
+                  <Link href={href} onClick={(e) => e.stopPropagation()} draggable={false} className="block min-w-0 flex-1">
+                    <div className="truncate text-sm" title={row.name}>
+                      {row.name}
+                    </div>
+                    <div className="truncate font-mono text-[11px] text-muted">
+                      {row.ticker} · {row.source === "expr" ? "合成" : SOURCE_LABELS[row.source]}
+                      {row.currency && ` · ${row.currency}`}
+                    </div>
+                    {row.syncError && (
+                      <div className="truncate text-[11px] text-down" title={row.syncError}>
+                        {row.syncError}
+                      </div>
+                    )}
+                  </Link>
                 </div>
-                <div className="truncate font-mono text-[11px] text-muted">
-                  {row.ticker} · {row.source === "expr" ? "合成" : SOURCE_LABELS[row.source]}
-                  {row.currency && ` · ${row.currency}`}
-                </div>
-                {row.syncError && (
-                  <div className="truncate text-[11px] text-down" title={row.syncError}>
-                    {row.syncError}
-                  </div>
-                )}
-              </Link>
-            </td>
-            <td className={`tabular ${cell} text-right text-sm`}>{s ? fmtPrice(s.last) : "—"}</td>
-            {shownPeriods.map((p) => (
-              <td key={p.key} className={`tabular ${cell} text-right ${changeColor(s?.changes[p.key])}`}>
-                {fmtPct(s?.changes[p.key])}
               </td>
-            ))}
-            <td className={`${cell} text-right`}>
-              <div className={`tabular ${changeColor(s?.ddAth)}`}>{fmtPct(s?.ddAth)}</div>
-              {s?.pos52 != null && <Range52 pos={s.pos52} />}
-            </td>
-            <td className={cell}>
-              <Badges row={row} conditions={conditions} />
-            </td>
-            <td className={`${cell} wide-col py-1`}>{s && <Sparkline values={s.spark} width={180} height={26} className="w-[180px]" />}</td>
-            <td className={`relative ${cell} rounded-r-md px-0 text-right`}>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setMenuFor(menuFor === row.key ? null : row.key);
-                }}
-                aria-haspopup="menu"
-                aria-expanded={menuFor === row.key}
-                aria-label={`${row.name} 的操作`}
-                className={`h-6 w-6 rounded text-sm leading-none text-muted hover:bg-line hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 ${menuFor === row.key ? "opacity-100" : "opacity-0"}`}
-              >
-                ⋯
-              </button>
-              {menu(row, group.name)}
-            </td>
-          </tr>
-        );
-      })}
+              <td className={`tabular ${cell} text-right text-sm`}>{s ? fmtPrice(s.last) : "—"}</td>
+              {shownPeriods.map((p) => (
+                <td key={p.key} className={`tabular ${cell} text-right ${changeColor(s?.changes[p.key])}`}>
+                  {fmtPct(s?.changes[p.key])}
+                </td>
+              ))}
+              <td className={`${cell} text-right`}>
+                <div className={`tabular ${changeColor(s?.ddAth)}`}>{fmtPct(s?.ddAth)}</div>
+                {s?.pos52 != null && <Range52 pos={s.pos52} />}
+              </td>
+              <td className={cell}>
+                <Badges row={row} conditions={conditions} />
+              </td>
+              <td className={`${cell} wide-col py-1`}>{s && <Sparkline values={s.spark} width={180} height={26} className="w-[180px]" />}</td>
+              <td className={`relative ${cell} rounded-r-md px-0 text-right`}>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenuFor(menuFor === row.key ? null : row.key);
+                  }}
+                  aria-haspopup="menu"
+                  aria-expanded={menuFor === row.key}
+                  aria-label={`${row.name} 的操作`}
+                  className={`h-6 w-6 rounded text-sm leading-none text-muted hover:bg-line hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 ${menuFor === row.key ? "opacity-100" : "opacity-0"}`}
+                >
+                  ⋯
+                </button>
+                {menu(row, group.name)}
+              </td>
+            </tr>
+          );
+        })}
     </>
   );
 }
