@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ErrorCapture } from "@/components/ErrorCapture";
+import { SiteFooter } from "@/components/SiteFooter";
 import { Account, HelpButton, SearchTrigger, UiProvider } from "@/components/UiProvider";
 import { githubClientId } from "@/lib/app-info";
 import type { SearchContext } from "@/lib/search";
@@ -57,6 +58,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
             </div>
           </header>
           {children}
+          <SiteFooter />
         </UiProvider>
       </body>
     </html>

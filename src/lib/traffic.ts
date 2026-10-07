@@ -64,6 +64,7 @@ export function originOf(host: string | null): Origin {
 export const ROUTES = new Set([
   "/",
   "/review",
+  "/privacy",
   "/usage",
   "/api/bars",
   "/api/search",

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { APP_INFO } from "@/lib/app-info";
@@ -231,6 +232,11 @@ function ProjectTab({ info }: { info: HelpInfo | null }) {
         <p className="mt-2 font-mono text-[11px] text-muted">
           v{app.version} · {app.commit}
           {app.builtAt && ` · 构建于 ${fmtTime(Date.parse(app.builtAt))}`}
+        </p>
+        <p className="mt-1 text-[11px]">
+          <Link href="/privacy" className="text-accent hover:underline">
+            隐私说明
+          </Link>
         </p>
       </Section>
 
