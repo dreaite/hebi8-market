@@ -1,7 +1,8 @@
 /**
  * Secrets live outside the repo, the vault and the data dir, in `HEBI8_SECRETS` or
- * `~/.config/hebi8` (mode 700): GitHub login sessions in `sessions.json`, written atomically with
- * mode 600, and notification channels in `notify.json`, written by hand. Nothing in here is ever
+ * `~/.config/hebi8` (mode 700): GitHub login sessions in `sessions.json` and each person's
+ * notification channels in `notify-users.json`, written atomically with mode 600, and the
+ * instance's notification settings in `notify.json`, written by hand. Nothing in here is ever
  * logged or sent to the browser.
  */
 import crypto from "node:crypto";
@@ -20,7 +21,7 @@ function ensureDir(): string {
   return dir;
 }
 
-function readJson<T>(name: string): T | null {
+export function readJson<T>(name: string): T | null {
   try {
     return JSON.parse(fs.readFileSync(path.join(secretsDir(), name), "utf8")) as T;
   } catch {
@@ -28,7 +29,7 @@ function readJson<T>(name: string): T | null {
   }
 }
 
-function writeJson(name: string, value: unknown): void {
+export function writeJson(name: string, value: unknown): void {
   const file = path.join(ensureDir(), name);
   const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });

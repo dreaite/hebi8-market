@@ -104,7 +104,7 @@ npm run dev        # http://localhost:3000
 | `HEBI8_VAULT` | `./vault` | 用户内容目录 |
 | `HEBI8_DB` | `./data/hebi8.db` | SQLite 缓存，删了会自动重建 |
 | `BINANCE_API_URL` | `https://api.binance.com` | 换成 `https://data-api.binance.vision` 等镜像 |
-| `HEBI8_SECRETS` | `~/.config/hebi8` | 反馈用的 GitHub 登录会话 `sessions.json` 和通知通道 `notify.json`，权限 700 / 600 |
+| `HEBI8_SECRETS` | `~/.config/hebi8` | GitHub 登录会话 `sessions.json`、实例的通知设置 `notify.json`、每个人的通知通道 `notify-users.json`，权限 700 / 600 |
 | `HEBI8_GITHUB_CLIENT_ID` | `app-info.ts` 的 `GITHUB_APP_CLIENT_ID` | 反馈登录用的 GitHub App client id（fork 用自己的 App 时设）；设为 `off` 关闭应用内登录，反馈只走 GitHub 网页 |
 | `HEBI8_FEEDBACK_REPO` | `dreaite/hebi8-market` | 反馈 issue 开在哪个仓库（`owner/name`） |
 | `HEBI8_GITHUB_APP_SLUG` | `hebi8-market` | App 的 slug，只用于链接 |
@@ -140,7 +140,7 @@ vault/
 | 其他人登录 | `vault/users/<login>/` | 自己的 vault |
 | 未登录 | owner 的总览和图表（含画线） | 不能改；笔记和复盘要登录后看自己的 |
 
-- 页头右侧的「登录」走帮助抽屉里同一套 GitHub device flow（和反馈共用会话，30 天）；登录后显示头像和用户名，菜单里可以退出。退出只删会话，不动 vault。
+- 页头右侧的「登录」走帮助抽屉里同一套 GitHub device flow（和反馈共用会话，30 天）；登录后显示头像和用户名，菜单里有「通知设置」和「退出」。退出只删会话，不动 vault。
 - 第一次登录的人从根 vault 的 `hebi8.yaml` 复制一份起点，去掉 `owner`、`sync`、`datasets`、`alerts`；笔记、复盘、画线从空开始。之后两边互不影响。
 - `owner`、`sync`、`datasets` 是实例设置，只认根 vault 的；写在自己 yaml 里会被忽略，总览上会提示。
 - 同步拉的是所有人引用到的标的的并集；同步后每个人的统计和通知各算各的。
@@ -182,6 +182,13 @@ alerts:                                                    # 只对一个标的�
 ```bash
 npm run notify:test
 ```
+
+**共用实例**：`notify.json` 是实例的设置——bot 的 `token`、`api` 和 `link`；其中的 `chat` 和 `webhook` 是 owner（根 vault）的通道，可以不写。其他人登录后在帮助抽屉的「通知」页签（页头菜单「通知设置」）设置自己的通道，存在 `~/.config/hebi8/notify-users.json`（页面写入，权限 600，不用手改）：
+
+- **绑定 Telegram**：点「绑定 Telegram」，打开链接在 Telegram 里点 Start，几秒后自动绑好，bot 会回一句「已绑定 hebi8：<login>」。链接里的一次性码 10 分钟有效。owner 也可以这样绑定，会替代 `notify.json` 里的 `chat`。
+- **webhook**：填地址和格式（text / json）保存，同样替代 `notify.json` 里的 `webhook`。
+- 「发测试消息」往自己的每个通道发一条，「解除绑定」「删除」去掉页面上设置的通道。
+- 绑定时 hebi8 用 `getUpdates` 读 bot 收到的消息（只在有待绑定的码时，只往外连）。所以这个 bot 要给 hebi8 专用：同一个 token 被别的程序 `getUpdates` 时两边会抢消息。
 
 ## 公式
 
@@ -237,6 +244,7 @@ src/
 │       ├── bars/             日/周/月/季 K 线 + 对齐好的引用标的
 │       ├── search/           外部搜索（Yahoo / TradingView / Binance），本地匹配在浏览器里
 │       ├── help/             帮助面板数据（只读本地）
+│       ├── notify/           当前登录者的通知通道：摘要、Telegram 绑定、webhook、测试消息
 │       └── github/           device flow 登录、退出、提交 / 列出反馈 issue
 ├── instrumentation.ts        启动应用内调度器
 ├── components/               UiProvider（搜索浮层、帮助抽屉、toast、快捷键）/ HelpPanel/ SymbolSearch / Overview / RowMenu / ChartView / KChart / ChartLegend / IndicatorDialog / CompareDialog / WatchlistPanel / FormulaEditor / NotesPanel …
@@ -253,7 +261,8 @@ src/
     ├── sync.ts scheduler.ts  同步、同步后算 stats 和通知、每日定时
     ├── series.ts synth.ts    周/月/季线合成、对齐、合成标的
     ├── stats.ts conditions.ts 总览统计与条件
-    ├── alerts.ts notify.ts   同步后通知：规则判定与状态、Telegram / webhook 投递
+    ├── alerts.ts notify.ts   同步后通知：规则判定与状态（按 vault）、每个人的通道、Telegram / webhook 投递
+    ├── telegram.ts           Telegram 绑定：一次性码、getMe、有待绑定码时才长轮询 getUpdates
     └── time.ts tz.ts week.ts 交易日换算、时区、ISO 周
 vault.example/hebi8.yaml      首次运行的起点
 tests/                        vitest

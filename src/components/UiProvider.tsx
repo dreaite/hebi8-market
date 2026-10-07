@@ -80,14 +80,14 @@ export function UiProvider({ ctx, children }: { ctx: SearchContext; children: Re
   const closeHelp = useCallback(() => setHelp(null), []);
   const login = useCallback(() => {
     setSearch(null);
-    setHelp({ tab: "feedback", notice: null, seq: ++seq.current, autoLogin: true });
+    setHelp({ tab: "notify", notice: null, seq: ++seq.current, autoLogin: true });
   }, []);
 
-  // `?help=feedback|project` opens the drawer (a link to the feedback form), then leaves the URL
+  // `?help=feedback|project|notify` opens the drawer (a link to the feedback form), then leaves the URL
   useEffect(() => {
     const url = new URL(window.location.href);
     const tab = url.searchParams.get("help");
-    if (tab !== "feedback" && tab !== "project") return;
+    if (tab !== "feedback" && tab !== "project" && tab !== "notify") return;
     url.searchParams.delete("help");
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the query only exists in the browser URL
@@ -258,7 +258,7 @@ export function LoginButton() {
 
 /** The header's identity on a shared instance: 登录, or the avatar and login with a menu. */
 export function Account({ user, enabled }: { user: { login: string; avatarUrl: string } | null; enabled: boolean }) {
-  const { login } = useUi();
+  const { login, openHelp } = useUi();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -300,6 +300,16 @@ export function Account({ user, enabled }: { user: { login: string; avatarUrl: s
       </button>
       {open && (
         <div role="menu" aria-label="账号" className="menu mt-1">
+          <button
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              openHelp("notify");
+            }}
+            className="menu-item"
+          >
+            通知设置
+          </button>
           <button role="menuitem" onClick={() => void logout()} className="menu-item">
             退出
           </button>

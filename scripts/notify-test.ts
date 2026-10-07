@@ -1,6 +1,6 @@
 /** `npm run notify:test`: send one test message to every channel in notify.json. */
 import path from "node:path";
-import { channelNames, deliver, formatDigest, readNotifyConfig } from "../src/lib/notify";
+import { channelNames, deliver, readNotifyConfig, testDigest } from "../src/lib/notify";
 import { secretsDir } from "../src/lib/secrets";
 
 async function main() {
@@ -9,10 +9,7 @@ async function main() {
   if (error) throw new Error(`${file}: ${error}`);
   const channels = channelNames(config);
   if (channels.length === 0) throw new Error(`${file} 里没有配置 telegram 或 webhook`);
-  const { title, text } = formatDigest(
-    [{ rule: "test", key: "binance:BTCUSDT", name: "测试", label: "通知通道可用", tf: "D", close: null }],
-    config.link,
-  );
+  const { title, text } = testDigest(config.link);
   const delivery = await deliver(config, title, text);
   for (const c of delivery.sent) console.log(`ok   ${c}`);
   for (const f of delivery.failed) console.log(`FAIL ${f.channel}: ${f.error}`);

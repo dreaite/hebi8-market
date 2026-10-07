@@ -1,18 +1,33 @@
 /**
- * Outbound delivery of post-sync alerts. Channels are configured by hand in `notify.json` in the
- * secrets dir (never the vault); every request is outbound, nothing listens for webhooks.
+ * Outbound delivery of post-sync alerts. The instance's settings are written by hand in
+ * `notify.json` in the secrets dir (never the vault): the Telegram bot, the chart link, and the
+ * root vault's chat and webhook. On a shared instance each person's own channels are in
+ * `notify-users.json`, written by the notification settings page. Every request is outbound,
+ * nothing listens for webhooks.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fmtPrice } from "./format";
-import { secretsDir } from "./secrets";
+import { readJson, secretsDir, writeJson } from "./secrets";
 import { TF_LABELS, type Timeframe } from "./symbols";
 
+export interface Webhook {
+  url: string;
+  format: "text" | "json";
+}
+
 export interface NotifyConfig {
-  telegram?: { token: string; chat: string; api: string };
-  webhook?: { url: string; format: "text" | "json" };
+  /** `chat` is where the root vault's alerts go; a bot without one only serves people who bind on the page */
+  telegram?: { token: string; chat?: string; api: string };
+  webhook?: Webhook;
   /** Base URL of this app, for chart links in messages */
   link?: string;
+}
+
+/** One person's channels in notify-users.json, keyed by lower-case login. */
+export interface UserChannels {
+  telegram?: { chat: string };
+  webhook?: Webhook;
 }
 
 export interface AlertEvent {
@@ -40,7 +55,7 @@ const obj = (v: unknown): Record<string, unknown> | null =>
   v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : typeof v === "number" ? String(v) : null);
 
-function httpUrl(value: string, where: string): string {
+export function httpUrl(value: string, where: string): string {
   let url: URL;
   try {
     url = new URL(value);
@@ -60,8 +75,8 @@ export function parseNotifyConfig(raw: unknown): NotifyConfig {
     const t = obj(root.telegram);
     const token = str(t?.token);
     const chat = str(t?.chat);
-    if (!token || !chat) throw new Error("notify.json 的 telegram 需要 token 和 chat");
-    out.telegram = { token, chat, api: t?.api ? httpUrl(str(t.api) ?? "", "telegram.api") : TELEGRAM_API };
+    if (!token) throw new Error("notify.json 的 telegram 需要 token");
+    out.telegram = { token, ...(chat ? { chat } : {}), api: t?.api ? httpUrl(str(t.api) ?? "", "telegram.api") : TELEGRAM_API };
   }
   if (root.webhook !== undefined) {
     const w = typeof root.webhook === "string" ? { url: root.webhook } : obj(root.webhook);
@@ -94,17 +109,68 @@ export function readNotifyConfig(): { config: NotifyConfig; error: string | null
   }
 }
 
-/**
- * Where one vault's alerts go. notify.json's chat and webhook are the root vault's (single user
- * or the owner); nobody else has channels yet, only the chart link.
- */
-export function channelsFor(vault: string): { config: NotifyConfig; error: string | null } {
-  const { config, error } = readNotifyConfig();
-  return vault === "" ? { config, error } : { config: config.link ? { link: config.link } : {}, error };
+const USERS_FILE = "notify-users.json";
+
+export function readNotifyUsers(): Record<string, UserChannels> {
+  return readJson<Record<string, UserChannels>>(USERS_FILE) ?? {};
 }
 
+/** Set (or with null, remove) one of a person's channels; someone left with none drops out of the file. */
+export function setUserChannel<C extends keyof UserChannels>(login: string, channel: C, value: UserChannels[C] | null): void {
+  const all = readNotifyUsers();
+  const key = login.toLowerCase();
+  const next: UserChannels = { ...all[key] };
+  if (value) next[channel] = value;
+  else delete next[channel];
+  if (Object.keys(next).length) all[key] = next;
+  else delete all[key];
+  writeJson(USERS_FILE, all);
+}
+
+/**
+ * Where one vault's alerts go. The root vault ('', single user or the owner) uses notify.json's
+ * chat and webhook, each replaced by the owner's own binding from the page when there is one;
+ * anyone else only ever gets what they bound. Telegram always goes through the instance's bot.
+ */
+export function channelsFor(vault: string, owner: string | null): { config: NotifyConfig; error: string | null } {
+  const { config: instance, error } = readNotifyConfig();
+  const login = vault || owner?.toLowerCase();
+  const own = login ? readNotifyUsers()[login] : undefined;
+  const chat = own?.telegram?.chat ?? (vault === "" ? instance.telegram?.chat : undefined);
+  const webhook = own?.webhook ?? (vault === "" ? instance.webhook : undefined);
+  const config: NotifyConfig = {};
+  if (instance.telegram && chat) config.telegram = { ...instance.telegram, chat };
+  if (webhook) config.webhook = webhook;
+  if (instance.link) config.link = instance.link;
+  return { config, error };
+}
+
+/** What the notification settings page shows: no chat id beyond its last 4 digits, no webhook beyond its host. */
+export interface ChannelSummary {
+  /** The instance has a Telegram bot to bind to */
+  bot: boolean;
+  /** `fromFile`: notify.json's, not bound on the page (the owner's fallback) */
+  telegram: { chat: string; fromFile: boolean } | null;
+  webhook: { host: string; format: Webhook["format"]; fromFile: boolean } | null;
+}
+
+export function channelSummary(vault: string, owner: string | null): ChannelSummary {
+  const { config } = channelsFor(vault, owner);
+  const own = readNotifyUsers()[vault || owner?.toLowerCase() || ""];
+  const chat = config.telegram?.chat;
+  return {
+    bot: Boolean(readNotifyConfig().config.telegram),
+    telegram: chat ? { chat: `…${chat.slice(-4)}`, fromFile: !own?.telegram } : null,
+    webhook: config.webhook ? { host: new URL(config.webhook.url).host, format: config.webhook.format, fromFile: !own?.webhook } : null,
+  };
+}
+
+/** What 发测试消息 and `npm run notify:test` send. */
+export const testDigest = (link?: string) =>
+  formatDigest([{ rule: "test", key: "binance:BTCUSDT", name: "测试", label: "通知通道可用", tf: "D", close: null }], link);
+
 export const channelNames = (cfg: NotifyConfig): string[] =>
-  [cfg.telegram ? "telegram" : null, cfg.webhook ? "webhook" : null].filter((c): c is string => c !== null);
+  [cfg.telegram?.chat ? "telegram" : null, cfg.webhook ? "webhook" : null].filter((c): c is string => c !== null);
 
 export const chartLink = (base: string, key: string) => `${base}/chart/${encodeURIComponent(key)}`;
 
@@ -123,7 +189,7 @@ export function formatDigest(events: AlertEvent[], link?: string): { title: stri
 
 const TIMEOUT = 15_000;
 
-async function sendTelegram(cfg: NonNullable<NotifyConfig["telegram"]>, text: string): Promise<void> {
+export async function sendTelegram(cfg: { token: string; chat: string; api: string }, text: string): Promise<void> {
   let res: Response;
   try {
     res = await fetch(`${cfg.api}/bot${cfg.token}/sendMessage`, {
@@ -160,7 +226,9 @@ async function sendWebhook(cfg: NonNullable<NotifyConfig["webhook"]>, title: str
 /** Every configured channel in parallel; one failing does not stop the others. */
 export async function deliver(cfg: NotifyConfig, title: string, text: string, events: AlertEvent[] = []): Promise<Delivery> {
   const jobs: [string, () => Promise<void>][] = [];
-  if (cfg.telegram) jobs.push(["telegram", () => sendTelegram(cfg.telegram!, text)]);
+  const telegram = cfg.telegram;
+  const chat = telegram?.chat;
+  if (telegram && chat) jobs.push(["telegram", () => sendTelegram({ ...telegram, chat }, text)]);
   if (cfg.webhook) jobs.push(["webhook", () => sendWebhook(cfg.webhook!, title, text, events)]);
   const results = await Promise.allSettled(jobs.map(([, job]) => job()));
   const out: Delivery = { sent: [], failed: [] };

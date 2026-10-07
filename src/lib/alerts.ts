@@ -122,7 +122,7 @@ export async function runAlerts(vault: string, cfg: Config, conditions: Map<stri
       return [];
     }
 
-    const { config, error } = channelsFor(vault);
+    const { config, error } = channelsFor(vault, cfg.owner);
     if (error) log(`notify.json: ${error}`);
     const { title, text } = formatDigest(events, config.link);
     log(`${events.length} new alert(s)${who}: ${events.map((e) => `${e.key} ${e.rule}`).join(", ")}`);

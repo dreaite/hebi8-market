@@ -70,10 +70,12 @@ describe("notify.json", () => {
       link: "http://h:8808",
     });
     expect(parseNotifyConfig({})).toEqual({});
+    // a bot without a chat: on a shared instance people bind their chats on the page
+    expect(parseNotifyConfig({ telegram: { token: "1:a" } })).toEqual({ telegram: { token: "1:a", api: "https://api.telegram.org" } });
   });
 
   it("reports sections that are present but broken", () => {
-    expect(() => parseNotifyConfig({ telegram: { token: "1:a" } })).toThrow(/chat/);
+    expect(() => parseNotifyConfig({ telegram: { chat: 42 } })).toThrow(/token/);
     expect(() => parseNotifyConfig({ webhook: { url: "ftp://x" } })).toThrow(/http/);
     expect(() => parseNotifyConfig({ webhook: { url: "https://x", format: "xml" } })).toThrow(/format/);
     expect(() => parseNotifyConfig([])).toThrow();

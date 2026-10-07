@@ -7,13 +7,14 @@ import { recentErrors } from "@/lib/client-errors";
 import { FEEDBACK_TYPES, feedbackContext, webIssueUrl, type FeedbackType, type PageInfo } from "@/lib/feedback";
 import { fmtAgo } from "@/lib/format";
 import type { IssueSummary } from "@/lib/github";
+import type { ChannelSummary } from "@/lib/notify";
 import type { HelpInfo } from "@/lib/help-info";
 import { getChartContext } from "@/lib/page-context";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { IconClose, IconExternal } from "./chart-icons";
 import { isEditable, type ToastOptions } from "./UiProvider";
 
-export type HelpTab = "project" | "feedback";
+export type HelpTab = "project" | "feedback" | "notify";
 
 const SHORTCUTS: { group: string; rows: [string, string][] }[] = [
   {
@@ -157,6 +158,7 @@ export function HelpPanel({
               [
                 ["project", "项目"],
                 ["feedback", "反馈"],
+                ["notify", "通知"],
               ] as const
             ).map(([id, label]) => (
               <button
@@ -180,6 +182,8 @@ export function HelpPanel({
           {loadError && <p className="mb-3 text-down">读取失败：{loadError}</p>}
           {tab === "project" ? (
             <ProjectTab info={info} />
+          ) : tab === "notify" ? (
+            <NotifyTab info={info} autoLogin={autoLogin} reload={load} toast={toast} />
           ) : (
             <FeedbackTab info={info} notice={notice} setNotice={setNotice} autoLogin={autoLogin} reload={load} toast={toast} />
           )}
@@ -540,6 +544,261 @@ function AccountBlock({
         {aside && <span className="text-[11px] text-muted">{aside}</span>}
       </div>
     </div>
+  );
+}
+
+/**
+ * Each person's channels on a shared instance (design §2.5). In single-user mode the channels
+ * are notify.json's, which only the person who runs the instance edits.
+ */
+function NotifyTab({
+  info,
+  autoLogin,
+  reload,
+  toast,
+}: {
+  info: HelpInfo | null;
+  autoLogin: boolean;
+  reload: () => Promise<void>;
+  toast: (message: string, opts?: ToastOptions) => void;
+}) {
+  if (!info) return <p className="text-muted">读取中…</p>;
+  const notifyJson = <code className="font-mono">~/.config/hebi8/notify.json</code>;
+  if (!info.shared) {
+    return (
+      <Section title="通知">
+        <p className="leading-relaxed">
+          标了 <code className="font-mono">notify</code> 的条件和 <code className="font-mono">alerts</code> 规则在同步后新成立时推一条摘要。单用户模式下通道写在服务器的 {notifyJson}
+          （Telegram bot 和 chat、webhook），改完运行 <code className="font-mono">npm run notify:test</code> 发一条试试。
+        </p>
+        <p className="mt-2 leading-relaxed text-muted">在 hebi8.yaml 里写了 owner 的共用实例，每个人登录后在这里绑定自己的通道。</p>
+      </Section>
+    );
+  }
+  if (!info.github.enabled) {
+    return <p className="leading-relaxed text-muted">这台 hebi8 没有配置 GitHub App，不能登录，也就不能按人设置通知；通道写在 {notifyJson}。</p>;
+  }
+  const user = info.github.user;
+  return (
+    <>
+      <AccountBlock
+        info={info}
+        autoLogin={autoLogin}
+        reload={reload}
+        toast={toast}
+        intro="登录后用你自己的自选、笔记和复盘，并设置你自己的通知：你标了 notify 的条件和 alerts 规则新成立时，推到你绑定的 Telegram 或 webhook。"
+      />
+      {user && <NotifySettings key={user.login} toast={toast} />}
+    </>
+  );
+}
+
+async function request<T>(url: string, method: string, body?: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method,
+    cache: "no-store",
+    ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+  return json as T;
+}
+
+const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+function NotifySettings({ toast }: { toast: (message: string, opts?: ToastOptions) => void }) {
+  const [summary, setSummary] = useState<ChannelSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [binding, setBinding] = useState<{ url: string; expiresAt: number } | null>(null);
+  const [bindStatus, setBindStatus] = useState<string | null>(null);
+  const [url, setUrl] = useState("");
+  const [format, setFormat] = useState<"text" | "json">("text");
+
+  const load = useCallback(async () => {
+    try {
+      setSummary(await request<ChannelSummary>("/api/notify", "GET"));
+    } catch (err) {
+      setError(errorText(err));
+    }
+  }, []);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- state is set after the fetch resolves
+    void load();
+  }, [load]);
+
+  /** Run one action; its result, when it is the new summary, replaces the old one. */
+  const act = async <T,>(fn: () => Promise<T>, done?: (result: T) => void) => {
+    setBusy(true);
+    setError(null);
+    try {
+      done?.(await fn());
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // the server long-polls the bot; this only asks it whether the /start has arrived
+  useEffect(() => {
+    if (!binding) return;
+    let stopped = false;
+    let timer = 0;
+    const poll = async () => {
+      let result: { status: string; error?: string };
+      try {
+        result = await request("/api/notify/telegram/poll", "POST", {});
+      } catch (err) {
+        result = { status: "pending", error: errorText(err) };
+      }
+      if (stopped) return;
+      if (result.status === "bound") {
+        setBinding(null);
+        toast("已绑定 Telegram");
+        void load();
+      } else if (result.status === "expired") {
+        setBinding(null);
+        setError("绑定码已过期，请重新点「绑定 Telegram」");
+      } else {
+        setBindStatus(result.error ? `等待中 · ${result.error}` : null);
+        timer = window.setTimeout(() => void poll(), 3000);
+      }
+    };
+    timer = window.setTimeout(() => void poll(), 3000);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, [binding, load, toast]);
+
+  if (!summary) return error ? <p className="text-down">{error}</p> : <p className="text-muted">读取中…</p>;
+  const { telegram, webhook } = summary;
+  const fromFile = <span className="text-muted">（notify.json，在这里设置会替代它）</span>;
+
+  return (
+    <>
+      <Section title="通道">
+        <Row label="Telegram">
+          {telegram ? (
+            <>
+              已绑定 <span className="font-mono">{telegram.chat}</span>
+              {telegram.fromFile && fromFile}
+            </>
+          ) : (
+            <span className="text-muted">未绑定</span>
+          )}
+        </Row>
+        <Row label="webhook">
+          {webhook ? (
+            <>
+              <span className="font-mono">{webhook.host}</span> · {webhook.format}
+              {webhook.fromFile && fromFile}
+            </>
+          ) : (
+            <span className="text-muted">未设置</span>
+          )}
+        </Row>
+        {error && <p className="mt-1 text-down">{error}</p>}
+      </Section>
+
+      <Section title="Telegram">
+        {!summary.bot ? (
+          <p className="leading-relaxed text-muted">这台 hebi8 没有配置 Telegram bot（notify.json 的 telegram.token），请找部署的人。</p>
+        ) : binding ? (
+          <div className="flex flex-col gap-2" aria-live="polite">
+            <p className="leading-relaxed">在 Telegram 里打开 bot，点 Start，这里会自动完成绑定（10 分钟内有效）。</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <a href={binding.url} target="_blank" rel="noreferrer" className="btn btn-primary inline-flex items-center gap-1">
+                打开 Telegram 点 Start
+                <IconExternal size={12} />
+              </a>
+              <button type="button" className="btn" onClick={() => setBinding(null)}>
+                取消
+              </button>
+            </div>
+            <p className="text-[11px] text-muted">{bindStatus ?? "等待中…"}</p>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className={`btn ${telegram && !telegram.fromFile ? "btn-secondary" : "btn-primary"}`}
+              disabled={busy}
+              onClick={() =>
+                void act(
+                  () => request<{ url: string; expiresAt: number }>("/api/notify/telegram", "POST", {}),
+                  (b) => {
+                    setBindStatus(null);
+                    setBinding(b);
+                  },
+                )
+              }
+            >
+              {telegram && !telegram.fromFile ? "重新绑定" : "绑定 Telegram"}
+            </button>
+            {telegram && !telegram.fromFile && (
+              <button type="button" className="btn" disabled={busy} onClick={() => void act(() => request<ChannelSummary>("/api/notify/telegram", "DELETE"), setSummary)}>
+                解除绑定
+              </button>
+            )}
+          </div>
+        )}
+      </Section>
+
+      <Section title="webhook">
+        <form
+          className="flex flex-col gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void act(
+              () => request<ChannelSummary>("/api/notify/webhook", "PUT", { url, format }),
+              (next) => {
+                setSummary(next);
+                setUrl("");
+              },
+            );
+          }}
+        >
+          <input className="input w-full font-mono" placeholder="https://ntfy.sh/你的主题" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="webhook 地址" />
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="seg" role="group" aria-label="格式">
+              {(["text", "json"] as const).map((f) => (
+                <button key={f} type="button" aria-pressed={format === f} onClick={() => setFormat(f)}>
+                  {f}
+                </button>
+              ))}
+            </div>
+            <button type="submit" className="btn btn-secondary" disabled={busy || !url.trim()}>
+              保存
+            </button>
+            {webhook && !webhook.fromFile && (
+              <button type="button" className="btn" disabled={busy} onClick={() => void act(() => request<ChannelSummary>("/api/notify/webhook", "DELETE"), setSummary)}>
+                删除
+              </button>
+            )}
+          </div>
+          <p className="text-[11px] text-muted">text：摘要作为正文（ntfy 直接能用）；json：{"{ title, text, events }"}</p>
+        </form>
+      </Section>
+
+      <button
+        type="button"
+        className="btn btn-secondary"
+        disabled={busy || (!telegram && !webhook)}
+        onClick={() =>
+          void act(
+            () => request<{ sent: string[]; failed: { channel: string; error: string }[] }>("/api/notify/test", "POST", {}),
+            ({ sent, failed }) => {
+              if (sent.length) toast(`已发送到 ${sent.join("、")}`);
+              if (failed.length) setError(failed.map((f) => `${f.channel}：${f.error}`).join("；"));
+            },
+          )
+        }
+      >
+        发测试消息
+      </button>
+    </>
   );
 }
 
