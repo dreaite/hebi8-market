@@ -165,7 +165,7 @@ function Th({
     </>,
   );
   return (
-    <th style={width ? { width } : undefined} aria-sort={sorted} className={`p-0 text-[11px] font-normal text-muted ${className}`}>
+    <th {...card.hover} style={width ? { width } : undefined} aria-sort={sorted} className={`p-0 text-[11px] font-normal text-muted ${className}`}>
       {sortKey ? (
         <button
           {...card.trigger}
@@ -558,7 +558,7 @@ function GroupRows({
               }}
               onContextMenu={(e) => {
                 e.preventDefault();
-                setMenuFor({ key: row.key, at: pointerAnchor(e) });
+                setMenuFor({ key: row.key, at: pointerAnchor(e, e.currentTarget.querySelector<HTMLElement>("[data-row-menu]")!) });
               }}
               className="group cursor-pointer bg-card hover:bg-bg/60"
             >
@@ -607,6 +607,7 @@ function GroupRows({
                     e.stopPropagation();
                     setMenuFor(menuOpen ? null : { key: row.key, at: buttonAnchor(e.currentTarget) });
                   }}
+                  data-row-menu=""
                   aria-haspopup="menu"
                   aria-expanded={menuOpen}
                   aria-label={`${row.name} 的操作`}
