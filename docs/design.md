@@ -538,7 +538,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 **笔记**：右侧边栏的「笔记」面板，显示 `notes/<fileKey>.md` 的渲染结果，「编辑」切换 textarea，自动保存走 Server Action。没有笔记时显示「写下为什么看它」。
 
-**数据流**：客户端组件请求 `GET /api/bars?key=&tf=&prices=&with=k1,k2`，`with` = 对比列表 ∪ 已开启公式指标的 `refs` ∪ bench；响应里带对齐好的 `refs`，公式模板通过闭包拿到。`tf`/`log`/`style`/指标开关/参数变化写回 yaml `chart:`（参数编辑去抖），`ADJ` 写回 `prices`；`%` 坐标、画线模式、侧栏面板只存 localStorage。图例的眼睛（隐藏指标 / 对比）只在当前页面有效。
+**数据流**：客户端组件请求 `GET /api/bars?key=&tf=&prices=&with=k1,k2`，`with` = 对比列表 ∪ 已开启公式指标的 `refs` ∪ bench；响应里带对齐好的 `refs`，公式模板通过闭包拿到。K 线、图例、指标参数和参数弹窗都跟随已经到手的那组 K 线的周期（`dataTf`），点了新周期、数据还没回来时不会把周线参数套在日线上。`tf`/`log`/`style`/指标开关/参数变化写回 yaml `chart:`（参数编辑去抖），`ADJ` 写回 `prices`；`%` 坐标、画线模式、侧栏面板只存 localStorage。图例的眼睛（隐藏指标 / 对比）只在当前页面有效。
 
 ### 5.3 复盘 `/review`
 

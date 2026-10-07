@@ -236,10 +236,11 @@ export function ChartView({
     if (!readOnly) void setChartPrefs(partial).then(report);
   };
 
-  const tfOverrides = useMemo(() => overrides[tf] ?? {}, [overrides, tf]);
+  // indicator parameters follow the bars on screen, so a timeframe still loading never runs weekly MAs on daily bars
+  const tfOverrides = useMemo(() => overrides[dataTf] ?? {}, [overrides, dataTf]);
   const params = useMemo(
-    () => Object.fromEntries(INDICATORS.map((d) => [d.name, tfOverrides[d.name] ?? d.params[tf]])),
-    [tf, tfOverrides],
+    () => Object.fromEntries(INDICATORS.map((d) => [d.name, tfOverrides[d.name] ?? d.params[dataTf]])),
+    [dataTf, tfOverrides],
   );
   const hasBench = Boolean(bench);
   const templates = useMemo(
@@ -282,9 +283,9 @@ export function ChartView({
     const next = { ...tfOverrides };
     if (value) next[name] = value;
     else delete next[name];
-    setOverrides({ ...overrides, [tf]: next });
+    setOverrides({ ...overrides, [dataTf]: next });
     clearTimeout(paramTimer.current);
-    paramTimer.current = setTimeout(() => persist({ params: { [tf]: { [name]: value ?? [] } } }), 600);
+    paramTimer.current = setTimeout(() => persist({ params: { [dataTf]: { [name]: value ?? [] } } }), 600);
   };
   const saveFormula = async (def: FormulaDef) => {
     const result = await saveIndicator(def);
@@ -835,9 +836,9 @@ export function ChartView({
       )}
       {paramDef && (
         <ParamDialog
-          key={`${paramDef.name}:${tf}`}
+          key={`${paramDef.name}:${dataTf}`}
           def={paramDef}
-          tf={tf}
+          tf={dataTf}
           value={params[paramDef.name] ?? []}
           overridden={paramDef.name in tfOverrides}
           onSave={(p) => setParams(paramDef.name, p)}
