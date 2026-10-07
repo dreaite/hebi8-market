@@ -109,7 +109,10 @@ chart:                         # 全局图表偏好（UI 改动会写回这里�
 - 一个标的只出现在一个组里。显示名：`name` > 内置字典（`src/lib/wellknown.ts`）的中文名 > 数据源返回的名字。
 - yaml 由 UI 写回时必须保留注释和顺序：用 `yaml` 包的 `parseDocument` 修改后 `toString()`，原子写入（写临时文件再 rename）。
 - yaml 解析失败时页面显示错误（含行号），服务不崩。
-- **旧的 `conditions`**（`{ id, label, formula, tf, notify }`，以前的示例配置给每个人都预置了一组）照样能读，读成对全部自选的警报：`id` 不变（所以状态接得上；不是字母数字下划线横线的 id 丢掉，只是状态重来），`formula` 当 `when`，`tf` 缺省 W，没标 `notify: true` 的读成 `notify: false`。第一次在界面上建、改、暂停或删除警报时（`editAlerts`），它们按同样的写法搬进 `alerts` 末尾，`conditions` 删掉。`vault.example` 不再预置任何警报或条件。
+- **旧的 `conditions`**（`{ id, label, formula, tf, notify }`，以前的示例配置给每个人都预置了一组）照样能读，读成对全部自选的警报：`formula` 当 `when`，`tf` 缺省 W，`label` 缺省是 id，没标 `notify: true` 的读成 `notify: false`。id 沿用原来的；`alerts` 里已经有同名 id 时改成 `cond-<id>`（现有警报的 id 不变）；不是字母数字下划线横线的 id 去掉，改用哈希。
+  - **状态跟着走**：旧状态行是 `cond:<id>`，`Config.conditionRules` 记着它们各自变成哪条警报。每次判断（含盘中轮询）、总览读徽标、界面改警报之前，先把这个 vault 的 `cond:<id>` 行改名过去（`adoptConditionState`，`state`、`fired_bar`、`fired_at` 原样保留，改过一次就是空操作），所以本周已触发的仍显示「本周新触发」，升级前为假、升级后为真照样推送。
+  - **yaml 搬家**：第一次在界面上建、改、暂停或删除警报时（`editAlerts`），每个条目**原样**（节点本身，注释和别名都在）搬到 `alerts` 末尾：`formula` 键改名为 `when`，id 按上面的规则改，缺省值写明（`label`、`tf: W`、`notify: false`），`conditions:` 行和第一个条目上方的注释跟着第一个条目走，然后删掉 `conditions`。
+- `vault.example` 不再预置任何警报或条件。
 
 ### 1.2 `notes/<fileKey>.md` 与 `journal/`
 
@@ -162,7 +165,7 @@ CREATE TABLE stats (
 );
 CREATE TABLE alert_state (                  -- §2.5；删库后第一次同步只记录、不推送；总览的徽标也从这里读（§5.1）
   vault TEXT NOT NULL,
-  rule TEXT NOT NULL, key TEXT NOT NULL,    -- rule：alert:<id 或 hash>；对全部自选的警报每个自选标的一行。旧的 cond:<id> 行在下一次判断时清掉
+  rule TEXT NOT NULL, key TEXT NOT NULL,    -- rule：alert:<id 或 hash>；对全部自选的警报每个自选标的一行。旧的 cond:<id> 行先改名成对应警报的行（§1.1），改不过去的在下一次判断时清掉
   state INTEGER,                            -- 上次同步看到的结果 0/1
   fired_bar INTEGER,                        -- 上次推送时那根 K 线的 t，同一根只推一次
   fired_at INTEGER,
@@ -332,7 +335,7 @@ date,open,high,low,close,volume
 
 **不推送的警报**（`notify: false`）照样判定、照样记 `fired_at`（总览靠它显示「本周新触发」），只是不进摘要；投递失败时它们的状态照常提交。
 
-**清理**：每次判断后，删掉 `alert_state` 里不再被 yaml 覆盖的行（警报删了、标的不在自选里了、旧的 `cond:` 行）。
+**清理**：每次判断后，删掉 `alert_state` 里不再被 yaml 覆盖的行（警报删了、标的不在自选里了、没对上任何警报的旧 `cond:` 行）。
 
 **按人**：每个 vault 各自判定、各自投递，状态表按 `vault` 分开。
 
