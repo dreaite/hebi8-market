@@ -14,6 +14,7 @@ import { isRemoteDataset } from "../config";
 import { dataDir } from "../db";
 import { dedupeBars, type Bar } from "../series";
 import { DATA_ID, DATA_TICKER } from "../symbols";
+import { countUpstream } from "../traffic";
 import { readConfig, readConfigSafe, vaultDir } from "../vault";
 import type { SearchHit, SourceAdapter } from "./types";
 
@@ -172,7 +173,7 @@ async function datasetRoot(name: string, location: string): Promise<string> {
   }
   const cached = pulls.get(name);
   if (cached && cached.url === location && Date.now() - cached.at < PULL_TTL) return cached.job;
-  const job = pull(name, location);
+  const job = countUpstream("data", () => pull(name, location));
   pulls.set(name, { url: location, at: Date.now(), job });
   job.catch(() => pulls.delete(name));
   return job;

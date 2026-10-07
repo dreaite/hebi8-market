@@ -94,9 +94,21 @@ export interface Config {
   /** Dataset name → git URL or local directory (absolute, `~/`, or relative to the vault) */
   datasets: Record<string, string>;
   chart: ChartPrefs;
+  /** Daily limits that notify the owner once a day when passed (§1.7); root vault only */
+  usage: UsageLimits;
   /** Instance settings written in a user's yaml, which only the root vault's count */
   ignored: string[];
 }
+
+/** Each limit is off when null. */
+export interface UsageLimits {
+  /** Distinct visitors through the public tunnel in a day */
+  visitors: number | null;
+  /** Upstream calls that look rate limited in a day, all sources together */
+  limited: number | null;
+}
+
+export const USAGE_LIMITS: Record<keyof UsageLimits, string> = { visitors: "每日公网独立访客", limited: "每日上游疑似限流次数" };
 
 export class ConfigError extends Error {}
 
@@ -236,6 +248,15 @@ export function normalizeConfig(raw: unknown): Config {
     datasets[name] = location;
   }
 
+  const rawUsage = obj(root.usage);
+  const usage: UsageLimits = { visitors: null, limited: null };
+  for (const k of Object.keys(USAGE_LIMITS) as (keyof UsageLimits)[]) {
+    const v = rawUsage[k];
+    if (v == null) continue;
+    if (!Number.isInteger(v) || (v as number) < 1) throw new ConfigError(`usage.${k}：应为正整数`);
+    usage[k] = v as number;
+  }
+
   const chart = obj(root.chart);
   const style = chart.style ?? DEFAULT_CHART.style;
   if (typeof style !== "string" || !(style in CHART_STYLES)) throw new ConfigError(`chart.style：未知样式「${String(style)}」`);
@@ -260,19 +281,20 @@ export function normalizeConfig(raw: unknown): Config {
       indicators: Array.isArray(chart.indicators) ? chart.indicators.map(String) : DEFAULT_CHART.indicators,
       params: parseParams(chart.params),
     },
+    usage,
     ignored: [],
   };
 }
 
 /** Settings that belong to the instance, not a person: read from the root vault only. */
-export const INSTANCE_KEYS = ["owner", "sync", "datasets"] as const;
+export const INSTANCE_KEYS = ["owner", "sync", "datasets", "usage"] as const;
 
 /** A user's yaml on a shared instance: the instance settings come from the root vault's config. */
 export function normalizeUserConfig(raw: unknown, root: Config): Config {
   const own = { ...obj(raw) };
   const ignored = INSTANCE_KEYS.filter((k) => k in own);
   for (const k of INSTANCE_KEYS) delete own[k];
-  return { ...normalizeConfig(own), owners: root.owners, owner: root.owner, sync: root.sync, datasets: root.datasets, ignored };
+  return { ...normalizeConfig(own), owners: root.owners, owner: root.owner, sync: root.sync, datasets: root.datasets, usage: root.usage, ignored };
 }
 
 /** The short name an alert's generated label uses: the alias, else the ticker. */

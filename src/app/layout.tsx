@@ -50,7 +50,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
                   复盘
                 </Link>
                 {viewer?.shared && (
-                  <Account user={viewer.login ? { login: viewer.login, avatarUrl: viewer.avatarUrl ?? "" } : null} enabled={Boolean(githubClientId())} />
+                  <Account user={viewer.login ? { login: viewer.login, avatarUrl: viewer.avatarUrl ?? "" } : null} enabled={Boolean(githubClientId())} owner={viewer.isOwner} />
                 )}
                 <HelpButton />
               </nav>

@@ -89,6 +89,36 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
         fetched_at INTEGER NOT NULL
       );
     `),
+  (db) =>
+    db.exec(`
+      -- Traffic monitoring (src/lib/usage.ts), kept 90 days. day: the instance's local day as unix
+      -- seconds at UTC midnight, like bars.t. visitor: salted hash of the client IP, never the IP.
+      CREATE TABLE traffic (
+        day     INTEGER NOT NULL,
+        origin  TEXT    NOT NULL,
+        kind    TEXT    NOT NULL,
+        path    TEXT    NOT NULL,
+        visitor TEXT    NOT NULL,
+        login   TEXT    NOT NULL,
+        n       INTEGER NOT NULL,
+        last    INTEGER NOT NULL,
+        PRIMARY KEY (day, origin, kind, path, visitor, login)
+      ) WITHOUT ROWID;
+      CREATE TABLE upstream (
+        day      INTEGER NOT NULL,
+        source   TEXT    NOT NULL,
+        requests INTEGER NOT NULL,
+        failures INTEGER NOT NULL,
+        limited  INTEGER NOT NULL,
+        PRIMARY KEY (day, source)
+      ) WITHOUT ROWID;
+      -- Which usage limits already notified the owner on a day
+      CREATE TABLE usage_alerts (
+        kind TEXT    NOT NULL,
+        day  INTEGER NOT NULL,
+        PRIMARY KEY (kind, day)
+      ) WITHOUT ROWID;
+    `),
 ];
 
 const dbFile = () => process.env.HEBI8_DB ?? path.join(process.cwd(), "data", "hebi8.db");

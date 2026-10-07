@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     const user = await getUser(result.tokens.access_token);
     const sessionId = createSession({ login: user.login, avatar_url: user.avatar_url, ...result.tokens });
     const res = NextResponse.json({ status: "done", user: { login: user.login, avatarUrl: user.avatar_url } }, { headers: { "Cache-Control": "no-store" } });
-    res.cookies.set(SESSION_COOKIE, sessionId, cookieOptions(SESSION_DAYS * 86400));
+    res.cookies.set(SESSION_COOKIE, sessionId, cookieOptions(SESSION_DAYS * 86400, request.headers));
     return res;
   } catch (err) {
     const status = err instanceof GitHubError && err.status >= 400 && err.status < 600 ? err.status : 502;

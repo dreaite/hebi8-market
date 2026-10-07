@@ -6,7 +6,7 @@ import { compile } from "@/indicators/formula";
 import { describeError } from "@/indicators/formula-indicators";
 import type { AlertCond, AlertCondition, AlertTrigger } from "@/lib/alert-conds";
 import { alertIndex, forgetAlerts, serializeAlerts, setAlertsEnabled } from "@/lib/alerts";
-import { CHART_STYLES, findItem, parseAlert, resolveKey, type ChartPrefs, type ConditionDef, type FormulaDef } from "@/lib/config";
+import { CHART_STYLES, USAGE_LIMITS, findItem, parseAlert, resolveKey, type ChartPrefs, type ConditionDef, type FormulaDef, type UsageLimits } from "@/lib/config";
 import { CHANGE_PERIODS, MAX_PERIODS } from "@/lib/periods";
 import type { Prices } from "@/lib/series";
 import { getSymbol } from "@/lib/store";
@@ -369,6 +369,23 @@ export async function setPeriods(list: string[]): Promise<ActionResult> {
     const periods = (Array.isArray(list) ? list : []).filter((p) => valid.has(p)).slice(0, MAX_PERIODS);
     if (!periods.length) throw new Error("至少选一个周期");
     updateConfig(dir, (doc) => setList(doc, ["periods"], periods));
+  });
+}
+
+/** The owner's daily limits under `usage` in the root yaml (§1.7); null removes one, and an empty `usage` goes too. */
+export async function setUsageLimits(limits: UsageLimits): Promise<ActionResult> {
+  return attempt(({ dir, isOwner }) => {
+    if (!isOwner) throw new Error("只有 owner 能改提醒阈值");
+    updateConfig(dir, (doc) => {
+      for (const k of Object.keys(USAGE_LIMITS) as (keyof UsageLimits)[]) {
+        const v = limits?.[k] ?? null;
+        if (v === null) doc.deleteIn(["usage", k]);
+        else if (Number.isInteger(v) && v > 0) setScalar(doc, ["usage", k], v);
+        else throw new Error(`${USAGE_LIMITS[k]}应为正整数`);
+      }
+      const usage = doc.get("usage");
+      if (isMap(usage) && usage.items.length === 0) doc.delete("usage");
+    });
   });
 }
 

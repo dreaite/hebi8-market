@@ -87,12 +87,14 @@ export async function api<T>(path: string, { method = "GET", token, body, repo }
 
 const HOST_RE = /^(?:[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/;
 
+/** The request came over HTTPS: through the Cloudflare tunnel, which says so in `X-Forwarded-Proto`. */
+export const isHttps = (headers: Headers) => headers.get("x-forwarded-proto")?.split(",")[0].trim() === "https";
+
 /** `http(s)://host[:port]` of the request, from `Host` and `X-Forwarded-Proto` (default http). */
 export function requestOrigin(headers: Headers): string {
   const host = headers.get("host") ?? "";
   if (!HOST_RE.test(host)) throw new Error(`请求的 Host 不合法：${host.slice(0, 80)}`);
-  const proto = headers.get("x-forwarded-proto")?.split(",")[0].trim();
-  return `${proto === "https" ? "https" : "http"}://${host}`;
+  return `${isHttps(headers) ? "https" : "http"}://${host}`;
 }
 
 /** A browser POST from another site (the session cookie is SameSite=Lax, this is belt and braces). */
@@ -106,9 +108,9 @@ export function crossSite(headers: Headers): boolean {
   }
 }
 
-/** No HTTPS on the tailnet, so never `Secure`. */
+/** `Secure` over HTTPS only: the tailnet is plain http and has to keep its login. */
 export const SESSION_COOKIE = "hebi8m_session";
-export const cookieOptions = (maxAgeSec: number) => ({ httpOnly: true, sameSite: "lax" as const, secure: false, path: "/", maxAge: maxAgeSec });
+export const cookieOptions = (maxAgeSec: number, headers: Headers) => ({ httpOnly: true, sameSite: "lax" as const, secure: isHttps(headers), path: "/", maxAge: maxAgeSec });
 
 export const randomToken = (bytes = 16) => crypto.randomBytes(bytes).toString("base64url");
 

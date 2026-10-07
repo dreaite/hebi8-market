@@ -257,7 +257,7 @@ export function LoginButton() {
 }
 
 /** The header's identity on a shared instance: 登录, or the avatar and login with a menu. */
-export function Account({ user, enabled }: { user: { login: string; avatarUrl: string } | null; enabled: boolean }) {
+export function Account({ user, enabled, owner = false }: { user: { login: string; avatarUrl: string } | null; enabled: boolean; owner?: boolean }) {
   const { login, openHelp } = useUi();
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -311,6 +311,18 @@ export function Account({ user, enabled }: { user: { login: string; avatarUrl: s
           >
             通知设置
           </button>
+          {owner && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                router.push("/usage");
+              }}
+              className="menu-item"
+            >
+              使用情况
+            </button>
+          )}
           <button role="menuitem" onClick={() => void logout()} className="menu-item">
             退出
           </button>

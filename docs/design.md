@@ -10,7 +10,7 @@ hebi8 是一个**周度复盘工具**，不是 TradingView 的替代品。每天
 | 深看 | `/chart/[key]` 图表：K 线、指标、对比、画线、笔记 | 值得细看的几个，结构是什么样？和别的比呢？ |
 | 记录 | `/review` 复盘：本周日志、上周日志、本周变化汇总 | 上周怎么想的，这周怎么想？ |
 
-约束：只在 Tailscale 内网；只存日线，周/月/季线读时合成；**读取永远不碰网络**。默认单用户、无登录；在 yaml 里设了 `owner` 之后，局域网里的几个人可以共用一台实例，每人用 GitHub 登录后看到自己的自选、画线、笔记和通知（§1.6）。
+约束：本体只绑定 Tailscale IP，另经 Cloudflare Tunnel 公开（`https://market-hebi8.dreaife.tokyo`，cloudflared 转发到 Tailscale 地址），暂时完全公开、不限流，只做流量监控（§1.7）；只存日线，周/月/季线读时合成；**读取永远不碰网络**。默认单用户、无登录；在 yaml 里设了 `owner` 之后，几个人可以共用一台实例，每人用 GitHub 登录后看到自己的自选、画线、笔记和通知（§1.6）。
 
 第八天之外只有两种打扰，都推到 Telegram 或 webhook：每次同步后，自己标了 `notify` 的条件**新成立**（§2.5）；以及价格警报，有警报的标的盘中每 5 分钟取一次最新价来判断（§2.6）。只存日线，不存日内 K 线。
 
@@ -94,6 +94,10 @@ alerts:                        # 价格警报（§2.6）；图表上建的写成
 datasets:                      # 自定义数据集（§2.4）：名字 → git 地址或本机目录
   gpu: https://github.com/dreaife/gpu-prices
 
+usage:                         # 可省；超过时给 owner 发一条提醒，每天每种最多一次（§1.7）；只提醒，不限流
+  visitors: 200                # 每日公网独立访客
+  limited: 20                  # 每日上游疑似限流次数（所有源合计）
+
 chart:                         # 全局图表偏好（UI 改动会写回这里）
   tf: W                        # D | W | M | Q
   log: true
@@ -175,17 +179,33 @@ CREATE TABLE quotes (                       -- §2.6：盘中轮询拿到的最�
   session TEXT NOT NULL,                                -- open | closed | pre | post | always
   fetched_at INTEGER NOT NULL
 );
+CREATE TABLE traffic (                      -- §1.7：按天聚合的请求计数，保留 90 天
+  day INTEGER NOT NULL,                     -- 实例时区（sync.tz）的日期，UTC 零点的 unix 秒，同 bars.t
+  origin TEXT NOT NULL,                     -- public（隧道）| tailnet
+  kind TEXT NOT NULL,                       -- page | prefetch | action | api
+  path TEXT NOT NULL,                       -- 不含查询串，最长 200
+  visitor TEXT NOT NULL,                    -- 客户端 IP 的加盐 HMAC 前 16 位，不存明文 IP
+  login TEXT NOT NULL,                      -- 有会话时的 GitHub login（小写），否则 ''
+  n INTEGER NOT NULL, last INTEGER NOT NULL,-- 请求数；最近一次的 unix 秒
+  PRIMARY KEY (day, origin, kind, path, visitor, login)
+) WITHOUT ROWID;
+CREATE TABLE upstream (                     -- §1.7：按天、按源的上游调用
+  day INTEGER NOT NULL, source TEXT NOT NULL,
+  requests INTEGER NOT NULL, failures INTEGER NOT NULL, limited INTEGER NOT NULL,  -- failures 含 limited
+  PRIMARY KEY (day, source)
+) WITHOUT ROWID;
+CREATE TABLE usage_alerts (kind TEXT NOT NULL, day INTEGER NOT NULL, PRIMARY KEY (kind, day)) WITHOUT ROWID;  -- 哪天哪种阈值已经提醒过
 ```
 
 `symbols` 和 `bars` 里只有缓存和元数据，**没有任何用户字段**（名字、分组、基准、排序都在 yaml），所有人共用；`stats` 和 `alert_state` 按 vault 分开。两表加 `vault` 列的迁移直接删表重建，下次同步重算。
 
 ### 1.5 用户配置目录（`HEBI8_SECRETS`，默认 `~/.config/hebi8/market`，目录 700、文件 600）
 
-不在 vault、不在 data、不进 git：`sessions.json`（GitHub 登录，§5.8）、`notify.json`（实例的通知设置，§2.5）、`notify-users.json`（每个人绑定的通道，§2.5）。
+不在 vault、不在 data、不进 git：`sessions.json`（GitHub 登录，§5.8）、`notify.json`（实例的通知设置，§2.5）、`notify-users.json`（每个人绑定的通道，§2.5）、`traffic-salt.json`（访客哈希的盐，首次用到时生成，§1.7）。
 
 ### 1.6 多人共用一台实例
 
-局域网里几个人共用一台 hebi8：K 线缓存、同步、数据集是共享的；**自选、别名、公式指标、条件、告警、图表偏好、笔记、复盘、画线和通知都是各人的**。
+几个人共用一台 hebi8：K 线缓存、同步、数据集是共享的；**自选、别名、公式指标、条件、告警、图表偏好、笔记、复盘、画线和通知都是各人的**。
 
 **开关**：根 vault 的 `hebi8.yaml` 写 `owner: <GitHub login>`，或者一个列表 `owner: [dreaife, dreaifekks]`（同一个人的几个账号）。列表里任何一个账号登录都用根 vault，页面上称呼第一个。没写就是单用户模式，行为和现在完全一样（不用登录，谁都能改根 vault）。
 
@@ -201,12 +221,25 @@ CREATE TABLE quotes (                       -- §2.6：盘中轮询拿到的最�
 | 未登录 | 根 vault 的总览和图表（含画线） | 不能改；笔记、复盘页提示「登录后看自己的」 |
 
 - login 一律转小写作为目录名和 `vault` 列的值（GitHub login 只有字母数字和 `-`，大小写不敏感）。根 vault 的 `vault` 值是 `''`。
-- **实例级设置只认根 vault**：`owner`、`sync`、`datasets`。用户 yaml 里写了也忽略（页面上提示一次）。
-- **第一次登录**的非 owner：复制根 vault 的 `hebi8.yaml` 作为起点，去掉 `owner`、`sync`、`datasets`、`alerts`；notes / journal / charts 为空。之后两边互不影响。
+- **实例级设置只认根 vault**：`owner`、`sync`、`datasets`、`usage`。用户 yaml 里写了也忽略（页面上提示一次）。
+- **第一次登录**的非 owner：复制根 vault 的 `hebi8.yaml` 作为起点，去掉 `owner`、`sync`、`datasets`、`usage`、`alerts`；notes / journal / charts 为空。之后两边互不影响。
 - **所有写操作**（Server Actions、写文件的 Route Handler）都先取 viewer，`canWrite` 为假就返回「请先登录」；写入路径只来自 viewer 的 vault 目录，不接受客户端传来的目录或 login。读操作同样只读 viewer 的 vault。
 - **同步**：要同步的 key 是所有 vault 的并集（各自的 groups、bench、公式引用、告警、charts 对比列表）。同步后对每个 vault 算一遍 stats 和告警。
-- **页头**：右侧显示当前身份。未登录是「登录」按钮（打开帮助抽屉里同一套 device flow）；登录后是头像 + login，菜单里有「通知设置」和「退出」。owner 模式下未登录时，总览顶部一行 muted 文字「正在看 <owner> 的列表 · 登录后用自己的」。
+- **页头**：右侧显示当前身份。未登录是「登录」按钮（打开帮助抽屉里同一套 device flow）；登录后是头像 + login，菜单里有「通知设置」、owner 才有的「使用情况」（§1.7）和「退出」。owner 模式下未登录时，总览顶部一行 muted 文字「正在看 <owner> 的列表 · 登录后用自己的」。
 - 登录会话和反馈共用（§5.8），30 天有效；退出只删会话，不动 vault。
+- 会话 cookie 经 HTTPS 来的请求（隧道，`X-Forwarded-Proto: https`）带 `Secure`；Tailscale 直连是 http，不带，照样能登录。两边 Host 不同，cookie 各存各的。
+
+### 1.7 流量监控
+
+公开以后先做到「看得见」：谁在用、用了多少、上游被问了多少次。**不限流、不封禁、不加访问控制**；人多了再决定策略。
+
+- **记录挂在 proxy**（`src/proxy.ts`）。这版 Next 的 proxy 默认跑 Node.js runtime，在同一个进程里 `require`，路由之前执行，所以页面、Server Action（对页面的 POST，带 `Next-Action` 头）和 API 路由都经过它；matcher 排除 `_next/static`、`_next/image`、favicon、`icon.svg` 和带静态扩展名的文件。proxy 只往 `globalThis` 上的内存表里加计数（`src/lib/traffic.ts`），不碰数据库。
+- **来源**按 Host 判断：公网域名是隧道（`public`）；IP、单标签名、`localhost`、`*.ts.net` 是 Tailscale（`tailnet`）。**类型**：`/api/*` 是 api，带 `Next-Action` 是 action，带 `Next-Router-Prefetch` 是 prefetch（路由预取，不算浏览，热门路径里不列），其余是 page。
+- **访客**：公网取 `CF-Connecting-IP`，Tailscale 取 Next 填进 `X-Forwarded-For` 的 socket 地址；存 `HMAC-SHA256(盐, IP)` 的前 16 位，盐在配置目录的 `traffic-salt.json`。**登录名**：proxy 只记会话 cookie，落库时换成 login。
+- **落库**（`src/lib/usage.ts`，从 `instrumentation` 启动，`globalThis` 防重复）：每 30 秒一次，或内存里攒到 5000 个不同的键时提前；同一天、同一组维度的行累加。进程退出丢最后几十秒的计数，可以接受。每小时删一次 90 天以前的行。监控数据只在 `data/hebi8.db`，不进 vault。
+- **上游压力**：`src/lib/sources/index.ts` 把 yahoo、binance、tv 三个适配器的 `fetchDaily` / `search` / `quotes` 包一层，每次调用记一次请求；抛错记失败，错误里有 HTTP 429 / 403 / 418、Too Many Requests、rate limit 的另记「疑似限流」。`data` 源平时读本地文件，只在真正 `git fetch` / `clone` 远端数据集时记一次。按调用计数：Binance 全量拉取的分页、搜索命中本地缓存都算一次。
+- **页面 `/usage`**：只有 `viewer.isOwner` 能看，其他人（包括单用户模式）404；入口是页头账号菜单里的「使用情况」。最近 30 天每天的请求数（页面 / 预取 / Action / API）、公网和 Tailscale 的独立访客、登录用户数；今天的热门路径；最近 30 天访客按请求量排行（只显示哈希前 8 位）；各 vault 的品种数、告警数、最近活跃时间；各数据源每天的请求 / 失败 / 疑似限流。打开页面时先落一次库。
+- **阈值提醒**：根 yaml 的 `usage.visitors`（每日公网独立访客）、`usage.limited`（每日上游疑似限流次数），正整数，可省；`/usage` 页面上也能改（Server Action `setUsageLimits`，parseDocument 写回）。每 5 分钟落库后检查一次，超过（严格大于）的种类合成一条消息，发到根 vault 的通道（§2.5 的 `channelsFor('')`）；有通道发送成功才记进 `usage_alerts`，全部失败下次再试；没有通道只打日志。每天每种最多一次。
 
 ---
 
@@ -650,7 +683,7 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 - `GET /api/help` → 帮助面板数据（§5.8，只读本地）。
 - `/api/github/device`（POST 开始 device flow / DELETE 取消）、`/api/github/device/poll`（POST）、`/api/github/logout`（POST）、`/api/github/issues`（GET 最近反馈 / POST 提交）：§5.8，唯一会碰 GitHub 网络的接口，都是打开反馈页签或用户动作触发。
 
-**Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench?, alias? })`、`removeSymbol(key)`、`moveSymbol(key, group)`、`renameSymbol(key, name)`、`setBench(key, bench | null)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveCondition(def)` / `deleteCondition(id)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`。Server Action 在客户端是**串行派发**的，自动保存靠去抖合并，不并行发。
+**Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench?, alias? })`、`removeSymbol(key)`、`moveSymbol(key, group)`、`renameSymbol(key, name)`、`setBench(key, bench | null)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveCondition(def)` / `deleteCondition(id)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`、`setUsageLimits({ visitors, limited })`（owner，§1.7）。Server Action 在客户端是**串行派发**的，自动保存靠去抖合并，不并行发。
 
 所有写入校验输入；文件路径只能落在 vault 内（fileKey 已保证无 `/`、`..`）；写入原子。
 
@@ -695,4 +728,4 @@ schema v2 + 迁移；`adj` 因子与 `prices` 模式；适配器 meta；应用�
 
 ## 9. 不做的事
 
-对外网开放的登录鉴权（GitHub 登录只用来区分局域网里共用实例的人和提交反馈，不防恶意访问者，§1.6）；vault 之间的共享和协作编辑；日内 K 线（盘中只取最新价判断警报，§2.6，不存也不画日内 K 线）；比 5 分钟更快的价格警报（WebSocket、逐笔）；入站 webhook；数据集爬虫（hebi8 只读仓库）；Pine Script 兼容；拖拽排序（改 yaml）。
+访问控制、限流和封禁（实例经隧道公开，GitHub 登录只用来区分共用实例的人和提交反馈，不防恶意访问者；流量只监控，§1.6、§1.7）；vault 之间的共享和协作编辑；日内 K 线（盘中只取最新价判断警报，§2.6，不存也不画日内 K 线）；比 5 分钟更快的价格警报（WebSocket、逐笔）；入站 webhook；数据集爬虫（hebi8 只读仓库）；Pine Script 兼容；拖拽排序（改 yaml）。
