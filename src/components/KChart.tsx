@@ -13,6 +13,7 @@ import {
   type IndicatorStyle,
   type IndicatorTemplate,
   type KLineData,
+  type AxisRange,
   type Overlay,
   type OverlayCreate,
   type OverlayFigure,
@@ -74,6 +75,15 @@ interface KChartProps {
 const ALERT_GROUP = "price_alerts";
 /** Drawings whose floating toolbar offers 添加警报 (the line's price is copied). */
 const PRICE_LINES = new Set(["horizontalStraightLine", "horizontalRayLine"]);
+
+/** The y-axis object behind `getYAxes`; KLineChart keeps these methods off its public type. */
+interface AxisImpl {
+  name: string;
+  getRange: () => AxisRange;
+  setRange: (range: AxisRange) => void;
+  getAutoCalcTickFlag: () => boolean;
+  setAutoCalcTickFlag: (flag: boolean) => void;
+}
 
 const PERIODS = {
   D: { type: "day", span: 1 },
@@ -495,9 +505,31 @@ export function KChart({
     chart.setPaneOptions({ id: CANDLE_PANE, minHeight: Math.round(el.clientHeight * MAIN_PANE_SHARE) });
   };
 
-  const yAxisAuto = (): boolean => {
-    const axis = chartRef.current?.getYAxes({ paneId: CANDLE_PANE })[0] as unknown as { getAutoCalcTickFlag?: () => boolean } | undefined;
-    return axis?.getAutoCalcTickFlag?.() ?? true;
+  const candleAxis = () => chartRef.current?.getYAxes({ paneId: CANDLE_PANE })[0] as unknown as AxisImpl | undefined;
+  const yAxisAuto = (): boolean => candleAxis()?.getAutoCalcTickFlag() ?? true;
+
+  /** The price axis' range when the current drag began (the base KLineChart scales and pans from). */
+  const gestureRef = useRef<AxisRange | null>(null);
+  const patchedAxes = useRef(new WeakSet<AxisImpl>());
+  /**
+   * KLineChart pans and zooms a log axis in price space, so dragging the chart up and down
+   * rescales it and the axis can even go negative. Replay the same move in log space: the
+   * library's new range, as a fraction of the old one, is applied to the log range instead.
+   */
+  const patchLogAxis = () => {
+    const axis = candleAxis();
+    if (!axis || axis.name !== "logarithm" || patchedAxes.current.has(axis)) return;
+    patchedAxes.current.add(axis);
+    const setRange = axis.setRange.bind(axis);
+    axis.setRange = (next) => {
+      const base = gestureRef.current;
+      if (!base || !base.range) return setRange(next);
+      const realFrom = base.realFrom + ((next.from - base.from) / base.range) * base.realRange;
+      const realTo = base.realTo + ((next.to - base.to) / base.range) * base.realRange;
+      const from = 10 ** realFrom;
+      const to = 10 ** realTo;
+      setRange({ from, to, range: to - from, realFrom, realTo, realRange: realTo - realFrom, displayFrom: from, displayTo: to, displayRange: to - from });
+    };
   };
 
   const percent = compare.some((c) => c.mode === "percent" && !c.hidden) || percentAxis;
@@ -518,7 +550,14 @@ export function KChart({
     gapRef.current = topGap();
     // overriding the axis also puts it back on auto scale
     chartRef.current?.overrideYAxis({ paneId: CANDLE_PANE, name: percent ? "percentage" : log ? "logarithm" : "normal", gap: { top: gapRef.current, bottom: BOTTOM_GAP } });
+    patchLogAxis();
     onAutoScaleRef.current(true);
+  };
+  /** TradingView's 自动 toggle: off keeps the current price range, so the chart pans up and down. */
+  const setAutoScale = (on: boolean) => {
+    if (on) return applyYAxis();
+    candleAxis()?.setAutoCalcTickFlag(false);
+    onAutoScaleRef.current(false);
   };
   /** Pane heights change with sub panes and resizes; keep the legend's band free while on auto scale. */
   const syncGap = () => {
@@ -561,6 +600,16 @@ export function KChart({
         if (d?.overlay && d.overlay.paneId !== CANDLE_PANE) restartDrawing();
       }, 0);
     el.addEventListener("click", onClick, true);
+    // the base of a price-axis drag or a vertical pan, before KLineChart's own mousedown takes it
+    const onPress = () => {
+      const range = candleAxis()?.getRange();
+      gestureRef.current = range ? { ...range } : null;
+    };
+    const onRelease = () => {
+      gestureRef.current = null;
+    };
+    el.addEventListener("mousedown", onPress, true);
+    el.addEventListener("touchstart", onPress, { capture: true, passive: true });
     // the browser menu is no use on a canvas; drawings bring their own (onRightClick), the main pane offers 添加警报
     const onContextMenu = (e: MouseEvent) => {
       e.preventDefault();
@@ -579,15 +628,19 @@ export function KChart({
     };
     el.addEventListener("contextmenu", onContextMenu);
     // dragging or double-clicking the price axis switches its auto scale; report it for the 自动 button
+    // (a drag may end outside the chart, so releases are heard on the window)
     let checkTimer: ReturnType<typeof setTimeout> | undefined;
     const checkAuto = () => {
       clearTimeout(checkTimer);
       checkTimer = setTimeout(() => onAutoScaleRef.current(yAxisAuto()), 30);
     };
-    el.addEventListener("mouseup", checkAuto);
-    el.addEventListener("touchend", checkAuto);
+    const onUp = () => {
+      onRelease();
+      checkAuto();
+    };
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchend", onUp);
     el.addEventListener("dblclick", checkAuto);
-    el.addEventListener("wheel", checkAuto, { passive: true });
 
     const retheme = () => applyTheme(chart, styleRef.current);
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -604,11 +657,12 @@ export function KChart({
       clearTimeout(checkTimer);
       cancelAnimationFrame(legendFrame.current);
       el.removeEventListener("click", onClick, true);
+      el.removeEventListener("mousedown", onPress, true);
+      el.removeEventListener("touchstart", onPress, true);
       el.removeEventListener("contextmenu", onContextMenu);
-      el.removeEventListener("mouseup", checkAuto);
-      el.removeEventListener("touchend", checkAuto);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchend", onUp);
       el.removeEventListener("dblclick", checkAuto);
-      el.removeEventListener("wheel", checkAuto);
       media.removeEventListener("change", retheme);
       resize.disconnect();
       dispose(el);
@@ -633,7 +687,7 @@ export function KChart({
         chart.scrollToRealTime();
         applyYAxis();
       },
-      autoScale: applyYAxis,
+      setAutoScale,
       fitRange: (years) => {
         const chart = chartRef.current;
         const bars = barsRef.current;
@@ -673,6 +727,8 @@ export function KChart({
     // Both calls reset the data and pull it from barsRef through the loader above.
     chart.setSymbol({ ticker: symbolKey, pricePrecision, volumePrecision: 0 });
     chart.setPeriod(PERIODS[tf]);
+    // ...and put the price axis back on auto scale
+    onAutoScaleRef.current(true);
     // Drawings are stored by timestamp, so they land on the nearest bar of any timeframe.
     restoringRef.current = true;
     drawingRef.current = null;

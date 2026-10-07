@@ -776,10 +776,10 @@ export function ChartView({
             </button>
             <button
               type="button"
-              onClick={() => control.current?.autoScale()}
+              onClick={() => control.current?.setAutoScale(!autoScale)}
               aria-pressed={autoScale}
               className="tb-btn h-6 px-1.5 text-xs"
-              title="自动缩放价格坐标（拖动价格轴后点这里恢复）· Alt+R 重置图表"
+              title={autoScale ? "自动缩放价格坐标：开（点击关闭后可上下拖动图表）· Alt+R 重置图表" : "自动缩放价格坐标：关（点击恢复）· Alt+R 重置图表"}
             >
               自动
             </button>

@@ -48,8 +48,8 @@ export interface ChartControl {
   zoom: (scale: number) => void;
   /** Latest bar at the right edge, default zoom, auto y-scale */
   reset: () => void;
-  /** Re-enable the price axis's auto scale */
-  autoScale: () => void;
+  /** TradingView's 自动: on fits the prices to the view, off keeps the range so the chart pans vertically */
+  setAutoScale: (on: boolean) => void;
   /** Fit the last `years` (null = everything) into the view; false when the bars do not fit at 1px each */
   fitRange: (years: number | null) => boolean;
   /** Remove the selected drawing; false when none is selected */
