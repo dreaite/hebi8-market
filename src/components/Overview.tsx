@@ -13,7 +13,8 @@ import { SOURCE_LABELS, type Source } from "@/lib/symbols";
 import { mergeTarget } from "@/lib/watchlist";
 import { AlertDialog } from "./AlertDialog";
 import { AlertBadgeList, AlertLegend } from "./AlertBadges";
-import { RowMenu } from "./RowMenu";
+import { HINT_LABEL, useHeaderHint } from "./HeaderHint";
+import { RowMenu, type MenuAnchor } from "./RowMenu";
 import { Sparkline } from "./Sparkline";
 import { chartHref, guideSeen, useUi } from "./UiProvider";
 import { rowAttrs } from "./use-drag-sort";
@@ -129,6 +130,9 @@ function PeriodPicker({ value, onChange }: { value: ChangePeriod[]; onChange: (n
   );
 }
 
+/** The row whose menu is open, and where. */
+type RowMenuAt = { key: string; at: MenuAnchor };
+
 /** The alert dialog of a row: a new alert on its symbol, or one of its badges. */
 type AlertTarget = { row: OverviewRow; alert: AlertView | null };
 
@@ -142,8 +146,8 @@ function Th({
   className = "",
 }: {
   label: string;
-  /** The hover text: what the column means */
-  hint?: string;
+  /** What the column means, in the header's hover card */
+  hint: string;
   sortKey?: SortKey;
   sort: Sort;
   onSort: (key: SortKey) => void;
@@ -153,22 +157,29 @@ function Th({
   const active = sortKey !== undefined && sort?.key === sortKey;
   const sorted = active ? (sort.dir < 0 ? "descending" : "ascending") : undefined;
   const sortHint = active ? (sort.dir < 0 ? "降序，再点升序" : "升序，再点恢复默认顺序") : "点击排序";
+  const card = useHeaderHint(
+    <>
+      {hint}
+      {sortKey && <span className="text-muted">{sortHint}</span>}
+    </>,
+  );
   return (
     <th style={width ? { width } : undefined} aria-sort={sorted} className={`p-0 text-[11px] font-normal text-muted ${className}`}>
       {sortKey ? (
         <button
+          {...card.trigger}
           onClick={() => onSort(sortKey)}
           className={`flex h-7 w-full items-center gap-1 px-2 hover:text-fg ${className.includes("text-right") ? "justify-end" : ""} ${active ? "text-fg" : ""}`}
-          title={hint ? `${hint}\n\n${sortHint}` : sortHint}
         >
-          <span className={hint ? "underline decoration-dotted decoration-muted/60 underline-offset-[3px]" : ""}>{label}</span>
+          <span className={HINT_LABEL}>{label}</span>
           <span className="w-2 text-[9px]">{active ? (sort.dir < 0 ? "▼" : "▲") : ""}</span>
         </button>
       ) : (
-        <span className="flex h-7 items-center px-2" title={hint}>
-          <span className={hint ? "cursor-help underline decoration-dotted decoration-muted/60 underline-offset-[3px]" : ""}>{label}</span>
+        <span tabIndex={0} {...card.trigger} className="flex h-7 cursor-help items-center px-2">
+          <span className={HINT_LABEL}>{label}</span>
         </span>
       )}
+      {card.panel}
     </th>
   );
 }
@@ -184,7 +195,7 @@ export function Overview({ data }: { data: OverviewData }) {
   const [periods, setPeriodsState] = useState(data.periods);
   const [updown, setUpdownState] = useState(data.updown);
   const [message, setMessage] = useState<string | null>(null);
-  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [menuFor, setMenuFor] = useState<RowMenuAt | null>(null);
   const closeMenu = useCallback(() => setMenuFor(null), []);
   const [alertTarget, setAlertTarget] = useState<AlertTarget | null>(null);
   const openAlert = (row: OverviewRow, id: string) => setAlertTarget({ row, alert: data.alerts.find((a) => a.id === id) ?? null });
@@ -240,8 +251,9 @@ export function Overview({ data }: { data: OverviewData }) {
   const colCount = 6 + shownPeriods.length;
 
   const menu = (row: OverviewRow, group: string) =>
-    menuFor === row.key && (
+    menuFor?.key === row.key && (
       <RowMenu
+        at={menuFor.at}
         readOnly={readOnly}
         onLogin={() => {
           closeMenu();
@@ -509,8 +521,8 @@ function GroupRows({
   colCount: number;
   shownPeriods: (typeof CHANGE_PERIODS)[number][];
   openAlert: (row: OverviewRow, id: string) => void;
-  menuFor: string | null;
-  setMenuFor: (key: string | null) => void;
+  menuFor: RowMenuAt | null;
+  setMenuFor: (menu: RowMenuAt | null) => void;
   menu: (row: OverviewRow, group: string) => React.ReactNode;
   wl: ReturnType<typeof useWatchlist<OverviewRow>>;
 }) {
@@ -534,6 +546,7 @@ function GroupRows({
         sortRows(group.items, sort).map((row) => {
           const s = row.stats;
           const href = chartHref(row.key);
+          const menuOpen = menuFor?.key === row.key;
           return (
             <tr
               key={row.key}
@@ -544,7 +557,7 @@ function GroupRows({
               }}
               onContextMenu={(e) => {
                 e.preventDefault();
-                setMenuFor(row.key);
+                setMenuFor({ key: row.key, at: { x: e.clientX, top: e.clientY, bottom: e.clientY, align: "start" } });
               }}
               className="group cursor-pointer bg-card hover:bg-bg/60"
             >
@@ -587,16 +600,17 @@ function GroupRows({
                 <AlertBadgeList badges={row.badges} onOpen={(id) => openAlert(row, id)} />
               </td>
               <td className={`${cell} wide-col py-1`}>{s && <Sparkline values={s.spark} width={180} height={26} className="w-[180px]" />}</td>
-              <td className={`relative ${cell} rounded-r-md px-0 text-right`}>
+              <td className={`${cell} rounded-r-md px-0 text-right`}>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    setMenuFor(menuFor === row.key ? null : row.key);
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setMenuFor(menuOpen ? null : { key: row.key, at: { x: r.right, top: r.top - 2, bottom: r.bottom + 2, align: "end" } });
                   }}
                   aria-haspopup="menu"
-                  aria-expanded={menuFor === row.key}
+                  aria-expanded={menuOpen}
                   aria-label={`${row.name} 的操作`}
-                  className={`h-6 w-6 rounded text-sm leading-none text-muted hover:bg-line hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 ${menuFor === row.key ? "opacity-100" : "opacity-0"}`}
+                  className={`h-6 w-6 rounded text-sm leading-none text-muted hover:bg-line hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 ${menuOpen ? "opacity-100" : "opacity-0"}`}
                 >
                   ⋯
                 </button>

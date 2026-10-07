@@ -1,8 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+
+/** Where the menu opens: below `bottom`, or above `top` when it does not fit; starting at `x`, or ending there. */
+export interface MenuAnchor {
+  x: number;
+  top: number;
+  bottom: number;
+  align: "start" | "end";
+}
 
 export interface RowMenuProps {
+  at: MenuAnchor;
   /** A visitor: only 打开, plus a way to log in and keep a list of their own */
   readOnly: boolean;
   onLogin: () => void;
@@ -22,8 +31,12 @@ export interface RowMenuProps {
 
 type View = "root" | "move" | "rename" | "bench" | "newGroup";
 
-/** The「⋯」menu of an overview row; also opened by right-clicking the row. */
-export function RowMenu({ readOnly, onLogin, name, group, groups, benchLabel, onOpen, onMove, onRename, onBench, onRemove, onAddAlert, onClose }: RowMenuProps) {
+/**
+ * The「⋯」menu of an overview row; also opened by right-clicking the row, at the pointer. Fixed to
+ * the viewport so it never stretches the table's scroll container; closes on outside click, Esc,
+ * scroll or resize.
+ */
+export function RowMenu({ at, readOnly, onLogin, name, group, groups, benchLabel, onOpen, onMove, onRename, onBench, onRemove, onAddAlert, onClose }: RowMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View>("root");
   const [text, setText] = useState("");
@@ -40,11 +53,26 @@ export function RowMenu({ readOnly, onLogin, name, group, groups, benchLabel, on
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey, true);
+    window.addEventListener("resize", onClose);
+    window.addEventListener("scroll", onClose, true);
     return () => {
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("resize", onClose);
+      window.removeEventListener("scroll", onClose, true);
     };
   }, [onClose]);
+
+  // placed before paint, again when a form changes its height
+  useLayoutEffect(() => {
+    const el = ref.current!;
+    el.style.left = "0px";
+    const { width, height } = el.getBoundingClientRect();
+    const left = at.align === "end" ? at.x - width : at.x;
+    const top = at.bottom + height > window.innerHeight - 8 ? at.top - height : at.bottom;
+    el.style.left = `${Math.max(8, Math.min(left, window.innerWidth - width - 8))}px`;
+    el.style.top = `${Math.max(8, top)}px`;
+  }, [at, view]);
 
   useEffect(() => {
     ref.current?.querySelector<HTMLElement>("input, [role=menuitem]")?.focus();
@@ -79,7 +107,18 @@ export function RowMenu({ readOnly, onLogin, name, group, groups, benchLabel, on
   );
 
   return (
-    <div ref={ref} role="menu" aria-label={`${name} 的操作`} className="menu" onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
+    <div
+      ref={ref}
+      role="menu"
+      aria-label={`${name} 的操作`}
+      className="menu fixed"
+      style={{ right: "auto" }}
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+    >
       {view === "root" && readOnly && (
         <>
           {item("打开", onOpen)}
