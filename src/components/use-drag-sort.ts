@@ -28,6 +28,8 @@ interface Options {
   collapsed: string[];
   enabled: boolean;
   onDrop: (drop: Drop) => void;
+  /** Unfold a group, so a row moved into it by the keyboard stays in view and keeps focus */
+  expand: (group: string) => void;
 }
 
 interface Session {
@@ -122,7 +124,8 @@ export function useDragSort(options: Options) {
     setMark(found?.mark ?? null);
   };
 
-  const end = (commit: boolean) => {
+  /** `released`: the pointer is already up; after Esc it is still down and its click comes later */
+  const end = (commit: boolean, released: boolean) => {
     const s = session.current;
     if (!s) return;
     session.current = null;
@@ -134,7 +137,9 @@ export function useDragSort(options: Options) {
     if (!s.active) return;
     // the click that ends a drag is not a click on the row
     swallowClick.current = true;
-    setTimeout(() => (swallowClick.current = false), 0);
+    const stop = () => setTimeout(() => (swallowClick.current = false), 0);
+    if (released) stop();
+    else window.addEventListener("pointerup", stop, { once: true, capture: true });
     if (commit && s.drop) opts.current.onDrop(s.drop);
   };
 
@@ -147,13 +152,13 @@ export function useDragSort(options: Options) {
       e.preventDefault();
       update(s, e.clientY);
     };
-    const onUp = () => end(true);
-    const onCancel = () => end(false);
+    const onUp = () => end(true, true);
+    const onCancel = () => end(false, true);
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
       e.stopPropagation();
-      end(false);
+      end(false, false);
     };
     window.addEventListener("pointermove", onMove, { passive: false });
     window.addEventListener("pointerup", onUp);
@@ -186,6 +191,8 @@ export function useDragSort(options: Options) {
   };
 
   const onPointerDown = (e: PointerEvent<HTMLElement>) => {
+    // a cancelled drag released outside the window never cleared it
+    swallowClick.current = false;
     if (!opts.current.enabled || session.current || (e.pointerType === "mouse" && e.button !== 0)) return;
     const target = e.target as HTMLElement;
     const handle = target.closest("[data-dnd-handle]");
@@ -206,7 +213,7 @@ export function useDragSort(options: Options) {
   };
 
   // a drag cut short by unmounting leaves no listeners behind
-  useEffect(() => () => end(false), []);
+  useEffect(() => () => end(false, true), []);
 
   const rootProps = {
     "data-dnd-root": "",
@@ -234,6 +241,7 @@ export function useDragSort(options: Options) {
       if (!to) return;
       drop = { kind: "symbol", key: source.key, ...to };
       id = `s:${source.key}`;
+      if (opts.current.collapsed.includes(to.group)) opts.current.expand(to.group);
       setAnnouncement(`已移到「${to.group}」第 ${to.index + 1} 位`);
     } else {
       const index = stepGroup(groups, source.name, step);

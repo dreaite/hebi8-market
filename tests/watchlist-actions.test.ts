@@ -81,4 +81,24 @@ describe("watchlist Server Actions", () => {
     expect(await deleteGroup("美国")).toEqual({ ok: false, error: "这是唯一的分组，先移除里面的标的" });
     expect(await deleteGroup("nope")).toEqual({ ok: false, error: "没有「nope」这个分组" });
   });
+
+  it("writes unnamed groups' shown names down before moving groups, so later actions find the same group", async () => {
+    const { moveGroup, moveSymbol, renameGroup } = await import("@/app/actions");
+    fs.writeFileSync(yamlFile, `groups:\n  - symbols: [yahoo:SPY] # 没写名字\n  - { name: 组 2, symbols: [yahoo:QQQ] }\n  - symbols: [yahoo:NVDA]\n`);
+    // the page shows 组 1, 组 2, 组 3; the third one's「组 3」is free, the first one's「组 1」too
+    expect(await moveGroup("组 1", 2)).toEqual({ ok: true });
+    expect(await order()).toEqual(["组 2:QQQ", "组 3:NVDA", "组 1:SPY"]);
+    expect(read()).toContain("- name: 组 1\n    symbols: [ yahoo:SPY ] # 没写名字");
+    // the moved group is still「组 1」: renaming it does not touch the named「组 2」
+    expect(await renameGroup("组 1", "观察")).toEqual({ ok: true });
+    expect(await moveSymbol("yahoo:QQQ", "观察", 0)).toEqual({ ok: true });
+    expect(await order()).toEqual(["组 2:", "组 3:NVDA", "观察:QQQ,SPY"]);
+  });
+
+  it("numbers a pinned name that another group already has", async () => {
+    const { moveGroup } = await import("@/app/actions");
+    fs.writeFileSync(yamlFile, `groups:\n  - { name: 组 2, symbols: [yahoo:QQQ] }\n  - symbols: [yahoo:SPY]\n`);
+    expect(await moveGroup("组 2", 1)).toEqual({ ok: true });
+    expect(await order()).toEqual(["组 2 (2):SPY", "组 2:QQQ"]);
+  });
 });

@@ -84,12 +84,25 @@ function entryAsMap(doc: Document, symbols: YAMLSeq, index: number): YAMLMap {
 /** A group's name as the page shows it: an unnamed one is「组 N」, like the config reader says. */
 const groupName = (group: unknown, index: number) => (isMap(group) && String(group.get("name") ?? "").trim()) || `组 ${index + 1}`;
 
-/** The `groups` list and where the group shown as `name` sits in it. */
+/**
+ * The `groups` list and where the group shown as `name` sits in it. Unnamed groups then get the
+ * name they are shown with written down (a number added if another group has it), because moving
+ * or deleting a group would otherwise renumber them and the page would point at the wrong one.
+ */
 function findGroup(doc: Document, name: string): { groups: YAMLSeq; index: number } {
   const groups = doc.get("groups");
   const index = isSeq(groups) ? groups.items.findIndex((g, i) => isMap(g) && groupName(g, i) === name) : -1;
   if (index < 0) throw new Error(`没有「${name}」这个分组`);
-  return { groups: groups as YAMLSeq, index };
+  const seq = groups as YAMLSeq;
+  const taken = new Set(seq.items.map((g) => (isMap(g) ? String(g.get("name") ?? "").trim() : "")).filter(Boolean));
+  seq.items.forEach((g, i) => {
+    if (!isMap(g) || String(g.get("name") ?? "").trim()) return;
+    let pinned = groupName(g, i);
+    for (let n = 2; taken.has(pinned); n++) pinned = `${groupName(g, i)} (${n})`;
+    taken.add(pinned);
+    g.items.unshift(doc.createPair("name", pinned));
+  });
+  return { groups: seq, index };
 }
 
 function groupNode(doc: Document, name: string): YAMLMap {
