@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useRef, useState, type KeyboardEvent } from "react";
+import { buttonAnchor, useMenu, type MenuAnchor } from "./use-menu";
 
 /** Pieces shared by the overview table and the chart's watchlist panel: grip, fold caret, group menu, new group. */
 
@@ -46,90 +47,79 @@ export function FoldButton({ name, open, count, onToggle }: { name: string; open
 
 /** A group's「⋯」: rename, delete (its symbols join the group above, like removing a TradingView section). */
 export function GroupMenu({ name, mergeInto, count, onRename, onDelete }: { name: string; mergeInto: string | null; count: number; onRename: (next: string) => void; onDelete: () => void }) {
-  const [view, setView] = useState<"closed" | "root" | "rename">("closed");
+  const [at, setAt] = useState<MenuAnchor | null>(null);
+  const [view, setView] = useState<"root" | "rename">("root");
   const [text, setText] = useState(name);
   const ref = useRef<HTMLDivElement>(null);
-  const open = view !== "closed";
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setView("closed");
-    };
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.stopPropagation();
-      setView("closed");
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey, true);
-    ref.current?.querySelector<HTMLElement>("input, [role=menuitem]")?.focus();
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey, true);
-    };
-  }, [open, view]);
+  const close = useCallback(() => setAt(null), []);
+  useMenu(ref, at, view, close);
 
   const blocked = count > 0 && !mergeInto;
   return (
-    <div ref={ref} className="relative" onClick={(e) => e.stopPropagation()}>
+    <div onClick={(e) => e.stopPropagation()}>
       <button
         type="button"
-        onClick={() => setView(open ? "closed" : "root")}
+        onClick={(e) => {
+          setView("root");
+          setAt(at ? null : buttonAnchor(e.currentTarget));
+        }}
         aria-haspopup="menu"
-        aria-expanded={open}
+        aria-expanded={Boolean(at)}
         aria-label={`分组「${name}」的操作`}
-        className={`group-menu-btn h-6 w-6 rounded text-sm leading-none text-muted hover:bg-line hover:text-fg ${open ? "opacity-100" : ""}`}
+        className="group-menu-btn h-6 w-6 rounded text-sm leading-none text-muted hover:bg-line hover:text-fg"
       >
         ⋯
       </button>
-      {view === "root" && (
-        <div role="menu" aria-label={`分组「${name}」`} className="menu">
-          <button
-            role="menuitem"
-            className="menu-item"
-            onClick={() => {
-              setText(name);
-              setView("rename");
-            }}
-          >
-            重命名…
-          </button>
-          <button
-            role="menuitem"
-            className={`menu-item ${blocked ? "text-muted" : "text-down"}`}
-            disabled={blocked}
-            title={blocked ? "这是唯一的分组，先移除里面的标的" : undefined}
-            onClick={() => {
-              setView("closed");
-              onDelete();
-            }}
-          >
-            {count > 0 && mergeInto ? `删除分组（标的并入「${mergeInto}」）` : "删除分组"}
-          </button>
+      {at && (
+        <div ref={ref} role="menu" aria-label={`分组「${name}」`} className="menu fixed" style={{ right: "auto" }}>
+          {view === "root" && (
+            <>
+              <button
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  setText(name);
+                  setView("rename");
+                }}
+              >
+                重命名…
+              </button>
+              <button
+                role="menuitem"
+                className={`menu-item ${blocked ? "text-muted" : "text-down"}`}
+                disabled={blocked}
+                title={blocked ? "这是唯一的分组，先移除里面的标的" : undefined}
+                onClick={() => {
+                  close();
+                  onDelete();
+                }}
+              >
+                {count > 0 && mergeInto ? `删除分组（标的并入「${mergeInto}」）` : "删除分组"}
+              </button>
+            </>
+          )}
+          {view === "rename" && (
+            <form
+              className="flex flex-col gap-1.5 p-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                close();
+                if (text.trim() && text.trim() !== name) onRename(text.trim());
+              }}
+            >
+              <span className="text-[11px] text-muted">分组名</span>
+              <input value={text} onChange={(e) => setText(e.target.value)} className="input w-full" onFocus={(e) => e.currentTarget.select()} />
+              <div className="flex justify-end gap-2">
+                <button type="button" className="btn" onClick={close}>
+                  取消
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  确定
+                </button>
+              </div>
+            </form>
+          )}
         </div>
-      )}
-      {view === "rename" && (
-        <form
-          role="menu"
-          className="menu flex flex-col gap-1.5 p-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            setView("closed");
-            if (text.trim() && text.trim() !== name) onRename(text.trim());
-          }}
-        >
-          <span className="text-[11px] text-muted">分组名</span>
-          <input value={text} onChange={(e) => setText(e.target.value)} className="input w-full" onFocus={(e) => e.currentTarget.select()} />
-          <div className="flex justify-end gap-2">
-            <button type="button" className="btn" onClick={() => setView("closed")}>
-              取消
-            </button>
-            <button type="submit" className="btn btn-primary">
-              确定
-            </button>
-          </div>
-        </form>
       )}
     </div>
   );

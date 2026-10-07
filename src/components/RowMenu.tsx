@@ -1,14 +1,7 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-
-/** Where the menu opens: below `bottom`, or above `top` when it does not fit; starting at `x`, or ending there. */
-export interface MenuAnchor {
-  x: number;
-  top: number;
-  bottom: number;
-  align: "start" | "end";
-}
+import { useRef, useState } from "react";
+import { useMenu, type MenuAnchor } from "./use-menu";
 
 export interface RowMenuProps {
   at: MenuAnchor;
@@ -31,52 +24,13 @@ export interface RowMenuProps {
 
 type View = "root" | "move" | "rename" | "bench" | "newGroup";
 
-/**
- * The「⋯」menu of an overview row; also opened by right-clicking the row, at the pointer. Fixed to
- * the viewport so it never stretches the table's scroll container; closes on outside click, Esc,
- * scroll or resize.
- */
+/** The「⋯」menu of an overview row; also opened by right-clicking the row, at the pointer. */
 export function RowMenu({ at, readOnly, onLogin, name, group, groups, benchLabel, onOpen, onMove, onRename, onBench, onRemove, onAddAlert, onClose }: RowMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View>("root");
   const [text, setText] = useState("");
 
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey, true);
-    window.addEventListener("resize", onClose);
-    window.addEventListener("scroll", onClose, true);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey, true);
-      window.removeEventListener("resize", onClose);
-      window.removeEventListener("scroll", onClose, true);
-    };
-  }, [onClose]);
-
-  // placed before paint, again when a form changes its height
-  useLayoutEffect(() => {
-    const el = ref.current!;
-    el.style.left = "0px";
-    const { width, height } = el.getBoundingClientRect();
-    const left = at.align === "end" ? at.x - width : at.x;
-    const top = at.bottom + height > window.innerHeight - 8 ? at.top - height : at.bottom;
-    el.style.left = `${Math.max(8, Math.min(left, window.innerWidth - width - 8))}px`;
-    el.style.top = `${Math.max(8, top)}px`;
-  }, [at, view]);
-
-  useEffect(() => {
-    ref.current?.querySelector<HTMLElement>("input, [role=menuitem]")?.focus();
-  }, [view]);
+  useMenu(ref, at, view, onClose);
 
   const item = (label: string, onClick: () => void, extra = "") => (
     <button role="menuitem" onClick={onClick} className={`menu-item ${extra}`}>

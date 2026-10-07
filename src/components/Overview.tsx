@@ -14,10 +14,11 @@ import { mergeTarget } from "@/lib/watchlist";
 import { AlertDialog } from "./AlertDialog";
 import { AlertBadgeList, AlertLegend } from "./AlertBadges";
 import { HINT_LABEL, useHeaderHint } from "./HeaderHint";
-import { RowMenu, type MenuAnchor } from "./RowMenu";
+import { RowMenu } from "./RowMenu";
 import { Sparkline } from "./Sparkline";
 import { chartHref, guideSeen, useUi } from "./UiProvider";
 import { rowAttrs } from "./use-drag-sort";
+import { buttonAnchor, pointerAnchor, type MenuAnchor } from "./use-menu";
 import { useWatchlist } from "./use-watchlist";
 import { DragHandle, FoldButton, GroupMenu, NewGroup } from "./WatchlistParts";
 
@@ -557,7 +558,7 @@ function GroupRows({
               }}
               onContextMenu={(e) => {
                 e.preventDefault();
-                setMenuFor({ key: row.key, at: { x: e.clientX, top: e.clientY, bottom: e.clientY, align: "start" } });
+                setMenuFor({ key: row.key, at: pointerAnchor(e) });
               }}
               className="group cursor-pointer bg-card hover:bg-bg/60"
             >
@@ -604,8 +605,7 @@ function GroupRows({
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    const r = e.currentTarget.getBoundingClientRect();
-                    setMenuFor(menuOpen ? null : { key: row.key, at: { x: r.right, top: r.top - 2, bottom: r.bottom + 2, align: "end" } });
+                    setMenuFor(menuOpen ? null : { key: row.key, at: buttonAnchor(e.currentTarget) });
                   }}
                   aria-haspopup="menu"
                   aria-expanded={menuOpen}
