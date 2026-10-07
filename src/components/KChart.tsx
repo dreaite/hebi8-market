@@ -364,6 +364,8 @@ export function KChart({
   const overlaysRef = useRef(overlays);
   const drawingModesRef = useRef(drawing);
   const restoringRef = useRef(false);
+  /** The saved drawings are on the chart (once per mount: another symbol mounts a new chart) */
+  const restoredRef = useRef(false);
   const flagsRef = useRef(new Map<string, DrawingFlags>());
   const selectedRef = useRef<string | null>(null);
   const drawingRef = useRef<{ tool: string; id: string; overlay: Overlay | null; extendData?: unknown } | null>(null);
@@ -379,6 +381,7 @@ export function KChart({
   const [selected, setSelected] = useState<{ id: string; info: DrawingInfo } | null>(null);
   /** The 设置 dialog of a drawing */
   const [settings, setSettings] = useState<{ id: string; info: DrawingInfo } | null>(null);
+  const settingsOpenRef = useRef(false);
   /** A text drawing being typed in place (absolute px in the chart box) */
   const [editor, setEditor] = useState<{ id: string; x: number; y: number; center: boolean; size: number; color: string; text: string; isNew: boolean } | null>(null);
   const overlayMenuRef = useRef(false);
@@ -394,7 +397,8 @@ export function KChart({
     compareRef.current = compare;
     overlaysRef.current = overlays;
     precisionRef.current = pricePrecision;
-  }, [onOverlaysChange, onDrawDone, onAutoScaleChange, compare, overlays, pricePrecision, onAddAlert, onEditAlert]);
+    settingsOpenRef.current = settings !== null;
+  }, [settings, onOverlaysChange, onDrawDone, onAutoScaleChange, compare, overlays, pricePrecision, onAddAlert, onEditAlert]);
 
   const computeLegend = () => {
     const chart = chartRef.current;
@@ -503,7 +507,11 @@ export function KChart({
       if (selectedRef.current === e.overlay.id) select(null);
       persistOverlays(e.overlay.id);
     },
-    onSelected: (e) => select(e.overlay),
+    // a path still being drawn reports itself selected on every click; only finished drawings get the toolbar
+    onSelected: (e) => select(e.overlay.currentStep === DRAW_DONE ? e.overlay : null),
+    // KLineChart only reports a selection when it moves to another drawing, so a drawing hidden while
+    // selected and shown again would not get its toolbar back: every click on a drawing selects it
+    onClick: (e) => select(e.overlay),
     onDeselected: (e) => {
       if (selectedRef.current === e.overlay.id) select(null);
     },
@@ -586,19 +594,23 @@ export function KChart({
     select(null);
   };
 
+  /** Where a text drawing's box goes, in px of the chart box (a 注释's label sits 61px above its point). */
+  const editorAt = (id: string): { x: number; y: number } => {
+    const o = overlayById(id);
+    const point = o?.points[0];
+    const at = (point ? chartRef.current?.convertToPixel({ timestamp: point.timestamp, value: point.value }, { paneId: CANDLE_PANE, absolute: true }) : {}) as Partial<Coordinate>;
+    return { x: at.x ?? 0, y: (at.y ?? 0) - (o?.name === "simpleAnnotation" ? 61 : 0) };
+  };
+
   /** Type a text drawing in place; the canvas text hides meanwhile so it is not drawn twice. */
   const openEditor = (o: Overlay, isNew: boolean) => {
     const chart = chartRef.current;
-    const point = o.points[0];
-    if (!chart || !point) return;
-    const at = chart.convertToPixel({ timestamp: point.timestamp, value: point.value }, { paneId: CANDLE_PANE, absolute: true }) as Partial<Coordinate>;
+    if (!chart || !o.points[0]) return;
     const note = o.name === "simpleAnnotation";
     chart.overrideOverlay({ id: o.id, visible: false });
     setEditor({
       id: o.id,
-      x: at.x ?? 0,
-      // a 注释's label sits 61px above its point
-      y: (at.y ?? 0) - (note ? 61 : 0),
+      ...editorAt(o.id),
       center: note,
       size: textSizeOf(o),
       color: note ? cssVar("--fg") : lineOf(chart, o).color,
@@ -869,6 +881,8 @@ export function KChart({
         chart.scrollToRealTime();
         return space >= MIN_BAR_SPACE;
       },
+      dialogOpen: () => settingsOpenRef.current,
+      closeDialog: () => setSettings(null),
       deleteSelected: () => {
         const id = selectedRef.current;
         if (!id || !chartRef.current) return false;
@@ -894,11 +908,18 @@ export function KChart({
     chart.setPeriod(PERIODS[tf]);
     // ...and put the price axis back on auto scale
     onAutoScaleRef.current(true);
-    // Drawings are stored by timestamp, so they land on the nearest bar of any timeframe.
+    // Drawings are stored by timestamp, so they land on the nearest bar of any timeframe. They are
+    // restored once; when the bars reload (another timeframe or ADJ) they stay as they are, with
+    // the selection, a drawing half done and a text being typed (its box moves with it).
+    if (restoredRef.current) {
+      // the text box follows its drawing to where it sits on the new bars
+      setEditor((ed) => (ed ? { ...ed, ...editorAt(ed.id) } : ed));
+      crosshairRef.current = null;
+      scheduleLegend();
+      return;
+    }
+    restoredRef.current = true;
     restoringRef.current = true;
-    drawingRef.current = null;
-    select(null);
-    chart.removeOverlay();
     const specs = overlaysRef.current;
     const flags = new Map<string, DrawingFlags>();
     if (specs.length) {
@@ -1100,7 +1121,7 @@ export function KChart({
       />
       {editor && (
         <TextEditor
-          key={editor.id}
+          key={`editor:${editor.id}`}
           x={editor.x}
           y={editor.y}
           center={editor.center}
@@ -1113,7 +1134,7 @@ export function KChart({
       )}
       {selected && !menu && !editor && (
         <DrawingToolbar
-          key={selected.id}
+          key={`toolbar:${selected.id}`}
           info={selected.info}
           canAlert={PRICE_LINES.has(selected.info.name)}
           onChange={(change) => changeDrawing(selected.id, change)}
@@ -1122,7 +1143,11 @@ export function KChart({
             if (o) openEditor(o, false);
           }}
           onSettings={() => openSettings(selected.id)}
-          onAlert={() => onAddAlertRef.current(selected.info.values[0])}
+          // read from the chart: the line may have been dragged since it was selected
+          onAlert={() => {
+            const value = overlayById(selected.id)?.points[0]?.value;
+            if (value !== undefined) onAddAlertRef.current(value);
+          }}
           onLock={() => toggleLock(selected.id)}
           onHide={() => hideDrawing(selected.id)}
           onDelete={() => removeDrawing(selected.id)}
@@ -1130,7 +1155,7 @@ export function KChart({
       )}
       {settings && (
         <DrawingSettings
-          key={settings.id}
+          key={`settings:${settings.id}`}
           info={settings.info}
           precision={pricePrecision}
           onApply={(change) => {

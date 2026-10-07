@@ -52,6 +52,9 @@ export interface ChartControl {
   setAutoScale: (on: boolean) => void;
   /** Fit the last `years` (null = everything) into the view; false when the bars do not fit at 1px each */
   fitRange: (years: number | null) => boolean;
+  /** A drawing's settings dialog is open (it lives in the chart, the page's own dialogs do not cover it) */
+  dialogOpen: () => boolean;
+  closeDialog: () => void;
   /** Remove the selected drawing; false when none is selected */
   deleteSelected: () => boolean;
 }

@@ -356,11 +356,12 @@ export function ChartView({
       // Esc works from inside an editor's own input too; the search overlay stops its own Esc
       if (e.key === "Escape") {
         setDialog(null);
+        control.current?.closeDialog();
         setDrawTool(null);
         if (isEditable(e.target)) (e.target as HTMLElement).blur();
         return;
       }
-      if (isEditable(e.target) || dialog) return;
+      if (isEditable(e.target) || dialog || control.current?.dialogOpen()) return;
       if (e.altKey && !e.ctrlKey && !e.metaKey) {
         const tool = DRAW_TOOLS.find((t) => t.code === e.code);
         if (tool) {

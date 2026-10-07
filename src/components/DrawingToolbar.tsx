@@ -193,7 +193,8 @@ export function DrawingSettings({ info, precision, onApply, onClose }: { info: D
   const [dash, setDash] = useState(info.dash);
   const [textSize, setTextSize] = useState(info.textSize);
   const [text, setText] = useState(info.text);
-  const [values, setValues] = useState(info.values.map((v) => v.toFixed(precision)));
+  const shown = info.values.map((v) => v.toFixed(precision));
+  const [values, setValues] = useState(shown);
   const row = "flex items-center justify-between gap-4";
 
   return (
@@ -202,8 +203,10 @@ export function DrawingSettings({ info, precision, onApply, onClose }: { info: D
         className="flex flex-col gap-3 overflow-y-auto p-4 text-sm"
         onSubmit={(e) => {
           e.preventDefault();
-          const nums = values.map(Number);
-          onApply({ color, ...(isText ? { textSize, text } : { size, dash }), ...(nums.every(Number.isFinite) ? { values: nums } : {}) });
+          // only the prices typed over change; the rest keep their full precision
+          const edited = values.some((v, i) => v !== shown[i]);
+          const nums = values.map((v, i) => (v === shown[i] ? info.values[i] : Number(v)));
+          onApply({ color, ...(isText ? { textSize, text } : { size, dash }), ...(edited && nums.every(Number.isFinite) ? { values: nums } : {}) });
         }}
       >
         <div className={row}>
@@ -325,6 +328,9 @@ export function TextEditor({
       onFocus={(e) => e.target.select()}
       onBlur={() => finish(true)}
       onKeyDown={(e) => {
+        // Enter or Esc that picks or drops an input method's candidate belongs to the input method
+        // (Safari ends the composition first and reports keyCode 229)
+        if (e.nativeEvent.isComposing || e.keyCode === 229) return;
         if (e.key === "Escape") {
           // the page's Esc would also leave the drawing tool and blur (= commit) this box
           e.preventDefault();
