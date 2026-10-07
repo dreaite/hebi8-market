@@ -16,7 +16,7 @@
 - **对比**：把别的标的叠在主图上，用同百分比坐标——滚动、缩放时所有线从可见区间左边缘重新归零，和 TradingView 一致；单位不同的（比如美债收益率）放独立副图。
 - **画线**：趋势线、射线、延长线、水平线、水平射线、垂直线、斐波那契回撤、文字，只画在主图上；磁铁模式、锁定 / 隐藏 / 删除所有绘图。按时间戳保存，周线上画的线切到日线还在。选中后 `Delete` 删除，或右键菜单「删除」；`Esc` 退出绘制。
 - **笔记与复盘**：每个标的一篇 markdown 笔记（thesis）；每周一篇复盘日志。都是自动保存：停止输入 1 秒后写盘，`Ctrl/Cmd+S` 立即保存，浏览器里留一份草稿兜底。复盘页列出本周触发的警报和有笔记的标的。
-- **帮助与反馈**：页头最右的「?」（或按 `?`）打开帮助抽屉：项目信息、版本、同步状态、快捷键；「反馈」页签把问题直接提交成 GitHub issue，自动附带当前页面、图表状态和最近的前端错误。
+- **帮助与反馈**：页头最右的「?」（或按 `?`）打开帮助抽屉。「使用」页签有三步引导的入口、快捷键表、项目文档（本仓库）和隐私说明的链接；「反馈」页签把问题直接提交成 GitHub issue，自动附带当前页面、图表状态和最近的前端错误。界面上只放用的时候要看的东西，项目介绍、配置和运维都写在这份 README 和 [`docs/design.md`](docs/design.md) 里。
 - **合成标的**：`=BTC/GOLD` 这样的表达式当作标的看图、算统计、设警报，逐字段计算，和 TradingView 的 spread 一样。
 - **警报**：照搬 TradingView。顶栏「警报」或 `Alt+A`、主图右键「在 X 添加警报」、选中水平线后浮动工具条上的闹钟，总览的行菜单「添加警报…」，都打开同一个对话框：商品（这个标的或「全部自选」）、条件（穿过、上穿、下穿、大于、小于、进入 / 离开通道、在通道内 / 外、上涨 / 下跌 %，或自定义公式和它的周期）、触发（仅一次 / 每根 K 线一次）、名称、是否推送。图上画警报虚线，价格轴上的闹钟标签点了就是编辑；右侧栏「警报」列出全部警报，可编辑、暂停、删除。盘中每 5 分钟取一次最新价判断，触发时推到 Telegram 或 webhook。
 - **对全部自选的警报**：不指定标的的警报（公式或涨跌 %）每次同步后对每个自选标的判断，在成立的标的上显示，新成立时推一条摘要到 Telegram 或 webhook（ntfy、Discord 等）；关掉推送就只是总览上的筛选标记。没有系统预置的，都是自己建、自己起名。
@@ -109,7 +109,20 @@ npm run dev        # http://localhost:3000
 | `HEBI8_SECRETS` | `~/.config/hebi8/market` | GitHub 登录会话 `sessions.json`、实例的通知设置 `notify.json`、每个人的通知通道 `notify-users.json`，权限 700 / 600 |
 | `HEBI8_GITHUB_CLIENT_ID` | `app-info.ts` 的 `GITHUB_APP_CLIENT_ID` | 反馈登录用的 GitHub App client id（fork 用自己的 App 时设）；设为 `off` 关闭应用内登录，反馈只走 GitHub 网页 |
 | `HEBI8_FEEDBACK_REPO` | `dreaite/hebi8-market` | 反馈 issue 开在哪个仓库（`owner/name`） |
-| `HEBI8_GITHUB_APP_SLUG` | `hebi8-market` | App 的 slug，只用于链接 |
+
+## 查看实例状态
+
+帮助抽屉里不放这些，因为只有跑这台实例的人用得上：
+
+| 想知道 | 共用实例的 owner | 单用户模式或在服务器上 |
+|---|---|---|
+| 跑的是哪个版本 | `/usage`「实例」：版本号、commit、构建时间 | `git log -1 --oneline`；构建时由 `next.config.ts` 注入 `HEBI8_VERSION` / `HEBI8_COMMIT` / `HEBI8_BUILT_AT` |
+| 上次、下次同步 | `/usage`「实例」：上次同步、下次同步和每天的时间表 | 总览标题旁有上次同步时间；调度日志在 stdout（`journalctl -u <服务名>`），前缀 `[hebi8m]` |
+| 缓存了多少标的、哪些同步出错 | `/usage`「实例」：缓存数和出错的标的及错误 | 总览上出错的行会显示错误；或 `sqlite3 data/hebi8.db "select key, sync_error from symbols where sync_error is not null"` |
+| vault 在哪 | `/usage`「实例」 | `HEBI8_VAULT`，默认 `./vault`（见下文） |
+| `hebi8.yaml` 写错了 | 页面直接显示错误和行号，改好刷新即可 | 同左 |
+
+`/usage` 只有 owner 能打开（页头菜单「使用情况」），其他人和单用户模式都是 404，见 [`docs/design.md`](docs/design.md) §1.7。
 
 ## vault
 
@@ -124,7 +137,7 @@ vault/
   users/<login>/              共用实例里其他人的 vault，结构同上
 ```
 
-`hebi8.yaml` 的样子见 `vault.example/hebi8.yaml`。界面上改周期、涨跌色、图表偏好、添加 / 移除 / 移动 / 改名标的、设基准、编辑公式指标、建改警报时会写回这个文件，注释和顺序都保留；同步时间、别名直接改文件，不用重启。搜索时用中文词添加的标的，这个词会记进 `aliases`。
+`hebi8.yaml` 的样子见 `vault.example/hebi8.yaml`。界面上改周期、涨跌色、图表偏好、添加 / 移除 / 移动 / 改名标的、设基准、编辑公式指标、建改警报时会写回这个文件，注释和顺序都保留；同步时间、别名、数据集直接改文件，不用重启；界面上不再提示文件路径，因为共用实例的其他人和访客改不了服务器上的文件。搜索时用中文词添加的标的，这个词会记进 `aliases`。
 
 - 标的引用（分组、`bench`、公式里的 `close(X)`、合成表达式、对比、搜索）先查 `aliases`，查不到就当完整 key。
 - 显示名：yaml 里的 `name` > 内置字典的中文名 > 数据源的名字。
@@ -142,7 +155,7 @@ vault/
 | 其他人登录 | `vault/users/<login>/` | 自己的 vault |
 | 未登录 | owner 的总览和图表（含画线） | 不能改；笔记和复盘要登录后看自己的 |
 
-- 页头右侧的「登录」走帮助抽屉里同一套 GitHub device flow（和反馈共用会话，30 天）；登录后显示头像和用户名，菜单里有「通知设置」和「退出」。退出只删会话，不动 vault。
+- 页头右侧的「登录」打开登录抽屉，走 GitHub device flow（和反馈共用会话，30 天）；登录后显示头像和用户名，菜单里有「通知设置」、owner 才有的「使用情况」和「退出」。「通知设置」打开的是同一个抽屉，登录后它就是设置通知的地方。退出只删会话，不动 vault。
 - 第一次登录的人从根 vault 的 `hebi8.yaml` 复制一份起点，去掉 `owner`、`sync`、`datasets`、`alerts`（以及旧的 `conditions`），警报不会替谁预置；笔记、复盘、画线从空开始。之后两边互不影响。
 - `owner`、`sync`、`datasets` 是实例设置，只认根 vault 的；写在自己 yaml 里会被忽略，总览上会提示。
 - 同步拉的是所有人引用到的标的的并集；同步后每个人的统计和通知各算各的。
@@ -191,7 +204,7 @@ alerts:
 ```
 
 - `telegram`：找 @BotFather 建一个 hebi8/market 专用的 bot（用户名比如 `hebi8m_xxx_bot`）拿 token，给 bot 发一句话后从 `https://api.telegram.org/bot<token>/getUpdates` 里读 `chat.id`。用自建 Bot API 服务时加 `"api": "http://..."`。
-- **bot 也可以在页面上设置**：帮助抽屉「通知」页签里的「实例的 Telegram bot」，粘贴 token 后先用 `getMe` 校验，通过才写进 `notify.json`（只改 `telegram` 段，其他字段原样保留），之后只显示 `@bot 用户名`，不再显示 token；「移除」删掉整个 `telegram` 段。共用实例里只有 owner 能改，单用户模式下谁都能改。
+- **共用实例的 owner 也可以在页面上设置 bot**：页头菜单「通知设置」里的「实例的 Telegram bot」，粘贴 token 后先用 `getMe` 校验，通过才写进 `notify.json`（只改 `telegram` 段，其他字段原样保留），之后只显示 `@bot 用户名`，不再显示 token；「移除」删掉整个 `telegram` 段。单用户模式没有登录，也就没有这个页面，bot 和通道都直接写 `notify.json`。
 - `webhook`：字符串，或 `{ "url": ..., "format": "json" }`。默认 `text` 把摘要当正文 POST，带 `Title: hebi8` 头，ntfy 直接能用；`json` 发 `{ title, text, events }`。
 - `link`：可选，有的话每条后面带图表页链接。
 
@@ -201,7 +214,7 @@ alerts:
 npm run notify:test
 ```
 
-**共用实例**：`notify.json` 是实例的设置——bot 的 `token`、`api` 和 `link`；其中的 `chat` 和 `webhook` 是 owner（根 vault）的通道，可以不写。其他人登录后在帮助抽屉的「通知」页签（页头菜单「通知设置」）设置自己的通道，存在 `~/.config/hebi8/market/notify-users.json`（页面写入，权限 600，不用手改）：
+**共用实例**：`notify.json` 是实例的设置——bot 的 `token`、`api` 和 `link`；其中的 `chat` 和 `webhook` 是 owner（根 vault）的通道，可以不写。其他人登录后在页头菜单的「通知设置」里设置自己的通道，存在 `~/.config/hebi8/market/notify-users.json`（页面写入，权限 600，不用手改）：
 
 - **绑定 Telegram**：点「绑定 Telegram」，打开链接在 Telegram 里点 Start，几秒后自动绑好，bot 会回一句「已绑定 hebi8：<login>」。链接里的一次性码 10 分钟有效。owner 也可以这样绑定，会替代 `notify.json` 里的 `chat`。
 - **webhook**：填地址和格式（text / json）保存，同样替代 `notify.json` 里的 `webhook`。
@@ -261,11 +274,11 @@ src/
 │   └── api/
 │       ├── bars/             日/周/月/季 K 线 + 对齐好的引用标的
 │       ├── search/           外部搜索（Yahoo / TradingView / Binance），本地匹配在浏览器里
-│       ├── help/             帮助面板数据（只读本地）
+│       ├── help/             帮助与登录抽屉的数据：登录状态、反馈设置（只读本地）
 │       ├── notify/           当前登录者的通知通道：摘要、Telegram 绑定、webhook、测试消息
 │       └── github/           device flow 登录、退出、提交 / 列出反馈 issue
 ├── instrumentation.ts        启动应用内调度器
-├── components/               UiProvider（搜索浮层、帮助抽屉、toast、快捷键）/ HelpPanel/ SymbolSearch / Overview / RowMenu / ChartView / KChart / ChartLegend / IndicatorDialog / CompareDialog / WatchlistPanel / FormulaEditor / NotesPanel …
+├── components/               UiProvider（搜索浮层、帮助与登录抽屉、toast、快捷键）/ HelpPanel（使用、反馈）/ AccountPanel（登录、通知设置）/ Guide / SymbolSearch / Overview / RowMenu / ChartView / KChart / ChartLegend / IndicatorDialog / CompareDialog / WatchlistPanel / FormulaEditor / NotesPanel …
 ├── indicators/               指标目录、代码指标、公式引擎（formula.ts）、纯计算函数
 └── lib/
     ├── search.ts wellknown.ts 搜索的纯函数（匹配、过滤、去重、排序、分组推断）与内置字典

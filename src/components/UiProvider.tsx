@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { addSymbol, removeSymbol } from "@/app/actions";
 import type { SearchContext } from "@/lib/search";
 import { IconHelp } from "./chart-icons";
+import { AccountPanel } from "./AccountPanel";
 import { Guide } from "./Guide";
 import { HelpPanel, type HelpTab } from "./HelpPanel";
 import { SymbolSearch, type PickDetail } from "./SymbolSearch";
@@ -24,8 +25,10 @@ interface UiValue {
   toast: (message: string, opts?: ToastOptions) => void;
   /** Open the help drawer, on a given tab or the last one used */
   openHelp: (tab?: HelpTab) => void;
-  /** 登录: the help drawer's GitHub device flow, started right away */
+  /** 登录: the account drawer's GitHub device flow, started right away */
   login: () => void;
+  /** 通知设置: the account drawer (the only place channels are set) */
+  openNotify: () => void;
   /** The three-step how-to (opens by itself on the first visit to the overview) */
   openGuide: () => void;
 }
@@ -72,7 +75,8 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [help, setHelp] = useState<{ tab: HelpTab | null; notice: string | null; seq: number; autoLogin?: boolean } | null>(null);
+  const [help, setHelp] = useState<{ tab: HelpTab | null; notice: string | null; seq: number } | null>(null);
+  const [account, setAccount] = useState<{ autoLogin: boolean; seq: number } | null>(null);
   const [guide, setGuide] = useState(false);
   const seq = useRef(0);
 
@@ -90,16 +94,22 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
 
   const openHelp = useCallback((tab?: HelpTab, notice: string | null = null) => {
     setSearch(null);
+    setAccount(null);
     setHelp({ tab: tab ?? null, notice, seq: ++seq.current });
   }, []);
   const closeHelp = useCallback(() => setHelp(null), []);
-  const login = useCallback(() => {
+  const openAccount = useCallback((autoLogin: boolean) => {
     setSearch(null);
-    setHelp({ tab: "notify", notice: null, seq: ++seq.current, autoLogin: true });
+    setHelp(null);
+    setAccount({ autoLogin, seq: ++seq.current });
   }, []);
+  const login = useCallback(() => openAccount(true), [openAccount]);
+  const openNotify = useCallback(() => openAccount(false), [openAccount]);
+  const closeAccount = useCallback(() => setAccount(null), []);
   const openGuide = useCallback(() => {
     setSearch(null);
     setHelp(null);
+    setAccount(null);
     setGuide(true);
   }, []);
   const closeGuide = useCallback(() => {
@@ -111,11 +121,11 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
     setGuide(false);
   }, []);
 
-  // `?help=feedback|project|notify` opens the drawer (a link to the feedback form), then leaves the URL
+  // `?help=feedback|project` opens the drawer (a link to the feedback form), then leaves the URL
   useEffect(() => {
     const url = new URL(window.location.href);
     const tab = url.searchParams.get("help");
-    if (tab !== "feedback" && tab !== "project" && tab !== "notify") return;
+    if (tab !== "feedback" && tab !== "project") return;
     url.searchParams.delete("help");
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the query only exists in the browser URL
@@ -185,8 +195,8 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
   };
 
   const value = useMemo<UiValue>(
-    () => ({ searchCtx: ctx, openSearch, toast, openHelp: (tab?: HelpTab) => openHelp(tab), login, openGuide }),
-    [ctx, openSearch, toast, openHelp, login, openGuide],
+    () => ({ searchCtx: ctx, openSearch, toast, openHelp: (tab?: HelpTab) => openHelp(tab), login, openNotify, openGuide }),
+    [ctx, openSearch, toast, openHelp, login, openNotify, openGuide],
   );
 
   return (
@@ -214,7 +224,8 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
           }}
         />
       )}
-      {help && <HelpPanel key={help.seq} tab={help.tab} notice={help.notice} autoLogin={help.autoLogin ?? false} onClose={closeHelp} toast={toast} />}
+      {help && <HelpPanel key={help.seq} tab={help.tab} notice={help.notice} onClose={closeHelp} toast={toast} />}
+      {account && <AccountPanel key={account.seq} autoLogin={account.autoLogin} onClose={closeAccount} toast={toast} />}
       {toasts.length > 0 && (
         <div className="pointer-events-none fixed inset-x-0 bottom-5 z-50 flex flex-col items-center gap-2 px-3">
           {toasts.map((t) => (
@@ -284,7 +295,7 @@ export function HelpButton() {
   );
 }
 
-/** 登录 as a button anywhere (notes, review): opens the help drawer's device flow. */
+/** 登录 as a button anywhere (notes, review): opens the account drawer's device flow. */
 export function LoginButton() {
   const { login } = useUi();
   return (
@@ -296,7 +307,7 @@ export function LoginButton() {
 
 /** The header's identity on a shared instance: 登录, or the avatar and login with a menu. */
 export function Account({ user, enabled, owner = false }: { user: { login: string; avatarUrl: string } | null; enabled: boolean; owner?: boolean }) {
-  const { login, openHelp } = useUi();
+  const { login, openNotify } = useUi();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -343,7 +354,7 @@ export function Account({ user, enabled, owner = false }: { user: { login: strin
             role="menuitem"
             onClick={() => {
               setOpen(false);
-              openHelp("notify");
+              openNotify();
             }}
             className="menu-item"
           >

@@ -1,6 +1,11 @@
 import { notFound } from "next/navigation";
 import { UsageLimitsForm } from "@/components/UsageLimitsForm";
+import { APP_INFO } from "@/lib/app-info";
 import { allItems } from "@/lib/config";
+import { fmtAgo } from "@/lib/format";
+import { nameOf } from "@/lib/names";
+import { nextRun, scheduledNextSync } from "@/lib/scheduler";
+import { listSymbols, maxSyncedAt } from "@/lib/store";
 import type { Source } from "@/lib/symbols";
 import { OTHER, type Kind } from "@/lib/traffic";
 import { dailyTraffic, dailyUpstream, flushUsage, KEEP_DAYS, MAX_VISITORS, lastSeen, topPaths, topVisitors, usageDay, type UpstreamRow } from "@/lib/usage";
@@ -51,6 +56,12 @@ export default async function UsagePage() {
   const time = new Intl.DateTimeFormat("zh-CN", { timeZone: config.sync.tz, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   const when = (sec: number | undefined) => (sec ? time.format(new Date(sec * 1000)) : "—");
 
+  // the instance: build, sync schedule, cache and the symbols whose last sync failed
+  const symbols = Object.values(listSymbols());
+  const failed = symbols.filter((s) => s.syncError).map((s) => ({ key: s.key, name: nameOf(config, s.key, s.name), error: s.syncError }));
+  const lastSync = maxSyncedAt();
+  const nextSync = scheduledNextSync() ?? nextRun(new Date(), config.sync.at, config.sync.tz).getTime();
+
   const vaults = listVaults(config.owners).map((v) => {
     const cfg = v.id ? readConfigSafe(v.dir).config : config;
     const logins = v.id ? [v.id] : config.owners.map((o) => o.toLowerCase());
@@ -79,6 +90,53 @@ export default async function UsagePage() {
           只有 owner 能看 · 按 {config.sync.tz} 的日期 · 明细保留 {KEEP_DAYS} 天 · 访客是 IP 的加盐哈希
         </span>
       </div>
+
+      <section className={card}>
+        <div className={head}>实例</div>
+        <dl className="grid grid-cols-[5rem_1fr] gap-x-3 gap-y-1 px-3 py-2 text-xs">
+          <dt className="text-muted">版本</dt>
+          <dd className="font-mono">
+            v{APP_INFO.version} · {APP_INFO.commit}
+            {APP_INFO.builtAt && <span className="text-muted"> · 构建于 {time.format(new Date(APP_INFO.builtAt))}</span>}
+          </dd>
+          <dt className="text-muted">同步</dt>
+          <dd>
+            上次 {lastSync ? `${time.format(new Date(lastSync))}（${fmtAgo(lastSync)}）` : "从未同步"} · 下次 {time.format(new Date(nextSync))}
+            <span className="text-muted">
+              {" "}
+              · 每天 {config.sync.at.join(" ")} {config.sync.tz}
+            </span>
+          </dd>
+          <dt className="text-muted">缓存</dt>
+          <dd>
+            {symbols.length} 个标的
+            {failed.length > 0 && <span className="text-down"> · 上次同步出错 {failed.length} 个</span>}
+          </dd>
+          <dt className="text-muted">vault</dt>
+          <dd className="font-mono break-all">{viewer.dir}/hebi8.yaml</dd>
+        </dl>
+        {failed.length > 0 && (
+          <table className="w-full table-fixed text-xs">
+            <thead>
+              <tr>
+                <th className={`${th} w-56`}>标的</th>
+                <th className={th}>错误</th>
+              </tr>
+            </thead>
+            <tbody>
+              {failed.map((s) => (
+                <tr key={s.key}>
+                  <td className={`${td} truncate`} title={s.key}>
+                    <span className="font-mono">{s.key}</span>
+                    {s.name !== s.key && <span className="text-muted"> {s.name}</span>}
+                  </td>
+                  <td className={`${td} break-words text-muted`}>{s.error}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
 
       <section className={card}>
         <div className={head}>每日请求 · 最近 {DAYS} 天</div>

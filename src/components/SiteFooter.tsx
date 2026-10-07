@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { REPO_URL } from "@/lib/app-info";
 
-/** A quiet last line on every page; the chart fills the window, so it has none (its 帮助 panel links here). */
+/** A quiet last line on every page: privacy and the docs. The chart fills the window, so it has none (its help drawer has both links). */
 export function SiteFooter() {
   if (usePathname().startsWith("/chart/")) return null;
   return (
@@ -15,7 +15,7 @@ export function SiteFooter() {
           隐私说明
         </Link>
         <a href={REPO_URL} target="_blank" rel="noreferrer" className="hover:text-fg">
-          源码
+          项目文档
         </a>
       </div>
     </footer>

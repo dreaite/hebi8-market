@@ -1,4 +1,3 @@
-import path from "node:path";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
 import { Overview, type OverviewData, type OverviewRow } from "@/components/Overview";
 import { alertBadges, alertViews } from "@/lib/alert-view";
@@ -56,7 +55,6 @@ export default async function Home() {
     lastReviewDays: journal ? daysAgo(journal.mtimeMs) : null,
     lastSync: maxSyncedAt(),
     firstRun,
-    vaultPath: path.relative(process.cwd(), viewer.dir) || ".",
     notices,
     readOnly: !viewer.canWrite,
   };
