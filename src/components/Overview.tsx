@@ -36,8 +36,6 @@ export interface OverviewData {
   lastReviewDays: number | null;
   lastSync: number | null;
   firstRun: boolean;
-  /** Relative to the working directory, e.g. `vault` */
-  vaultPath: string;
   /** Muted lines above the table: yaml settings that are ignored */
   notices: string[];
   /** A visitor on a shared instance: sees the owner's list as the example, display choices stay in the page */
@@ -372,10 +370,6 @@ export function Overview({ data }: { data: OverviewData }) {
           </section>
         ))}
       </div>
-
-      <p className="mt-8 text-[11px] text-muted">
-        同步时间、别名、条件在 <code className="text-fg">{data.vaultPath}/hebi8.yaml</code> 里直接改。
-      </p>
     </main>
   );
 }
