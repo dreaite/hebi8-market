@@ -12,7 +12,7 @@ hebi8 是一个**周度复盘工具**，不是 TradingView 的替代品。每天
 
 约束：只在 Tailscale 内网；只存日线，周/月/季线读时合成；**读取永远不碰网络**。默认单用户、无登录；在 yaml 里设了 `owner` 之后，局域网里的几个人可以共用一台实例，每人用 GitHub 登录后看到自己的自选、画线、笔记和通知（§1.6）。
 
-第八天之外只有一种打扰：每次同步后，自己标了 `notify` 的条件和 `alerts` 价位规则**新成立**时推一条摘要到 Telegram 或 webhook（§2.5）。不做日内、不做实时。
+第八天之外只有两种打扰，都推到 Telegram 或 webhook：每次同步后，自己标了 `notify` 的条件**新成立**（§2.5）；以及价格警报，有警报的标的盘中每 5 分钟取一次最新价来判断（§2.6）。只存日线，不存日内 K 线。
 
 本文是 v2 的实施规范。v1 的代码可以参考（`tradingDay`、公式引擎、指标目录、统计定义都保留），但不需要兼容：目录、schema、接口都按本文重做。
 
@@ -85,10 +85,11 @@ conditions:                    # 总览条件徽标；同步时按周线计算�
   - { id: rs_high, label: RS新高, formula: "rs = close / close(bench); rs >= highest(rs, 26)" }
   - { id: below_200w, label: 破200周, formula: "close < sma(close, 200)", notify: true }
 
-alerts:                        # 单个标的的价位规则；同步后新成立就推送（§2.5）。tf 默认 D
-  - { key: BTC, label: BTC 站上 13 万, when: "close > 130000" }
-  - { key: NVDA, when: "close < sma(close, 200)" }
-  - { key: GPU4090, label: 4090 咸鱼跌破 1.1 万, when: "close < 11000" }
+alerts:                        # 价格警报（§2.6）；图表上建的写成第一种，也可以手写公式
+  - { key: BTC, cond: crossing_up, value: 130000, trigger: once }            # BTC 上穿 130,000，仅一次
+  - { key: SPY, cond: entering, value: [500, 520], trigger: bar }            # 进入通道，每根 K 线一次
+  - { key: NVDA, label: 跌破 200 日线, when: "close < sma(close, 200)" }   # 自定义公式；tf 默认 D
+  - { key: GPU4090, label: 4090 咸鱼跌破 1.1 万, cond: less, value: 11000, enabled: false }  # 暂停中
 
 datasets:                      # 自定义数据集（§2.4）：名字 → git 地址或本机目录
   gpu: https://github.com/dreaife/gpu-prices
@@ -167,6 +168,13 @@ CREATE TABLE alert_state (                  -- §2.5；删库后第一次同步�
   fired_at INTEGER,
   PRIMARY KEY (vault, rule, key)
 ) WITHOUT ROWID;
+CREATE TABLE quotes (                       -- §2.6：盘中轮询拿到的最新价，所有人共用；不是 K 线
+  key TEXT PRIMARY KEY,
+  price REAL NOT NULL, time INTEGER NOT NULL,          -- 数据源报的成交时间（unix 秒）
+  day_high REAL, day_low REAL,                          -- 当天的高低，有就记
+  session TEXT NOT NULL,                                -- open | closed | pre | post | always
+  fetched_at INTEGER NOT NULL
+);
 ```
 
 `symbols` 和 `bars` 里只有缓存和元数据，**没有任何用户字段**（名字、分组、基准、排序都在 yaml），所有人共用；`stats` 和 `alert_state` 按 vault 分开。两表加 `vault` 列的迁移直接删表重建，下次同步重算。
@@ -300,6 +308,7 @@ date,open,high,low,close,volume
 - `webhook.format`：`text`（默认，正文就是摘要，带 `Title` 头，适合 ntfy）或 `json`（`{ title, text, events }`）。
 - `link` 可省；有的话每条事件后面带图表页链接。
 - `npm run notify:test` 往 `notify.json` 里的通道发一条测试消息。
+- **owner 在页面上设置 bot**：「通知」页签里，owner（单用户模式下是任何人）多一块「实例的 Telegram bot」：显示「未配置」或 `@<bot 用户名>`；粘贴 token 后服务端先用 `getMe` 校验，通过才写进 `notify.json`（保留文件里的其他字段，原子写、600），「移除」删掉 telegram 段。token 写进去以后不再回显，只显示 bot 用户名。接口 `PUT /api/notify/bot`、`DELETE /api/notify/bot`，非 owner 返回 403。
 
 **通知设置页面**（登录后，页头菜单「通知设置」打开帮助抽屉的「通知」页签；未登录或单用户模式下页签提示改 `notify.json`）：
 
@@ -308,6 +317,60 @@ date,open,high,low,close,volume
 - **webhook**：输入地址和格式，保存前校验 http(s)。
 - **发测试消息**、**解除绑定**。状态行显示已绑定的通道（chat id 只显示后 4 位，webhook 只显示主机名）。
 - 接口：`GET /api/notify`（当前 viewer 的通道摘要）、`POST /api/notify/telegram`（开始绑定，返回链接）、`POST /api/notify/telegram/poll`（查绑定结果）、`PUT /api/notify/webhook`、`DELETE /api/notify/<channel>`、`POST /api/notify/test`。都要求登录，只作用于 viewer 自己。
+
+### 2.6 价格警报与盘中轮询
+
+照搬 TradingView 的警报模型，但只看日线：判断时把最新价当作今天这根还没收完的日线（`o` 是当天第一个价，`h`/`l` 取轮询见过的最高最低和数据源报的日内高低，`c` 是最新价），接在库里的日线后面。**这根 K 线只在内存里，绝不写进 `bars`**；下一次日线同步拿到真正的日线后自然替换。
+
+**警报的写法**（`alerts` 里每一项二选一）：
+
+| 字段 | 说明 |
+|---|---|
+| `key` | 标的（别名或完整 key，合成标的也行） |
+| `cond` + `value` | 图表上建的结构化条件，见下表 |
+| `when` | 自定义公式（布尔），和条件公式一样；`tf` 默认 D |
+| `trigger` | `once`（仅一次，默认）或 `bar`（每根 K 线一次） |
+| `label` | 可省，省了按条件自动生成，比如「BTC 上穿 130,000」 |
+| `enabled` | 可省，默认 true；`false` 是已停止 |
+| `id` | 可省，见 §2.5 |
+
+| `cond` | TradingView 叫法 | `value` | 类型 |
+|---|---|---|---|
+| `crossing` | 穿过 | 价格 | 事件 |
+| `crossing_up` / `crossing_down` | 上穿 / 下穿 | 价格 | 事件 |
+| `greater` / `less` | 大于 / 小于 | 价格 | 状态 |
+| `entering` / `exiting` | 进入通道 / 离开通道 | `[低, 高]` | 事件 |
+| `inside` / `outside` | 在通道内 / 在通道外 | `[低, 高]` | 状态 |
+| `moving_up_pct` / `moving_down_pct` | 上涨 % / 下跌 % | `{ pct, bars }`：最近 `bars` 根日线内涨跌超过 `pct`% | 状态 |
+
+- **事件**类比较的是相邻两次检查：上次检查时价格在线下、这次在线上就是上穿；穿过是任一方向。第一次检查只记录，不触发。
+- **状态**类只要条件成立就触发；新建的警报如果当时已经成立，第一次检查就会触发，和 TradingView 一样。
+- **`when` 公式**沿用 §2.5 的「新成立才推送」，所以 `close > X` 的效果接近上穿；要明确的上穿下穿可以写 `cross(close, X)` / `cross(X, close)`。
+- **触发方式**：`once` 触发后把这条警报写成 `enabled: false`（写回对应的人的 yaml，注释保留），列表里显示「已触发」；`bar` 同一根日线最多触发一次（`alert_state.fired_bar`）。
+- 状态记在 `alert_state`（§1.4），事件类的上一次结果也在这里。
+
+**谁被轮询**：所有 vault 里 `enabled` 的警报的标的，加上 `when` 公式引用到的标的；合成标的展开成操作数；`data:` 标的只有日线，不轮询，跟着日线同步判断。
+
+**节奏**（`src/lib/quotes.ts` 的轮询器，和调度器一样从 `instrumentation` 启动、`globalThis` 防重复）：每 5 分钟醒一次，每个标的按上一次拿到的 `session` 决定这次要不要取：
+
+- `always`（加密）和 `open`（交易所在常规交易时段）：每 5 分钟。
+- `pre` / `post` / `closed`：每小时。
+- 新加进来的标的立刻取一次。连续失败的源退避到每小时，日志里记一次，不刷屏。
+- 同一个源的标的一次批量请求：Yahoo 用 `quote()`，Binance 用 `/api/v3/ticker/24hr?symbols=…`，TradingView 用库的 quote 会话（一轮开一个客户端，取完就关）。源报不出交易时段时，工作日按 `open`、周末按 `closed`。
+
+**适配器接口**加一个可选方法：
+
+```ts
+interface Quote { price: number; time: number; dayHigh?: number; dayLow?: number; session: "open" | "closed" | "pre" | "post" | "always" }
+interface SourceAdapter {
+  // …
+  quotes?(tickers: string[]): Promise<Record<string, Quote>>;
+}
+```
+
+**每轮之后**：最新价写 `quotes` 表，然后对每个 vault 判断它的警报，事件按 vault 合成一条摘要投递（§2.5 的投递规则：全部通道失败不提交，下一轮再试）。日线同步收尾时也照常判断一遍，用的是真实日线。
+
+**页面读 `quotes`**，不碰网络：图表上的警报线、警报列表里的「当前价 · 3 分钟前」都从这张表来。
 
 ---
 
@@ -422,6 +485,14 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 - 比较商品弹窗用全局搜索组件的 `pick` 模式（§5.4，`pickActions` 给出两个按钮）：别名不区分大小写，自选 / 常用 / 搜索三段，Enter = 同百分比坐标，加入后输入框清空。`pane` 模式的图例同样显示相对可见区间起点的 %。
 
 **画线**：KLineChart 内置 overlay，工具见左侧画线栏（TV 的「趋势线」是有限线段，对应 `segment`；无限延伸的 `straightLine` 叫「延长线」）。画完 / 拖动结束 / 删除即序列化 `getOverlays()` 写回 `charts/<fileKey>.json`；加载时 `createOverlay` 恢复。**删除必须写回**：KLineChart 在把 overlay 从列表移除之前就调用 `onRemoved`，所以序列化时按 id 排除正在删除的那条。只保存主图（`candle_pane`）上的画线；在副图上点击会被丢弃并重新开始同一个工具（10.0.3 的 `paneId` 并不能把绘制钉在某个 pane）。「锁定所有绘图」是界面模式，不写进每条画线的 `lock`。
+
+**警报**（TV 的「警报」，§2.6）：
+
+- **入口**：顶栏闹钟按钮「警报」和 `Alt+A`，价格默认填最新价；在主图上右键出现「在 12,345.00 添加警报」（十字线所在价格）；选中水平线 / 水平射线后，浮动工具条多一个闹钟按钮，价格取这条线的价格（只是复制价格，之后挪线不会改警报）。
+- **对话框**（「新建警报」/「编辑警报」）：第一行是标的（当前图表，不可改）；「条件」下拉是 §2.6 表里的九种叫法加「自定义公式」；值的输入随条件变化（一个价格 / 通道的上下沿 / 百分比和 K 线数 / 公式编辑器）；「触发」分段「仅一次 | 每根 K 线一次」；「名称」占位是自动生成的名字。底部「取消」「创建」。数值输入框聚焦全选，回车提交。
+- **图上的警报线**：当前标的每条启用的价格类警报画一条虚线（通道画两条），右端价格轴上有闹钟标签；点标签打开编辑。已停止的不画。
+- **警报列表**：右侧边栏在「自选」「笔记」旁边多一个「警报」页签，列出当前 vault 的全部警报：标的名、条件、触发方式、状态（活动 / 已触发 / 已停止）、当前价和取价时间；每行有「编辑」「暂停 / 恢复」「删除」，点行打开那个标的的图表。
+- **写回**：Server Actions `saveAlert(def)`、`deleteAlert(id)`、`setAlertEnabled(id, enabled)`，和别的写操作一样先过 viewer 写权限，写当前 viewer 的 yaml，注释保留。只读访客看到入口，点开是登录提示。
 
 **笔记**：右侧边栏的「笔记」面板，显示 `notes/<fileKey>.md` 的渲染结果，「编辑」切换 textarea，自动保存走 Server Action。没有笔记时显示「写下为什么看它」。
 
@@ -623,4 +694,4 @@ schema v2 + 迁移；`adj` 因子与 `prices` 模式；适配器 meta；应用�
 
 ## 9. 不做的事
 
-对外网开放的登录鉴权（GitHub 登录只用来区分局域网里共用实例的人和提交反馈，不防恶意访问者，§1.6）；vault 之间的共享和协作编辑；日内数据；实时或盘中告警（只在同步后推送日线规则的新触发，§2.5）；入站 webhook；数据集爬虫（hebi8 只读仓库）；Pine Script 兼容；拖拽排序（改 yaml）。
+对外网开放的登录鉴权（GitHub 登录只用来区分局域网里共用实例的人和提交反馈，不防恶意访问者，§1.6）；vault 之间的共享和协作编辑；日内 K 线（盘中只取最新价判断警报，§2.6，不存也不画日内 K 线）；比 5 分钟更快的价格警报（WebSocket、逐笔）；入站 webhook；数据集爬虫（hebi8 只读仓库）；Pine Script 兼容；拖拽排序（改 yaml）。
