@@ -1,0 +1,48 @@
+# Labels every new issue with a type, areas and a difficulty (triage:simple / triage:judgment),
+# asking a model behind an OpenAI-compatible API. The logic lives in .github/scripts/issue-triage.js;
+# the model only picks from allowlists, and triage:simple also needs a trusted author.
+# Settings: secret TRIAGE_API_KEY, variables TRIAGE_API_BASE (e.g. https://api.example.com/v1)
+# and TRIAGE_MODEL. Without them the run is skipped with a notice.
+name: Issue triage
+
+on:
+  issues:
+    types: [opened, reopened]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number
+        required: true
+      force:
+        description: Ask again even if it already has a triage label
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: issue-triage-${{ github.event.issue.number || inputs.issue }}
+  cancel-in-progress: false
+
+jobs:
+  label:
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.issue.pull_request }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # the default branch's copy (issue events never check out untrusted code)
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github
+          persist-credentials: false
+      - uses: actions/github-script@v8
+        env:
+          TRIAGE_API_BASE: ${{ vars.TRIAGE_API_BASE }}
+          TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}
+          TRIAGE_API_KEY: ${{ secrets.TRIAGE_API_KEY }}
+        with:
+          script: |
+            const { run } = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/issue-triage.js`);
+            await run({ github, context, core, fs: require("fs") });
