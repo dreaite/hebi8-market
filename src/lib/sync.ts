@@ -127,7 +127,7 @@ export function statsFor(vault: string, cfg: Config): Record<string, Stats> {
  */
 export async function syncOne(key: string, force = false): Promise<SyncOutcome> {
   const outcome = await fetchKey(key, force);
-  if (outcome.ok && !outcome.skipped && readConfigSafe(vaultDir()).config) for (const v of loadVaults()) recomputeStats(v.id, v.config);
+  if (outcome.bars && readConfigSafe(vaultDir()).config) for (const v of loadVaults()) recomputeStats(v.id, v.config);
   return outcome;
 }
 
