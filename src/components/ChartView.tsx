@@ -3,8 +3,8 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { deleteIndicator, saveChartState, saveIndicator, setChartPrefs } from "@/app/actions";
+import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
+import { addSymbol, deleteIndicator, loadSymbol, removeSymbol, saveChartState, saveIndicator, setChartPrefs } from "@/app/actions";
 import type { AlertView } from "@/lib/alert-view";
 import { INDICATORS } from "@/indicators/catalog";
 import { compileFormula, formulaIndicatorName, formulaTemplate, isFormulaIndicator } from "@/indicators/formula-indicators";
@@ -170,6 +170,7 @@ export function ChartView({
 
   const order = useMemo(() => watchlist.flatMap((g) => g.items), [watchlist]);
   const position = order.findIndex((o) => o.key === symbolKey);
+  const watched = position >= 0;
   const neighbour = (step: 1 | -1) => (order.length < 2 ? null : order[(Math.max(position, step > 0 ? -1 : 0) + step + order.length) % order.length]);
 
   const [data, setData] = useState<BarsResponse | null>(null);
@@ -177,6 +178,23 @@ export function ChartView({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
+
+  // Opening a symbol that is not in the list never adds it (TradingView); its bars are fetched into
+  // the cache by a Server Action, since rendering the page never touches the network. A visitor only
+  // sees what is cached.
+  const [fetching, setFetching] = useState(!watched && !readOnly);
+  const [, startFetch] = useTransition();
+  useEffect(() => {
+    if (watched || readOnly) return;
+    startFetch(async () => {
+      const result = await loadSymbol(symbolKey);
+      setFetching(false);
+      if (result.ok) setReloadTick((n) => n + 1);
+      else setMessage(result.error);
+    });
+    // once per symbol: adding it to the list later changes nothing here
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbolKey]);
 
   const stateRef = useRef(chartState);
   useEffect(() => {
@@ -451,6 +469,14 @@ export function ChartView({
     ...(meta?.bench ? [`基准 ${benchLabel ?? names[meta.bench] ?? meta.bench}`] : []),
   ];
   const StyleIcon = STYLE_ICONS[chartStyle];
+  const shownError = fetching && !data ? null : error;
+
+  const addToList = async (group: string) => {
+    const result = await addSymbol({ key: symbolKey, group });
+    if (!result.ok) return setMessage(result.error);
+    setMessage(null);
+    toast(`已把 ${name} 加入「${group}」`, { action: { label: "撤销", onClick: () => void removeSymbol(symbolKey).then(report) } });
+  };
   const paramDef = dialog?.kind === "params" ? INDICATORS.find((d) => d.name === dialog.name) : undefined;
 
   const clearDrawings = () => {
@@ -506,10 +532,12 @@ export function ChartView({
         groups={watchlist}
         changeLabel={changeLabel}
         current={symbolKey}
+        readOnly={readOnly}
         onPick={(key) => {
           if (!wide) setSheet(null);
           if (key !== symbolKey) router.push(chartHref(key));
         }}
+        onAdd={() => openSearch("", "add")}
         onClose={() => togglePanel("watchlist")}
         className="h-full"
       />
@@ -548,6 +576,50 @@ export function ChartView({
           <span className="font-semibold">{ticker}</span>
           {name !== ticker && <span className="hidden truncate text-xs text-muted sm:inline">{name}</span>}
         </button>
+        {!watched && !readOnly && (
+          <Dropdown
+            label={
+              <>
+                <IconWatchlist />
+                <span className="text-xs">加入自选</span>
+              </>
+            }
+            title="加入自选列表"
+            className="tb-btn px-1.5"
+            menuClassName="min-w-[10rem]"
+          >
+            {(close) => (
+              <>
+                <div className="px-2 pt-1.5 pb-1 text-[11px] text-muted">加入分组</div>
+                {watchlist.map((g) => (
+                  <button
+                    key={g.name}
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      close();
+                      void addToList(g.name);
+                    }}
+                  >
+                    {g.name}
+                  </button>
+                ))}
+                <form
+                  className="p-1"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const group = String(new FormData(e.currentTarget).get("group") ?? "").trim();
+                    if (!group) return;
+                    close();
+                    void addToList(group);
+                  }}
+                >
+                  <input name="group" placeholder="新分组名 · Enter" aria-label="新分组名" className="input h-7 w-full text-xs" />
+                </form>
+              </>
+            )}
+          </Dropdown>
+        )}
         <button type="button" onClick={() => setDialog({ kind: "compare" })} className="tb-btn" title="比较商品" aria-label="比较商品">
           <IconPlus />
           {compare.length > 0 && <span className="text-[11px] text-muted">{compare.length}</span>}
@@ -607,8 +679,8 @@ export function ChartView({
           </button>
         </span>
         <span className="min-w-2 flex-1" />
-        <button type="button" onClick={() => setReloadTick((n) => n + 1)} disabled={loading} className="tb-btn" title={`刷新 · ${loading ? "加载中…" : syncText}`} aria-label="刷新">
-          <IconRefresh className={loading ? "animate-spin" : ""} />
+        <button type="button" onClick={() => setReloadTick((n) => n + 1)} disabled={loading || fetching} className="tb-btn" title={`刷新 · ${loading || fetching ? "加载中…" : syncText}`} aria-label="刷新">
+          <IconRefresh className={loading || fetching ? "animate-spin" : ""} />
         </button>
         {/* the site header (and its "?") is hidden in fullscreen */}
         {fullscreen && (
@@ -621,7 +693,7 @@ export function ChartView({
         </button>
       </div>
 
-      {(error || message) && <p className="shrink-0 border-b border-line px-3 py-1 text-xs text-down">{error ? `加载失败：${error}` : message}</p>}
+      {(shownError || message) && <p className="shrink-0 border-b border-line px-3 py-1 text-xs text-down">{shownError ? `加载失败：${shownError}` : message}</p>}
 
       <div className="flex min-h-0 flex-1">
         {/* left drawing toolbar */}
@@ -683,6 +755,11 @@ export function ChartView({
 
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="relative min-h-0 flex-1">
+            {fetching && !data && (
+              <div className="pointer-events-none absolute top-1/2 left-1/2 z-20 -translate-x-1/2 -translate-y-1/2 text-xs text-muted" role="status">
+                正在拉取 {name} 的日线…
+              </div>
+            )}
             {drawLabel && (
               <div className="pointer-events-none absolute top-2 left-1/2 z-20 -translate-x-1/2 rounded border border-line bg-card/95 px-2 py-1 text-[11px] text-muted" role="status">
                 {drawLabel} · 在主图上点击 · Esc 退出

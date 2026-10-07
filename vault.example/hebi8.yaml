@@ -19,25 +19,25 @@ aliases:                       # 公式、警报、对比、合成标的、搜�
   US10Y: tv:TVC:US10Y
   DXY: tv:TVC:DXY
 
-groups:                        # name 可省略：先用内置字典的中文名，再用数据源的名字
-  - name: 加密
-    symbols:
-      - { key: BTC, name: 比特币 }                 # key：别名或完整 key；也可以只写一个字符串
-      - { key: ETH, name: 以太坊, bench: BTC }     # bench：相对强弱、close(bench) 的默认基准
+groups:                        # 总览和图表右侧的自选按这个顺序显示，页面上拖动会改写这里的顺序
   - name: 美股
     symbols:
-      - { key: SPY, name: 标普 500 }
-      - { key: QQQ, name: 纳指 100, bench: SPY }
-      - { key: NVDA, name: 英伟达, bench: QQQ }
-  - name: 港 A
-    symbols:
-      - { key: yahoo:0700.HK, name: 腾讯控股, bench: HSI }
-      - { key: yahoo:600519.SS, name: 贵州茅台, bench: CSI300 }
+      - { key: SPY, name: 标普 500 }             # key：别名或完整 key；也可以只写一个字符串
+      - { key: QQQ, name: 纳指 100, bench: SPY }  # bench：相对强弱、close(bench) 的默认基准
+      - { key: NVDA, name: 英伟达, bench: QQQ }   # name 可省略：先用内置字典的中文名，再用数据源的名字
   - name: 宏观
     symbols:
       - { key: GOLD, name: 黄金 }
       - { key: US10Y, name: 美债 10 年 }
       - { key: DXY, name: 美元指数 }
+  - name: 加密
+    symbols:
+      - { key: BTC, name: 比特币 }
+      - { key: ETH, name: 以太坊, bench: BTC }
+  - name: 港 A
+    symbols:
+      - { key: yahoo:0700.HK, name: 腾讯控股, bench: HSI }
+      - { key: yahoo:600519.SS, name: 贵州茅台, bench: CSI300 }
   - name: 比价
     symbols:
       - { key: "=BTC/GOLD", name: 比特币/黄金 }   # 以 = 开头的是合成标的

@@ -341,7 +341,6 @@ input:focus-visible {
  * columns are sized to 0 and their cells stay in the row, clipped, until xl.
  */
 :root {
-  --col-pos52: 0px;
   --col-spark: 0px;
 }
 .wide-col {
@@ -352,12 +351,49 @@ input:focus-visible {
 }
 @media (min-width: 1280px) {
   :root {
-    --col-pos52: 128px;
     --col-spark: 200px;
   }
   .wide-col {
     padding-left: 0.5rem;
     padding-right: 0.5rem;
+  }
+}
+
+/*
+ * Drag to reorder the watchlist (use-drag-sort.ts): a line where the row will land, a tint on a
+ * folded or empty group it will join, the dragged row dimmed. Table rows draw it on their cells.
+ */
+:not(tr)[data-drop="before"],
+tr[data-drop="before"] > td {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+:not(tr)[data-drop="after"],
+tr[data-drop="after"] > td {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+:not(tr)[data-drop="into"],
+tr[data-drop="into"] > td {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+[data-dragging] {
+  opacity: 0.45;
+}
+/* Grips and group menus appear on hover or focus; touch screens have no hover, so they stay. */
+.dnd-handle,
+.group-menu-btn {
+  opacity: 0;
+}
+[data-dnd-id]:hover .dnd-handle,
+[data-dnd-id]:hover .group-menu-btn,
+.dnd-handle:focus-visible,
+.group-menu-btn:focus-visible,
+.group-menu-btn[aria-expanded="true"] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .dnd-handle,
+  .group-menu-btn {
+    opacity: 1;
   }
 }
 

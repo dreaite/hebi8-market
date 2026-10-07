@@ -23,7 +23,8 @@ const SHORTCUTS: { group: string; rows: [string, string][] }[] = [
     rows: [
       ["/  ·  Ctrl/Cmd+K", "打开搜索"],
       ["?", "打开 / 关闭帮助"],
-      ["↑ ↓  Enter  Tab", "搜索里移动、打开 / 添加、换分组"],
+      ["↑ ↓  Enter", "搜索里移动、打开图表"],
+      ["Shift+Enter  Tab", "搜索里加入自选、换分组"],
       ["Esc", "关闭搜索、弹窗、菜单和本面板"],
       ["Ctrl/Cmd+S", "立即保存笔记 / 复盘"],
     ],

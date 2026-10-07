@@ -10,6 +10,9 @@ import { Guide } from "./Guide";
 import { HelpPanel, type HelpTab } from "./HelpPanel";
 import { SymbolSearch, type PickDetail } from "./SymbolSearch";
 
+/** The global search either opens what is chosen, or (the watchlist's「+」) adds it. */
+export type GlobalSearchMode = "navigate" | "add";
+
 export interface ToastOptions {
   action?: { label: string; onClick: () => void };
   kind?: "info" | "error";
@@ -21,7 +24,7 @@ export interface ToastOptions {
 
 interface UiValue {
   searchCtx: SearchContext;
-  openSearch: (query?: string) => void;
+  openSearch: (query?: string, mode?: GlobalSearchMode) => void;
   toast: (message: string, opts?: ToastOptions) => void;
   /** Open the help drawer, on a given tab or the last one used */
   openHelp: (tab?: HelpTab) => void;
@@ -71,7 +74,7 @@ interface Toast extends ToastOptions {
 export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; readOnly: boolean; children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [search, setSearch] = useState<{ query: string; seq: number } | null>(null);
+  const [search, setSearch] = useState<{ query: string; mode: GlobalSearchMode; seq: number } | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,9 +89,9 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
     setTimeout(() => setToasts((list) => list.filter((t) => t.id !== id)), opts.duration ?? (opts.action || opts.href ? 8000 : 6000));
   }, []);
 
-  const openSearch = useCallback((query = "") => {
+  const openSearch = useCallback((query = "", mode: GlobalSearchMode = "navigate") => {
     setError(null);
-    setSearch({ query, seq: ++seq.current });
+    setSearch({ query, mode, seq: ++seq.current });
   }, []);
   const closeSearch = useCallback(() => setSearch(null), []);
 
@@ -156,38 +159,29 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
     return () => window.removeEventListener("keydown", onKey);
   }, [pathname, openSearch]);
 
+  /** Opening never adds (TradingView): a symbol nobody has gets its bars fetched by the chart page. */
   const onPick = async (d: PickDetail) => {
-    if (d.inWatchlist) {
+    if (d.action !== "add") {
       closeSearch();
       router.push(chartHref(d.key));
       return;
     }
+    // adding keeps the search open for the next one, like TradingView's add-symbol dialog
     setBusy(true);
     setError(null);
     const result = await addSymbol({ key: d.key, group: d.group, name: d.name !== d.key ? d.name : undefined, alias: d.query });
     setBusy(false);
     if (!result.ok) {
-      // already watched under another name: just open it
-      if (/已经在/.test(result.error)) {
-        closeSearch();
-        router.push(chartHref(d.key));
-        return;
-      }
       setError(result.error);
       return;
     }
-    closeSearch();
-    router.push(chartHref(d.key));
-    router.refresh();
-    toast(`已添加到 ${d.group}`, {
+    toast(`已把 ${d.name} 加入「${d.group}」`, {
       action: {
         label: "撤销",
         onClick: () => {
           void removeSymbol(d.key).then((r) => {
-            if (r.ok) {
-              toast(`已移除 ${d.name}`);
-              router.refresh();
-            } else toast(r.error, { kind: "error" });
+            if (r.ok) toast(`已移除 ${d.name}`);
+            else toast(r.error, { kind: "error" });
           });
         },
       },
@@ -210,7 +204,7 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
             role="dialog"
             aria-label="搜索标的"
           >
-            <SymbolSearch key={search.seq} mode="navigate" ctx={ctx} readOnly={readOnly} initialQuery={search.query} busy={busy} error={error} onPick={(d) => void onPick(d)} onClose={closeSearch} />
+            <SymbolSearch key={search.seq} mode={search.mode} ctx={ctx} readOnly={readOnly} initialQuery={search.query} busy={busy} error={error} onPick={(d) => void onPick(d)} onClose={closeSearch} />
           </div>
         </div>
       )}
