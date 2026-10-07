@@ -57,11 +57,11 @@ export function AlertLegend({ readOnly }: { readOnly: boolean }) {
     </>,
   );
   return (
-    <>
+    <span {...hint.hover} className="block">
       <span tabIndex={0} {...hint.trigger} className="flex h-7 cursor-help items-center px-2">
         <span className={HINT_LABEL}>警报</span>
       </span>
       {hint.panel}
-    </>
+    </span>
   );
 }

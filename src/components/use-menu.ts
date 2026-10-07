@@ -21,15 +21,16 @@ export function buttonAnchor(button: HTMLElement): MenuAnchor {
   return { x: r.right, top: r.top - 2, bottom: r.bottom + 2, align: "end", trigger: button };
 }
 
-/** At the pointer, for a right-click. */
-export function pointerAnchor(e: { clientX: number; clientY: number }): MenuAnchor {
-  return { x: e.clientX, top: e.clientY, bottom: e.clientY, align: "start" };
+/** At the pointer, for a right-click; `trigger` is the row's「⋯」, which then closes it. */
+export function pointerAnchor(e: { clientX: number; clientY: number }, trigger: HTMLElement): MenuAnchor {
+  return { x: e.clientX, top: e.clientY, bottom: e.clientY, align: "start", trigger };
 }
 
 /**
  * A `menu fixed` element, open while `at` is set. Fixed to the viewport so no scroll container
- * clips it or grows around it: placed before paint and again when `view` changes its size, its
- * first field or item focused, closed on an outside press, Esc, scroll or resize.
+ * clips it or grows around it: placed before paint and again when `view` changes its size, at most
+ * the viewport's height and scrolling inside past that, its first field or item focused, closed on
+ * an outside press, Esc, a scroll outside it or resize.
  */
 export function useMenu(ref: RefObject<HTMLElement | null>, at: MenuAnchor | null, view: string, onClose: () => void) {
   useEffect(() => {
@@ -37,6 +38,9 @@ export function useMenu(ref: RefObject<HTMLElement | null>, at: MenuAnchor | nul
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
       if (!ref.current?.contains(t) && !at.trigger?.contains(t)) onClose();
+    };
+    const onScroll = (e: Event) => {
+      if (!ref.current?.contains(e.target as Node)) onClose();
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -46,12 +50,12 @@ export function useMenu(ref: RefObject<HTMLElement | null>, at: MenuAnchor | nul
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey, true);
     window.addEventListener("resize", onClose);
-    window.addEventListener("scroll", onClose, true);
+    window.addEventListener("scroll", onScroll, true);
     return () => {
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey, true);
       window.removeEventListener("resize", onClose);
-      window.removeEventListener("scroll", onClose, true);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }, [ref, at, onClose]);
 
@@ -59,11 +63,13 @@ export function useMenu(ref: RefObject<HTMLElement | null>, at: MenuAnchor | nul
     const el = ref.current;
     if (!at || !el) return;
     el.style.left = "0px";
+    el.style.maxHeight = `${window.innerHeight - 16}px`;
+    el.style.overflowY = "auto";
     const { width, height } = el.getBoundingClientRect();
     const left = at.align === "end" ? at.x - width : at.x;
     const top = at.bottom + height > window.innerHeight - 8 ? at.top - height : at.bottom;
     el.style.left = `${Math.max(8, Math.min(left, window.innerWidth - width - 8))}px`;
-    el.style.top = `${Math.max(8, top)}px`;
+    el.style.top = `${Math.max(8, Math.min(top, window.innerHeight - height - 8))}px`;
   }, [ref, at, view]);
 
   useEffect(() => {
