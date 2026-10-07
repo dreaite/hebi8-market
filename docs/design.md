@@ -6,13 +6,13 @@ hebi8 是一个**周度复盘工具**，不是 TradingView 的替代品。每天
 
 | 动作 | 页面 | 回答的问题 |
 |---|---|---|
-| 扫描 | `/` 总览：分组表格、条件徽标、本周变化 | 我关心的东西现在各处于什么状态？ |
+| 扫描 | `/` 总览：分组表格、我的警报徽标、本周触发 | 我关心的东西现在各处于什么状态？ |
 | 深看 | `/chart/[key]` 图表：K 线、指标、对比、画线、笔记 | 值得细看的几个，结构是什么样？和别的比呢？ |
 | 记录 | `/review` 复盘：本周日志、上周日志、本周变化汇总 | 上周怎么想的，这周怎么想？ |
 
 约束：本体只绑定 Tailscale IP，另经 Cloudflare Tunnel 公开（`https://market-hebi8.dreaife.tokyo`，cloudflared 转发到 Tailscale 地址），暂时完全公开、不限流，只做流量监控（§1.7）；只存日线，周/月/季线读时合成；**读取永远不碰网络**。默认单用户、无登录；在 yaml 里设了 `owner` 之后，几个人可以共用一台实例，每人用 GitHub 登录后看到自己的自选、画线、笔记和通知（§1.6）。
 
-第八天之外只有两种打扰，都推到 Telegram 或 webhook：每次同步后，自己标了 `notify` 的条件**新成立**（§2.5）；以及价格警报，有警报的标的盘中每 5 分钟取一次最新价来判断（§2.6）。只存日线，不存日内 K 线。
+第八天之外只有一种打扰：自己建的**警报**触发，推到 Telegram 或 webhook（§2.5、§2.6）。警报可以盯一个标的（盘中每 5 分钟取一次最新价来判断），也可以对全部自选（每次同步后判断）；系统不预置任何警报。只存日线，不存日内 K 线。
 
 本文是 v2 的实施规范。v1 的代码可以参考（`tradingDay`、公式引擎、指标目录、统计定义都保留），但不需要兼容：目录、schema、接口都按本文重做。
 
@@ -26,7 +26,7 @@ hebi8 是一个**周度复盘工具**，不是 TradingView 的替代品。每天
 data/hebi8.db                 SQLite 缓存：bars、symbols 元数据与同步状态、stats、告警状态
 data/datasets/<name>/         自定义数据集仓库的浅克隆（§2.4），删了下次同步重新克隆
 vault/                        用户内容，gitignore；HEBI8_VAULT 环境变量可改位置
-  hebi8.yaml                  自选分组、别名、公式指标、条件、同步时间表、图表偏好；owner 的
+  hebi8.yaml                  自选分组、别名、公式指标、警报、同步时间表、图表偏好；owner 的
   notes/<fileKey>.md          每个标的的笔记（thesis）
   journal/<YYYY>-W<ww>.md     每周复盘（ISO 周）
   charts/<fileKey>.json       每个标的的图表状态：对比列表、画线
@@ -45,7 +45,7 @@ prices: split                  # split = 拆股复权（默认，和 TradingView
 periods: [1W, 1M, 1Y]          # 总览显示的涨跌周期，最多 4 个：1W 1M 3M YTD 1Y 3Y 5Y
 updown: green-up               # green-up | red-up
 
-aliases:                       # 公式、条件、对比、合成标的里可用的短名
+aliases:                       # 公式、警报、对比、合成标的里可用的短名
   SPY: yahoo:SPY
   QQQ: yahoo:QQQ
   HSI: yahoo:^HSI
@@ -78,18 +78,13 @@ indicators:                    # 公式指标，图表页可开关；语法见 �
   - { id: dev40, label: 均线乖离, pane: sub, formula: "(close / sma(close, 40) - 1) * 100" }
   - { id: vs_bench, label: 对基准比价, pane: sub, formula: "close / close(bench)" }
 
-conditions:                    # 总览条件徽标；同步时按周线计算，布尔结果
-  - { id: trend, label: 趋势, formula: "close > sma(close, 40) and sma(close, 10) > sma(close, 40)" }
-  - { id: near_high, label: 近高点, formula: "close >= highest(high, 52) * 0.9" }
-  - { id: new_high, label: 新高, formula: "close >= highest(close, 52)", notify: true }   # notify：新成立时推送（§2.5）
-  - { id: rs_high, label: RS新高, formula: "rs = close / close(bench); rs >= highest(rs, 26)" }
-  - { id: below_200w, label: 破200周, formula: "close < sma(close, 200)", notify: true }
-
-alerts:                        # 价格警报（§2.6）；图表上建的写成第一种，也可以手写公式
+alerts:                        # 警报（§2.6）：总览「警报」列按名字显示；图表和总览上建的写成这样，也可以手写
   - { key: BTC, cond: crossing_up, value: 130000, trigger: once }            # BTC 上穿 130,000，仅一次
   - { key: SPY, cond: entering, value: [500, 520], trigger: bar }            # 进入通道，每根 K 线一次
   - { key: NVDA, label: 跌破 200 日线, when: "close < sma(close, 200)" }   # 自定义公式；tf 默认 D
   - { key: GPU4090, label: 4090 咸鱼跌破 1.1 万, cond: less, value: 11000, enabled: false }  # 暂停中
+  - { label: 周线多头, when: "close > sma(close, 40) and sma(close, 10) > sma(close, 40)", tf: W, notify: false }  # 不写 key：对全部自选；只在总览显示
+  - { label: 破200周, when: "close < sma(close, 200)", tf: W }              # 对全部自选，新成立时推送
 
 datasets:                      # 自定义数据集（§2.4）：名字 → git 地址或本机目录
   gpu: https://github.com/dreaife/gpu-prices
@@ -114,6 +109,7 @@ chart:                         # 全局图表偏好（UI 改动会写回这里�
 - 一个标的只出现在一个组里。显示名：`name` > 内置字典（`src/lib/wellknown.ts`）的中文名 > 数据源返回的名字。
 - yaml 由 UI 写回时必须保留注释和顺序：用 `yaml` 包的 `parseDocument` 修改后 `toString()`，原子写入（写临时文件再 rename）。
 - yaml 解析失败时页面显示错误（含行号），服务不崩。
+- **旧的 `conditions`**（`{ id, label, formula, tf, notify }`，以前的示例配置给每个人都预置了一组）照样能读，读成对全部自选的警报：`id` 不变（所以状态接得上；不是字母数字下划线横线的 id 丢掉，只是状态重来），`formula` 当 `when`，`tf` 缺省 W，没标 `notify: true` 的读成 `notify: false`。第一次在界面上建、改、暂停或删除警报时（`editAlerts`），它们按同样的写法搬进 `alerts` 末尾，`conditions` 删掉。`vault.example` 不再预置任何警报或条件。
 
 ### 1.2 `notes/<fileKey>.md` 与 `journal/`
 
@@ -162,11 +158,11 @@ CREATE TABLE stats (
   vault TEXT NOT NULL,                      -- §1.6：'' 是根 vault，其他是 GitHub login（小写）
   key TEXT NOT NULL,                        -- 含合成标的
   computed_at INTEGER NOT NULL, json TEXT NOT NULL,
-  PRIMARY KEY (vault, key)                  -- 按 vault 存：条件、prices 模式都是各人的
+  PRIMARY KEY (vault, key)                  -- 按 vault 存：自选、prices 模式都是各人的
 );
-CREATE TABLE alert_state (                  -- §2.5；删库后第一次同步只记录、不推送
+CREATE TABLE alert_state (                  -- §2.5；删库后第一次同步只记录、不推送；总览的徽标也从这里读（§5.1）
   vault TEXT NOT NULL,
-  rule TEXT NOT NULL, key TEXT NOT NULL,    -- rule：cond:<id> 或 alert:<hash>
+  rule TEXT NOT NULL, key TEXT NOT NULL,    -- rule：alert:<id 或 hash>；对全部自选的警报每个自选标的一行。旧的 cond:<id> 行在下一次判断时清掉
   state INTEGER,                            -- 上次同步看到的结果 0/1
   fired_bar INTEGER,                        -- 上次推送时那根 K 线的 t，同一根只推一次
   fired_at INTEGER,
@@ -210,7 +206,7 @@ CREATE TABLE usage_alerts (kind TEXT NOT NULL, day INTEGER NOT NULL, PRIMARY KEY
 
 ### 1.6 多人共用一台实例
 
-几个人共用一台 hebi8：K 线缓存、同步、数据集是共享的；**自选、别名、公式指标、条件、告警、图表偏好、笔记、复盘、画线和通知都是各人的**。
+几个人共用一台 hebi8：K 线缓存、同步、数据集是共享的；**自选、别名、公式指标、警报、图表偏好、笔记、复盘、画线和通知都是各人的**。
 
 **开关**：根 vault 的 `hebi8.yaml` 写 `owner: <GitHub login>`，或者一个列表 `owner: [dreaife, dreaifekks]`（同一个人的几个账号）。列表里任何一个账号登录都用根 vault，页面上称呼第一个。没写就是单用户模式，行为和现在完全一样（不用登录，谁都能改根 vault）。
 
@@ -227,7 +223,7 @@ CREATE TABLE usage_alerts (kind TEXT NOT NULL, day INTEGER NOT NULL, PRIMARY KEY
 
 - login 一律转小写作为目录名和 `vault` 列的值（GitHub login 只有字母数字和 `-`，大小写不敏感）。根 vault 的 `vault` 值是 `''`。
 - **实例级设置只认根 vault**：`owner`、`sync`、`datasets`、`usage`。用户 yaml 里写了也忽略（页面上提示一次）。
-- **第一次登录**的非 owner：复制根 vault 的 `hebi8.yaml` 作为起点，去掉 `owner`、`sync`、`datasets`、`usage`、`alerts`；notes / journal / charts 为空。之后两边互不影响。
+- **第一次登录**的非 owner：复制根 vault 的 `hebi8.yaml` 作为起点，去掉 `owner`、`sync`、`datasets`、`usage`、`alerts` 和旧的 `conditions`（不替任何人预置警报）；notes / journal / charts 为空。之后两边互不影响。
 - **所有写操作**（Server Actions、写文件的 Route Handler）都先取 viewer，`canWrite` 为假就返回「请先登录」；写入路径只来自 viewer 的 vault 目录，不接受客户端传来的目录或 login。读操作同样只读 viewer 的 vault。
 - **同步**：要同步的 key 是所有 vault 的并集（各自的 groups、bench、公式引用、告警、charts 对比列表）。同步后对每个 vault 算一遍 stats 和告警。
 - **页头**：右侧显示当前身份。未登录是「登录」按钮（打开帮助抽屉里同一套 device flow）；登录后是头像 + login，菜单里有「通知设置」、owner 才有的「使用情况」（§1.7）和「退出」。owner 模式下未登录时，总览标题是「示例列表」（内容就是 owner 的列表）。
@@ -285,7 +281,7 @@ interface SourceAdapter {
 
 ### 2.3 `syncAll(force?)` / `syncOne(key, force?)`
 
-- 要同步的 key 集合 = groups 里的 + 所有 `bench` + 公式/条件/告警/合成表达式/各 `charts/*.json` 对比列表引用到的；共用实例时取所有 vault 的并集（§1.6）。别名本身不触发同步。
+- 要同步的 key 集合 = groups 里的 + 所有 `bench` + 公式/警报/合成表达式/各 `charts/*.json` 对比列表引用到的；共用实例时取所有 vault 的并集（§1.6）。别名本身不触发同步。
 - 并发 4，同 key 去重，单个失败不影响其他；失败写 `sync_error`，页面上显示。
 - 同步完成后立刻对**每个标的（含合成）**计算 `stats` 并写表（§3.4）。
 - 读取路径（页面、API）**只读库**。首次运行库为空时，总览显示「首次拉取中…」并每 3s 刷新一次，同时后台触发 `syncAll`。
@@ -319,16 +315,24 @@ date,open,high,low,close,volume
 
 ### 2.5 同步后通知
 
-只在 `syncAll` 收尾、stats 写完之后跑。**规则**有两种：
+**只有一个概念：警报。** 以前总览的「条件」（全局公式，示例配置给每个人预置了一组）和图表上的「价格警报」是两套相似的东西：都是布尔规则、都按 `alert_state` 判定新成立、都走同一条推送路径，区别只在作用范围和名字从哪来。合并后警报多一个作用范围（一个标的 / 全部自选）和一个 `notify` 开关，条件能做的事都能做，名字永远是用户自己起的，界面上只有一个对话框、一个列表。
 
-- `conditions` 里带 `notify: true` 的条件，对每个自选标的（含合成）求值，tf 同条件。
-- `alerts` 里的价位规则：`{ key, when, label?, tf? }`，只对这一个标的求值，tf 默认 D。`when` 就是条件公式，能用别名、`close(X)`、`bench`。
+在 `syncAll` 收尾、stats 写完之后对**全部警报**跑一遍（§2.6 的盘中轮询只看盯一个标的的警报）。规则只有一种，`alerts` 里的每一项，按作用范围求值：
 
-**判定**：每条规则、每个标的在 `alert_state` 里记上次同步看到的布尔值。
+- 写了 `key`：只对这一个标的求值。
+- 没写 `key`：对每个自选标的（含合成）分别求值，`bench` 是各自的基准。只能是 `when` 公式或涨跌 %（价格和通道离开具体标的没有意义，解析时报错）；`trigger` 固定是每根 K 线最多一次。在界面上新建、修改或恢复这样一条时，保存后立刻按日线只把这些警报算一遍（`runAlerts(…, "watchlist")`），总览不用等下一次同步。
 
-1. 第一次见到（新规则、新标的、删过库）：只记录，不推送。
-2. 这次为真、上次不为真、且最后一根 K 线的 `t` 不等于 `fired_bar`：推送，`fired_bar` 记成这根的 `t`。周线条件在本周反复真假时只推一次。
+`when` 就是布尔公式，能用别名、`close(X)`、`bench`，tf 默认 D。
+
+**判定**（`when` 公式）：每条警报、每个标的在 `alert_state` 里记上次看到的布尔值。
+
+1. 第一次见到（新警报、新标的、删过库）：只记录，不推送。
+2. 这次为真、上次不为真、且最后一根 K 线的 `t` 不等于 `fired_bar`：触发，`fired_bar` 记成这根的 `t`，`fired_at` 记成触发时间。周线公式在本周反复真假时只触发一次。
 3. 结果为 null（数据不够、公式出错）：不改状态。
+
+**不推送的警报**（`notify: false`）照样判定、照样记 `fired_at`（总览靠它显示「本周新触发」），只是不进摘要；投递失败时它们的状态照常提交。
+
+**清理**：每次判断后，删掉 `alert_state` 里不再被 yaml 覆盖的行（警报删了、标的不在自选里了、旧的 `cond:` 行）。
 
 **按人**：每个 vault 各自判定、各自投递，状态表按 `vault` 分开。
 
@@ -367,12 +371,13 @@ date,open,high,low,close,volume
 
 | 字段 | 说明 |
 |---|---|
-| `key` | 标的（别名或完整 key，合成标的也行） |
+| `key` | 标的（别名或完整 key，合成标的也行）；不写就是对全部自选（§2.5） |
 | `cond` + `value` | 图表上建的结构化条件，见下表 |
 | `when` | 自定义公式（布尔），和条件公式一样；`tf` 默认 D |
 | `trigger` | `once`（仅一次，默认）或 `bar`（每根 K 线一次） |
-| `label` | 可省，省了按条件自动生成，比如「BTC 上穿 130,000」 |
+| `label` | 可省，省了按条件自动生成，比如「BTC 上穿 130,000」；总览徽标上显示的就是它 |
 | `enabled` | 可省，默认 true；`false` 是已停止 |
+| `notify` | 可省，默认 true；`false` 只在总览显示，不推送 |
 | `id` | 可省，见 §2.5 |
 
 | `cond` | TradingView 叫法 | `value` | 类型 |
@@ -391,7 +396,7 @@ date,open,high,low,close,volume
   已触发的 `once` 手改 yaml 的 `enabled: true` 不会重新启用；重新启用请用界面上的恢复。
 - 状态记在 `alert_state`（§1.4），事件类的上一次结果也在这里。
 
-**谁被轮询**：所有 vault 里 `enabled` 的警报的标的，加上 `when` 公式引用到的标的；合成标的展开成操作数；`data:` 标的只有日线，不轮询，跟着日线同步判断。
+**谁被轮询**：所有 vault 里 `enabled` 且写了 `key` 的警报的标的，加上它们 `when` 公式引用到的标的（对全部自选的警报不让自选全部进轮询，只在日线同步后判断）；合成标的展开成操作数；`data:` 标的只有日线，不轮询，跟着日线同步判断。
 
 **节奏**（`src/lib/quotes.ts` 的轮询器，和调度器一样从 `instrumentation` 启动、`globalThis` 防重复）：每 5 分钟醒一次，每个标的按上一次拿到的 `session` 决定这次要不要取：
 
@@ -440,12 +445,11 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
   ddAth,                                  // 距历史最高收盘的回撤，<= 0
   pos52,                                  // 52 周高低区间位置 0..1
   spark: number[],                        // 近 104 周的周收盘
-  conditions: { [id]: { now: boolean | null, prev: boolean | null, t?: number } }  // 最后一根周线、上一根周线；t 是最后一根的时间
 }
 ```
 
 - `changes`/`ddAth`/`pos52` 的定义与 v1 `src/lib/stats.ts` 相同，按 yaml 的 `prices` 模式计算。
-- 条件默认按周线算（条件可带 `tf` 覆盖）；`now` 是最后一根（周中为未完成的本周），`prev` 是上一根。`prev=false, now=true` 即「本周新触发」。
+- stats 里不再有条件结果：警报的状态在 `alert_state`（§1.4），总览徽标从那里读。
 
 ---
 
@@ -462,7 +466,7 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 - `compile(source)` 额外返回 `refs: string[]`（引用到的标的，别名已解析为 key）。
 - `evaluate(program, { bars, refs: { [key]: AlignedBar[] } })`。
 
-**用在三处**：图表指标（客户端，KLineChart 模板）、总览条件（服务端，同步时按周线）、对比（客户端）。引擎是纯 TS，没有环境依赖。
+**用在三处**：图表指标（客户端，KLineChart 模板）、警报的 `when`（服务端，§2.5）、对比（客户端）。引擎是纯 TS，没有环境依赖。
 
 ---
 
@@ -471,12 +475,15 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 ### 5.1 总览 `/`（RSC 直读 yaml + stats 表）
 
 - 顶部：`自选 · 上次同步`；右侧「上次复盘 N 天前」链到 `/review`、「周期 · 1周 1月 1年」（点开选择显示的涨跌周期）、涨跌色分段开关「绿涨 | 红涨」、「刷新」、「+ 添加」（打开全局搜索，见 §5.4）。
-- **一张表格**，`table-layout: fixed` + `<colgroup>`，分组做 subheader 行，所以「价格」列在每个分组里的 x 坐标一致。名称列吃剩余宽度并 truncate（title 显全名）；其余列固定：价格 112、每个涨跌周期 72、距高点 72、52 周 128、条件 220、两年 200、菜单 28。
+- **一张表格**，`table-layout: fixed` + `<colgroup>`，分组做 subheader 行，所以「价格」列在每个分组里的 x 坐标一致。名称列吃剩余宽度并 truncate（title 显全名）；其余列固定：价格 112、每个涨跌周期 72、距高点 72、52 周 128、警报 220、两年 200、菜单 28。
 - 表头整格可点排序：第一次降序、第二次升序、第三次恢复 yaml 顺序；箭头指示方向（`aria-sort`）；**同一列的排序同时作用于所有分组**。
-- 整行是链接（`onClick` 路由 + 名称单元格是真正的 `<a>`，中键在新标签打开）。行尾「⋯」菜单始终可聚焦，视觉上 hover / focus / 打开时才显示；右键整行也打开：打开 / 移到分组 ▸（现有分组或新建）/ 改名 / 设基准 / 移除（toast「已移除 X · 撤销」，不用原生 confirm）。
-- 条件徽标三态，同一个 `Badge` 组件（复盘页也用）：`now=true` 普通描边；**本周新触发**淡高亮底（浅色 `bg-accent/10 border-accent/40 text-accent`，深色 `bg-accent/15 border-accent/50`）加圆点；**本周失效**虚线边、`opacity .55`，不用删除线。
+- 整行是链接（`onClick` 路由 + 名称单元格是真正的 `<a>`，中键在新标签打开）。行尾「⋯」菜单始终可聚焦，视觉上 hover / focus / 打开时才显示；右键整行也打开：打开 / 移到分组 ▸（现有分组或新建）/ 改名 / 设基准 / 添加警报… / 移除（toast「已移除 X · 撤销」，不用原生 confirm）。
+- **「警报」列**：这个标的上用户自己建的警报，徽标上是警报的名字（`label`，没写就是自动生成的「BTC 上穿 130,000」）。对全部自选的警报只在**成立中或本周触发过**的标的上出现，像一个自己起名的筛选标记。没有系统预置的；访客看不到（警报和笔记一样是各人的）。
+- 徽标四态，同一个 `Badge` 组件（复盘页也用），从 `alert_state` 算（`alertBadges`）：**本周新触发**（`fired_at` 落在 `sync.tz` 的本周）淡高亮底（浅色 `bg-accent/10 border-accent/40 text-accent`，深色 `bg-accent/15 border-accent/50`）加圆点；**已触发 / 成立中**正文色实线（事件类触发过就算已触发，公式和状态类看上次判断是否为真）；**未触发**灰字；**已停止**虚线边、`opacity .55`，不用删除线。
+- **悬停徽标**显示白话定义（原生 title，多行）：名字、定义（价格条件写「收盘价上穿 130,000」，公式写「周线公式 close > …」）、范围与触发方式与是否推送、状态和上次触发时间。表头「警报」旁的「?」悬停 / 聚焦弹出状态图例。
+- **点徽标**打开和图表上同一个警报对话框（§5.2）编辑，对话框里也能删除；行菜单「添加警报…」新建，商品默认是这一行，可切到「全部自选」。保存后同一个响应里重新渲染总览。
 - 显示名：yaml `name` > 内置字典中文名 > 数据源名（超过 24 字符 truncate，hover 显全名）。
-- ≤768px 隐藏 sparkline 与 52 周列，徽标 `whitespace-nowrap`；≤640px 改为列表：第一行 名称 + 价格，第二行 所选涨跌周期，第三行 徽标；外层 `overflow-x-auto` 兜底，不允许横向溢出。
+- ≤768px 隐藏 sparkline 与 52 周列，徽标 `whitespace-nowrap`；≤640px 改为列表：第一行 名称 + 价格，第二行 所选涨跌周期，第三行 徽标（徽标是按钮，放在卡片链接外面）；外层 `overflow-x-auto` 兜底，不允许横向溢出。
 - 页脚只显示相对路径 `vault/hebi8.yaml`。
 - 同步错误显示在该行；库为空时显示「首次拉取中…」并轮询。
 
@@ -531,9 +538,9 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 **警报**（TV 的「警报」，§2.6）：
 
 - **入口**：顶栏闹钟按钮「警报」和 `Alt+A`，价格默认填最新价；在主图上右键出现「在 12,345.00 添加警报」（十字线所在价格）；选中水平线 / 水平射线后，浮动工具条多一个闹钟按钮，价格取这条线的价格（只是复制价格，之后挪线不会改警报）。
-- **对话框**（「新建警报」/「编辑警报」）：第一行是标的（当前图表，不可改）；「条件」下拉是 §2.6 表里的九种叫法加「自定义公式」；值的输入随条件变化（一个价格 / 通道的上下沿 / 百分比和 K 线数 / 公式编辑器）；「触发」分段「仅一次 | 每根 K 线一次」；「名称」占位是自动生成的名字。底部「取消」「创建」。数值输入框聚焦全选，回车提交。
+- **对话框**（「新建警报」/「编辑警报」，图表和总览共用）：第一行「商品」分段「当前标的 | 全部自选」，选全部自选时价格和通道类条件不可选；「条件」下拉是 §2.6 表里的九种叫法加「自定义公式」；值的输入随条件变化（一个价格 / 通道的上下沿 / 百分比和 K 线数 / 公式编辑器），公式多一行「周期」日 / 周 / 月 / 季线；「触发」分段「仅一次 | 每根 K 线一次」（全部自选时固定为每根 K 线最多一次）；「名称」占位是自动生成的名字；「通知」勾选框「推到我的通知通道」，不勾就只在总览显示。底部「取消」「创建」，从总览编辑时左边多一个「删除」。数值输入框聚焦全选，回车提交。
 - **图上的警报线**：当前标的每条启用的价格类警报画一条虚线（通道画两条），右端价格轴上有闹钟标签；点标签打开编辑。已停止的不画。
-- **警报列表**：右侧边栏在「自选」「笔记」旁边多一个「警报」页签，列出当前 vault 的全部警报：标的名、条件、触发方式、状态（活动 / 已触发 / 已停止）、当前价和取价时间；每行有「编辑」「暂停 / 恢复」「删除」，点行打开那个标的的图表。
+- **警报列表**：右侧边栏在「自选」「笔记」旁边多一个「警报」页签，列出当前 vault 的全部警报：标的名（对全部自选的写「全部自选」，没有当前价）、条件、触发方式、是否推送、状态（活动 / 已触发 / 已停止）、当前价和取价时间；每行有「编辑」「暂停 / 恢复」「删除」，点行打开那个标的的图表。
 - **写回**：Server Actions `saveAlert(def)`、`deleteAlert(id)`、`setAlertEnabled(id, enabled)`，和别的写操作一样先过 viewer 写权限，写当前 viewer 的 yaml，注释保留。只读访客看到入口，点开是登录提示。
 
 **笔记**：右侧边栏的「笔记」面板，显示 `notes/<fileKey>.md` 的渲染结果，「编辑」切换 textarea，自动保存走 Server Action。没有笔记时显示「写下为什么看它」。
@@ -544,7 +551,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 - 本周 journal：textarea 自动聚焦，**自动保存**（§5.6）；为空时填模板。
 - 上周 journal：渲染展示。
-- 本周变化：遍历 stats，列出所有 `prev != now` 的 (标的, 条件)，按组排列，用同一个 `Badge`（新触发 = 淡高亮，失效 = 虚线），点击进图表。
+- 本周触发的警报：所有「本周新触发」的 (标的, 警报)，按组排列，不在自选里的标的放最后，用同一个 `Badge`，点击进图表。
 - 有笔记的标的：名称 + 笔记首行**纯文本**（`plainFirstLine`：跳过标题和分隔线，去掉强调、代码、链接、图片、列表与引用标记）。
 
 ### 5.4 全局搜索（找标的 / 切标的 / 加标的 / 对比，同一个组件 `SymbolSearch`）
@@ -572,7 +579,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 ### 5.5 设置
 
-不做单独页面。周期选择、涨跌色、图表偏好由各处 UI 写回 yaml；分组、名称、基准由总览行菜单写回；其余（同步时间、别名、条件、告警、数据集）直接改 yaml，页面上给出 vault 相对路径提示。通知通道写在 `~/.config/hebi8/market/notify.json`（§2.5）。反馈用的 GitHub App 只有一个 client id，写在源码里（§5.8），不需要设置页。
+不做单独页面。周期选择、涨跌色、图表偏好由各处 UI 写回 yaml；分组、名称、基准由总览行菜单写回；警报由图表和总览的警报对话框写回；其余（同步时间、别名、数据集）直接改 yaml，页面上给出 vault 相对路径提示。通知通道写在 `~/.config/hebi8/market/notify.json`（§2.5）。反馈用的 GitHub App 只有一个 client id，写在源码里（§5.8），不需要设置页。
 
 ### 5.6 自动保存（笔记与复盘日志）
 
@@ -691,7 +698,7 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 - `GET /api/help` → 帮助面板数据（§5.8，只读本地）。
 - `/api/github/device`（POST 开始 device flow / DELETE 取消）、`/api/github/device/poll`（POST）、`/api/github/logout`（POST）、`/api/github/issues`（GET 最近反馈 / POST 提交）：§5.8，唯一会碰 GitHub 网络的接口，都是打开反馈页签或用户动作触发。
 
-**Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench?, alias? })`、`removeSymbol(key)`、`moveSymbol(key, group)`、`renameSymbol(key, name)`、`setBench(key, bench | null)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveCondition(def)` / `deleteCondition(id)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`、`setUsageLimits({ visitors, limited })`（owner，§1.7）。Server Action 在客户端是**串行派发**的，自动保存靠去抖合并，不并行发。
+**Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench?, alias? })`、`removeSymbol(key)`、`moveSymbol(key, group)`、`renameSymbol(key, name)`、`setBench(key, bench | null)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveAlert({ id?, key | null, cond, value? | when + tf?, trigger, label?, notify? })` / `deleteAlert(id)` / `setAlertEnabled(id, enabled)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`、`setUsageLimits({ visitors, limited })`（owner，§1.7）。Server Action 在客户端是**串行派发**的，自动保存靠去抖合并，不并行发。
 
 所有写入校验输入；文件路径只能落在 vault 内（fileKey 已保证无 `/`、`..`）；写入原子。
 
