@@ -1,0 +1,888 @@
+/**
+ * TradingView's drawing tools that KLineChart does not ship, as overlay templates. Every figure
+ * takes its colour, width and dash from the drawing's `styles.line` (the floating toolbar edits
+ * that), so one style model covers lines, fills and labels. Points are `{timestamp, value}` like
+ * the built-in tools, so drawings persist and follow every timeframe the same way.
+ */
+import {
+  registerOverlay,
+  utils,
+  type Chart,
+  type Coordinate,
+  type Overlay,
+  type OverlayCreateFiguresCallbackParams,
+  type OverlayFigure,
+  type OverlayPerformEventParams,
+  type OverlayTemplate,
+  type Point,
+} from "klinecharts";
+import { lineOf, withAlpha } from "./drawing-style";
+
+type Params = OverlayCreateFiguresCallbackParams<unknown>;
+type Figures = OverlayFigure[];
+type C = Coordinate;
+
+/** Up / down colours (they follow the green-up / red-up setting) and the plain text colour. */
+const theme = { up: "#16a34a", down: "#dc2626", text: "#1c1b19" };
+export function setOverlayTheme(next: typeof theme) {
+  Object.assign(theme, next);
+}
+
+/** The chart the regression and position tools read bars from while they are drawn or dragged. */
+let activeChart: Chart | null = null;
+export function setOverlayChart(chart: Chart | null) {
+  activeChart = chart;
+}
+
+const DASHED = { style: "dashed", dashedValue: [4, 4] } as const;
+const fill = (p: Params, alpha = 0.12) => withAlpha(lineOf(p.chart, p.overlay).color, alpha);
+const shapeStyles = (p: Params, alpha = 0.12) => {
+  const l = lineOf(p.chart, p.overlay);
+  return { style: "stroke_fill", color: withAlpha(l.color, alpha), borderColor: l.color, borderSize: l.size, borderStyle: l.style, borderDashedValue: l.dashedValue };
+};
+const fillOnly = (color: string) => ({ style: "fill", color, borderSize: 0 });
+
+// ---------------------------------------------------------------------------- geometry
+
+/** A far point on the line a→b, past the edge of any pane (the canvas clips it). */
+function far(a: C, b: C): C {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const k = 1e4 / (Math.hypot(dx, dy) || 1);
+  return { x: a.x + dx * k, y: a.y + dy * k };
+}
+const ray = (a: C, b: C): C[] => [a, far(a, b)];
+const both = (a: C, b: C): C[] => [far(b, a), far(a, b)];
+const add = (a: C, d: C): C => ({ x: a.x + d.x, y: a.y + d.y });
+const mid = (a: C, b: C): C => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+const line = (coordinates: C[], styles?: object, ignoreEvent?: boolean): OverlayFigure => ({ type: "line", attrs: { coordinates }, styles, ignoreEvent });
+
+/** y on the line through a and b at x (a's y when the line is vertical). */
+function yAt(a: C, b: C, x: number): number {
+  return a.x === b.x ? a.y : a.y + ((b.y - a.y) * (x - a.x)) / (b.x - a.x);
+}
+
+function quadratic(a: C, control: C, b: C, steps = 48): C[] {
+  return Array.from({ length: steps + 1 }, (_, i) => {
+    const t = i / steps;
+    const u = 1 - t;
+    return { x: u * u * a.x + 2 * u * t * control.x + t * t * b.x, y: u * u * a.y + 2 * u * t * control.y + t * t * b.y };
+  });
+}
+
+function arrowHead(from: C, to: C, size: number): C[] {
+  const angle = Math.atan2(to.y - from.y, to.x - from.x);
+  const wing = (a: number) => ({ x: to.x - size * Math.cos(angle + a), y: to.y - size * Math.sin(angle + a) });
+  return [wing(0.45), to, wing(-0.45)];
+}
+
+// ---------------------------------------------------------------------------- labels and numbers
+
+const precisionOf = (chart: Chart) => chart.getSymbol()?.pricePrecision ?? 2;
+const fmt = (chart: Chart, v: number) => v.toLocaleString("en-US", { minimumFractionDigits: precisionOf(chart), maximumFractionDigits: precisionOf(chart) });
+const signed = (v: number, text: string) => (v > 0 ? `+${text}` : text);
+const pct = (from: number, to: number) => (from ? ((to - from) / Math.abs(from)) * 100 : 0);
+
+function fontOf(chart: Chart) {
+  return chart.getStyles().overlay.text.family;
+}
+
+/** A small text in the drawing's colour with no box (TradingView's level labels). */
+function plain(p: Params, x: number, y: number, text: string, align: CanvasTextAlign = "left", baseline: CanvasTextBaseline = "bottom", color?: string): OverlayFigure {
+  return {
+    type: "text",
+    attrs: { x, y, text, align, baseline },
+    styles: { color: color ?? lineOf(p.chart, p.overlay).color, backgroundColor: "transparent", borderSize: 0, size: 11, family: fontOf(p.chart), paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 },
+    ignoreEvent: true,
+  };
+}
+
+/** A filled label box (white text on the drawing's colour, or on `color`). */
+function tag(p: Params, x: number, y: number, text: string, align: CanvasTextAlign = "center", baseline: CanvasTextBaseline = "middle", color?: string): OverlayFigure {
+  const bg = color ?? lineOf(p.chart, p.overlay).color;
+  return {
+    type: "text",
+    attrs: { x, y, text, align, baseline },
+    styles: { color: "#ffffff", backgroundColor: bg, borderColor: bg, borderSize: 0, borderRadius: 3, size: 11, family: fontOf(p.chart), paddingLeft: 5, paddingRight: 5, paddingTop: 3, paddingBottom: 3 },
+    ignoreEvent: true,
+  };
+}
+
+/** Several lines in one box, centred on x; `top` is the box's top edge. */
+function infoBox(p: Params, x: number, top: number, lines: string[], color?: string): Figures {
+  const size = 11;
+  const family = fontOf(p.chart);
+  const width = Math.max(...lines.map((t) => utils.calcTextWidth(t, size, "normal", family))) + 12;
+  const lineHeight = 16;
+  const height = lines.length * lineHeight + 6;
+  const bg = color ?? lineOf(p.chart, p.overlay).color;
+  return [
+    { type: "rect", attrs: { x: x - width / 2, y: top, width, height }, styles: { style: "fill", color: withAlpha(bg, 0.9), borderRadius: 4 }, ignoreEvent: true },
+    ...lines.map((text, i) => ({
+      type: "text",
+      attrs: { x, y: top + 3 + i * lineHeight + lineHeight / 2, text, align: "center", baseline: "middle" },
+      styles: { color: "#ffffff", backgroundColor: "transparent", borderSize: 0, size, family, paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 },
+      ignoreEvent: true,
+    })),
+  ];
+}
+
+// ---------------------------------------------------------------------------- bars
+
+function dataIndexOf(chart: Chart, timestamp: number): number {
+  const list = chart.getDataList();
+  if (list.length === 0) return 0;
+  const last = list.length - 1;
+  const step = list.length > 1 ? list[last].timestamp - list[last - 1].timestamp : 86400000;
+  if (timestamp > list[last].timestamp) return last + Math.round((timestamp - list[last].timestamp) / step);
+  let lo = 0;
+  let hi = last;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (list[m].timestamp < timestamp) lo = m + 1;
+    else hi = m;
+  }
+  return lo;
+}
+
+function timestampOf(chart: Chart, index: number): number {
+  const list = chart.getDataList();
+  const last = list.length - 1;
+  if (index <= last) return list[Math.max(0, index)].timestamp;
+  const step = list.length > 1 ? list[last].timestamp - list[last - 1].timestamp : 86400000;
+  return list[last].timestamp + (index - last) * step;
+}
+
+/** "12 根 K 线 · 84 天" between two points. */
+function span(p: Params, a: Partial<Point>, b: Partial<Point>): string {
+  const bars = dataIndexOf(p.chart, b.timestamp ?? 0) - dataIndexOf(p.chart, a.timestamp ?? 0);
+  const days = Math.round(((b.timestamp ?? 0) - (a.timestamp ?? 0)) / 86400000);
+  return `${bars} 根K线 · ${days} 天`;
+}
+
+function priceChange(p: Params, from: number, to: number): string {
+  return `${signed(to - from, fmt(p.chart, to - from))} (${signed(to - from, pct(from, to).toFixed(2))}%)`;
+}
+
+// ---------------------------------------------------------------------------- templates
+
+type Template = OverlayTemplate<unknown>;
+const base = { needDefaultPointFigure: true, needDefaultXAxisFigure: true, needDefaultYAxisFigure: true } as const;
+
+const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+const FIB_EXT = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.618, 2.618];
+
+const lines: Template[] = [
+  {
+    name: "infoLine",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      const [pa, pb] = p.overlay.points;
+      const deg = (Math.atan2(a.y - b.y, b.x - a.x) * 180) / Math.PI;
+      const below = b.y >= a.y;
+      return [
+        line([a, b]),
+        ...infoBox(p, b.x, below ? b.y + 12 : b.y - 12 - 54, [priceChange(p, pa.value ?? 0, pb.value ?? 0), span(p, pa, pb), `${deg.toFixed(1)}°`]),
+      ];
+    },
+  },
+  {
+    name: "trendAngle",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      const angle = Math.atan2(b.y - a.y, b.x - a.x);
+      const deg = (-angle * 180) / Math.PI;
+      const r = 36;
+      return [
+        line([a, b]),
+        line([a, { x: a.x + r + 24, y: a.y }], DASHED, true),
+        { type: "arc", attrs: { x: a.x, y: a.y, r, startAngle: Math.min(0, angle), endAngle: Math.max(0, angle) }, ignoreEvent: true },
+        plain(p, a.x + r + 6, a.y + (angle < 0 ? -4 : 14), `${deg.toFixed(1)}°`),
+      ];
+    },
+  },
+  {
+    name: "crossLine",
+    totalStep: 2,
+    ...base,
+    createPointFigures: ({ coordinates: [a], bounding }) => [
+      line([{ x: 0, y: a.y }, { x: bounding.width, y: a.y }]),
+      line([{ x: a.x, y: 0 }, { x: a.x, y: bounding.height }]),
+    ],
+  },
+  {
+    name: "parallelChannel",
+    totalStep: 4,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b, c] = p.coordinates;
+      if (!b) return [];
+      if (!c) return [line([a, b])];
+      const d = { x: 0, y: c.y - yAt(a, b, c.x) };
+      const a2 = add(a, d);
+      const b2 = add(b, d);
+      return [
+        { type: "polygon", attrs: { coordinates: [a, b, b2, a2] }, styles: fillOnly(fill(p, 0.1)) },
+        line([a, b]),
+        line([a2, b2]),
+        line([mid(a, a2), mid(b, b2)], DASHED, true),
+      ];
+    },
+  },
+  {
+    name: "regressionTrend",
+    totalStep: 3,
+    ...base,
+    // the handles sit on the regression line, like TradingView's
+    performEventMoveForDrawing: (e) => snapToRegression(e),
+    performEventPressedMove: (e) => snapToRegression(e),
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      const [pa, pb] = p.overlay.points;
+      if (!b || pa.timestamp === undefined || pb.timestamp === undefined || !p.yAxis) return [];
+      const fit = regression(p.chart, pa.timestamp, pb.timestamp);
+      if (!fit) return [line([a, b])];
+      const y = (i: number, k: number) => p.yAxis!.convertToPixel(fit.at(i) + k * fit.sd);
+      const [i0, i1] = pa.timestamp <= pb.timestamp ? [fit.i0, fit.i1] : [fit.i1, fit.i0];
+      const pts = (k: number) => [
+        { x: a.x, y: y(i0, k) },
+        { x: b.x, y: y(i1, k) },
+      ];
+      const up = pts(2);
+      const down = pts(-2);
+      return [
+        { type: "polygon", attrs: { coordinates: [up[0], up[1], down[1], down[0]] }, styles: fillOnly(fill(p, 0.1)) },
+        line(pts(0), DASHED),
+        line(up),
+        line(down),
+      ];
+    },
+  },
+  {
+    name: "pitchfork",
+    totalStep: 4,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b, c] = p.coordinates;
+      if (!b) return [];
+      if (!c) return [line([a, b])];
+      const m = mid(b, c);
+      const d = { x: m.x - a.x, y: m.y - a.y };
+      return [
+        { type: "polygon", attrs: { coordinates: [b, far(b, add(b, d)), far(c, add(c, d)), c] }, styles: fillOnly(fill(p, 0.08)) },
+        line(ray(a, m)),
+        line(ray(b, add(b, d))),
+        line(ray(c, add(c, d))),
+        line([b, c]),
+      ];
+    },
+  },
+];
+
+function regression(chart: Chart, t0: number, t1: number) {
+  const list = chart.getDataList();
+  const [i0, i1] = [dataIndexOf(chart, Math.min(t0, t1)), Math.min(list.length - 1, dataIndexOf(chart, Math.max(t0, t1)))];
+  const n = i1 - i0 + 1;
+  if (n < 2) return null;
+  let sx = 0;
+  let sy = 0;
+  let sxy = 0;
+  let sxx = 0;
+  for (let i = i0; i <= i1; i++) {
+    const v = list[i].close;
+    sx += i;
+    sy += v;
+    sxy += i * v;
+    sxx += i * i;
+  }
+  const slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+  const intercept = (sy - slope * sx) / n;
+  const at = (i: number) => intercept + slope * i;
+  let ss = 0;
+  for (let i = i0; i <= i1; i++) ss += (list[i].close - at(i)) ** 2;
+  return { i0, i1, at, sd: Math.sqrt(ss / n) };
+}
+
+function snapToRegression({ points }: OverlayPerformEventParams) {
+  const [a, b] = points;
+  if (!activeChart || a?.timestamp === undefined || b?.timestamp === undefined) return;
+  const fit = regression(activeChart, a.timestamp, b.timestamp);
+  if (!fit) return;
+  const [ia, ib] = a.timestamp <= b.timestamp ? [fit.i0, fit.i1] : [fit.i1, fit.i0];
+  a.value = fit.at(ia);
+  b.value = fit.at(ib);
+}
+
+const fibLevelText = (p: Params, level: number, value: number) => `${level} (${fmt(p.chart, value)})`;
+
+const fib: Template[] = [
+  {
+    name: "fibExtension",
+    totalStep: 4,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b, c] = p.coordinates;
+      const [pa, pb, pc] = p.overlay.points;
+      if (!b) return [];
+      const guide = line(c ? [a, b, c] : [a, b], DASHED);
+      if (!c || !p.yAxis) return [guide];
+      const move = (pb.value ?? 0) - (pa.value ?? 0);
+      const x1 = Math.max(b.x, c.x) + Math.abs(b.x - a.x);
+      return [
+        guide,
+        ...FIB_EXT.flatMap((level) => {
+          const value = (pc.value ?? 0) + move * level;
+          const y = p.yAxis!.convertToPixel(value);
+          return [line([{ x: c.x, y }, { x: x1, y }]), plain(p, c.x, y, fibLevelText(p, level, value))];
+        }),
+      ];
+    },
+  },
+  {
+    name: "fibChannel",
+    totalStep: 4,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b, c] = p.coordinates;
+      if (!b) return [];
+      if (!c) return [line([a, b])];
+      const dy = c.y - yAt(a, b, c.x);
+      return FIB.flatMap((level) => {
+        const d = { x: 0, y: dy * level };
+        const from = add(a, d);
+        return [line(ray(from, add(b, d))), plain(p, from.x, from.y, `${level}`, "right", "middle")];
+      });
+    },
+  },
+  {
+    name: "fibTimeZone",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [line([{ x: a.x, y: 0 }, { x: a.x, y: p.bounding.height }])];
+      const dx = b.x - a.x;
+      const seq = [0, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144];
+      return seq.flatMap((n) => {
+        const x = a.x + dx * n;
+        if (x < -10 || x > p.bounding.width + 10) return [];
+        return [line([{ x, y: 0 }, { x, y: p.bounding.height }]), plain(p, x + 2, p.bounding.height - 4, `${n}`)];
+      });
+    },
+  },
+  {
+    name: "fibFan",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      const levels = [0, 0.25, 0.382, 0.5, 0.618, 0.75, 1];
+      return [
+        line([a, b], DASHED, true),
+        ...levels.flatMap((level) => {
+          const t = { x: b.x, y: b.y + (a.y - b.y) * level };
+          return [line(ray(a, t)), plain(p, b.x, t.y, `${level}`, "left", "middle")];
+        }),
+      ];
+    },
+  },
+  {
+    name: "fibCircles",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      const c = mid(a, b);
+      const r = Math.hypot(b.x - a.x, b.y - a.y) / 2;
+      const levels = [0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.618, 2.618];
+      return [
+        line([a, b], DASHED, true),
+        ...levels.map((level) => ({ type: "circle", attrs: { x: c.x, y: c.y, r: r * level }, styles: { style: "stroke", borderColor: lineOf(p.chart, p.overlay).color, borderSize: lineOf(p.chart, p.overlay).size } })),
+      ];
+    },
+  },
+  {
+    name: "fibSpiral",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      const r0 = Math.hypot(b.x - a.x, b.y - a.y);
+      const t0 = Math.atan2(b.y - a.y, b.x - a.x);
+      const phi = (1 + Math.sqrt(5)) / 2;
+      const turns = Array.from({ length: 321 }, (_, i) => -4 * Math.PI + (i / 320) * 6 * Math.PI);
+      const curve = turns.map((t) => {
+        const r = r0 * phi ** ((2 * t) / Math.PI);
+        return { x: a.x + r * Math.cos(t0 + t), y: a.y + r * Math.sin(t0 + t) };
+      });
+      return [line([a, b], DASHED, true), line(curve)];
+    },
+  },
+  {
+    name: "fibArcs",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      const r = Math.hypot(b.x - a.x, b.y - a.y);
+      // half circles around the second point, opening towards the first
+      const [start, end] = a.y < b.y ? [Math.PI, 2 * Math.PI] : [0, Math.PI];
+      return [
+        line([a, b], DASHED, true),
+        ...[0.382, 0.5, 0.618, 1].flatMap((level) => [
+          { type: "arc", attrs: { x: b.x, y: b.y, r: r * level, startAngle: start, endAngle: end } },
+          plain(p, b.x, b.y + (a.y < b.y ? -r * level : r * level), `${level}`, "center", a.y < b.y ? "bottom" : "top"),
+        ]),
+      ];
+    },
+  },
+  {
+    name: "gannBox",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      const levels = [0, 0.25, 0.382, 0.5, 0.618, 0.75, 1];
+      const [x0, x1, y0, y1] = [Math.min(a.x, b.x), Math.max(a.x, b.x), Math.min(a.y, b.y), Math.max(a.y, b.y)];
+      return [
+        { type: "rect", attrs: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, styles: fillOnly(fill(p, 0.08)) },
+        ...levels.flatMap((l) => {
+          const x = x0 + (x1 - x0) * l;
+          const y = y0 + (y1 - y0) * l;
+          return [line([{ x, y: y0 }, { x, y: y1 }]), line([{ x: x0, y }, { x: x1, y }]), plain(p, x, y1 + 2, `${l}`, "center", "top"), plain(p, x0 - 2, y, `${l}`, "right", "middle")];
+        }),
+      ];
+    },
+  },
+  {
+    name: "gannFan",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      // price × time: 1/8 … 1/1 … 8/1, the 1/1 line through the second point
+      const fans: [string, number, number][] = [
+        ["1/8", 8, 1],
+        ["1/4", 4, 1],
+        ["1/3", 3, 1],
+        ["1/2", 2, 1],
+        ["1/1", 1, 1],
+        ["2/1", 1, 2],
+        ["3/1", 1, 3],
+        ["4/1", 1, 4],
+        ["8/1", 1, 8],
+      ];
+      return fans.flatMap(([text, tx, ty]) => {
+        const t = { x: a.x + dx * tx, y: a.y + dy * ty };
+        const at = { x: a.x + dx, y: a.y + (dy * ty) / tx };
+        return [line(ray(a, t)), plain(p, at.x + 2, at.y, text, "left", "middle")];
+      });
+    },
+  },
+];
+
+// ---------------------------------------------------------------------------- patterns
+
+/** Point labels go above a local high and below a local low. */
+function pointLabels(p: Params, labels: string[]): Figures {
+  const cs = p.coordinates;
+  return cs.flatMap((c, i) => {
+    const text = labels[i];
+    if (!text) return [];
+    const high = [cs[i - 1], cs[i + 1]].every((n) => !n || c.y <= n.y);
+    return [plain(p, c.x, high ? c.y - 6 : c.y + 6, text, "center", high ? "bottom" : "top")];
+  });
+}
+
+const ratio = (p: Params, i: number, j: number, k: number, l: number) => {
+  const v = p.overlay.points.map((pt) => pt.value ?? 0);
+  const den = Math.abs(v[j] - v[i]);
+  return den ? (Math.abs(v[l] - v[k]) / den).toFixed(3) : "";
+};
+
+function ratioLine(p: Params, i: number, j: number, text: string): Figures {
+  const a = p.coordinates[i];
+  const b = p.coordinates[j];
+  if (!a || !b || !text) return [];
+  const m = mid(a, b);
+  return [line([a, b], DASHED, true), tag(p, m.x, m.y, text)];
+}
+
+function pattern(name: string, labels: string[], extra?: (p: Params) => Figures): Template {
+  return {
+    name,
+    totalStep: labels.length + 1,
+    ...base,
+    createPointFigures: (p) => [...(extra?.(p) ?? []), ...(p.coordinates.length > 1 ? [line(p.coordinates)] : []), ...pointLabels(p, labels)],
+  };
+}
+
+const patterns: Template[] = [
+  pattern("xabcd", ["X", "A", "B", "C", "D"], (p) => {
+    const [x, a, b, c, d] = p.coordinates;
+    return [
+      ...(b ? [{ type: "polygon", attrs: { coordinates: [x, a, b] }, styles: fillOnly(fill(p)) }] : []),
+      ...(d ? [{ type: "polygon", attrs: { coordinates: [b, c, d] }, styles: fillOnly(fill(p)) }] : []),
+      ...(b ? ratioLine(p, 0, 2, ratio(p, 0, 1, 1, 2)) : []),
+      ...(c ? ratioLine(p, 1, 3, ratio(p, 1, 2, 2, 3)) : []),
+      ...(d ? [...ratioLine(p, 2, 4, ratio(p, 2, 3, 3, 4)), ...ratioLine(p, 0, 4, ratio(p, 0, 1, 1, 4))] : []),
+    ];
+  }),
+  pattern("abcd", ["A", "B", "C", "D"], (p) => [
+    ...(p.coordinates[2] ? ratioLine(p, 0, 2, ratio(p, 0, 1, 1, 2)) : []),
+    ...(p.coordinates[3] ? ratioLine(p, 1, 3, ratio(p, 1, 2, 2, 3)) : []),
+  ]),
+  pattern("trianglePattern", ["A", "B", "C", "D"], (p) => {
+    const [a, b, c, d] = p.coordinates;
+    return [
+      ...(d ? [{ type: "polygon", attrs: { coordinates: [a, b, d, c] }, styles: fillOnly(fill(p, 0.1)) }] : []),
+      ...(c ? [line(ray(a, c), DASHED, true)] : []),
+      ...(d ? [line(ray(b, d), DASHED, true)] : []),
+    ];
+  }),
+  pattern("headShoulders", ["", "左肩", "", "头", "", "右肩", ""], (p) => {
+    const [, , n1, , n2] = p.coordinates;
+    return n2 ? [line(both(n1, n2), DASHED, true), tag(p, mid(n1, n2).x, mid(n1, n2).y, "颈线")] : [];
+  }),
+  pattern("elliottImpulse", ["0", "(1)", "(2)", "(3)", "(4)", "(5)"]),
+  pattern("elliottCorrection", ["0", "(A)", "(B)", "(C)"]),
+  pattern("elliottTriangle", ["0", "(A)", "(B)", "(C)", "(D)", "(E)"]),
+  pattern("elliottDoubleCombo", ["0", "(W)", "(X)", "(Y)"]),
+];
+
+// ---------------------------------------------------------------------------- prediction and measurement
+
+/** Entry, target and stop; the last two share the right edge. One click places it at a size that fits the view. */
+function position(name: string, long: boolean): Template {
+  const sync = ({ points, performPointIndex }: OverlayPerformEventParams) => {
+    const [, target, stop] = points;
+    if (!target || !stop) return;
+    if (performPointIndex === 1) stop.timestamp = target.timestamp;
+    if (performPointIndex === 2) target.timestamp = stop.timestamp;
+  };
+  return {
+    name,
+    totalStep: 2,
+    ...base,
+    needDefaultXAxisFigure: false,
+    performEventMoveForDrawing: ({ points }) => {
+      const entry = points[0];
+      if (!activeChart || entry?.timestamp === undefined || entry.value === undefined) return;
+      const { from, to } = activeChart.getVisibleRange();
+      const list = activeChart.getDataList().slice(from, to);
+      const high = Math.max(...list.map((d) => d.high));
+      const low = Math.min(...list.map((d) => d.low));
+      const room = Number.isFinite(high - low) && high > low ? high - low : Math.abs(entry.value) * 0.1;
+      const end = timestampOf(activeChart, dataIndexOf(activeChart, entry.timestamp) + Math.max(5, Math.round((to - from) * 0.15)));
+      const dir = long ? 1 : -1;
+      points[1] = { timestamp: end, value: entry.value + dir * room * 0.12 };
+      points[2] = { timestamp: end, value: entry.value - dir * room * 0.06 };
+    },
+    performEventPressedMove: sync,
+    createPointFigures: (p) => {
+      const [e, t, s] = p.coordinates;
+      const [pe, pt, ps] = p.overlay.points;
+      if (!t || !s) return [];
+      const entry = pe.value ?? 0;
+      const reward = Math.abs((pt.value ?? 0) - entry);
+      const risk = Math.abs(entry - (ps.value ?? 0));
+      const x0 = Math.min(e.x, t.x);
+      const width = Math.abs(t.x - e.x);
+      const box = (y1: number, y2: number, color: string): OverlayFigure => ({
+        type: "rect",
+        attrs: { x: x0, y: Math.min(y1, y2), width, height: Math.abs(y2 - y1) },
+        styles: { style: "fill", color: withAlpha(color, 0.18) },
+      });
+      const cx = x0 + width / 2;
+      const up = t.y < s.y;
+      return [
+        box(e.y, t.y, theme.up),
+        box(e.y, s.y, theme.down),
+        line([{ x: x0, y: e.y }, { x: x0 + width, y: e.y }], { color: theme.text, size: 1 }),
+        tag(p, cx, t.y + (up ? -4 : 4), `目标 ${fmt(p.chart, pt.value ?? 0)} (${pct(entry, pt.value ?? 0).toFixed(2)}%)`, "center", up ? "bottom" : "top", theme.up),
+        tag(p, cx, s.y + (up ? 4 : -4), `止损 ${fmt(p.chart, ps.value ?? 0)} (${pct(entry, ps.value ?? 0).toFixed(2)}%)`, "center", up ? "top" : "bottom", theme.down),
+        tag(p, cx, e.y, `盈亏比 ${risk ? (reward / risk).toFixed(2) : "—"}`, "center", "middle", "#64748b"),
+      ];
+    },
+  };
+}
+
+const measure: Template[] = [
+  position("longPosition", true),
+  position("shortPosition", false),
+  {
+    name: "priceRange",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      const [pa, pb] = p.overlay.points;
+      const x0 = Math.min(a.x, b.x);
+      const x1 = Math.max(a.x, b.x);
+      const cx = (x0 + x1) / 2;
+      const head = { x: cx, y: b.y };
+      return [
+        { type: "rect", attrs: { x: x0, y: Math.min(a.y, b.y), width: x1 - x0, height: Math.abs(b.y - a.y) }, styles: fillOnly(fill(p)) },
+        line([{ x: x0, y: a.y }, { x: x1, y: a.y }]),
+        line([{ x: x0, y: b.y }, { x: x1, y: b.y }]),
+        line([{ x: cx, y: a.y }, head]),
+        line(arrowHead({ x: cx, y: a.y }, head, 8)),
+        ...infoBox(p, cx, b.y < a.y ? b.y - 30 : b.y + 8, [priceChange(p, pa.value ?? 0, pb.value ?? 0)]),
+      ];
+    },
+  },
+  {
+    name: "dateRange",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      const [pa, pb] = p.overlay.points;
+      const y0 = Math.min(a.y, b.y);
+      const y1 = Math.max(a.y, b.y);
+      const cy = (y0 + y1) / 2;
+      const head = { x: b.x, y: cy };
+      return [
+        { type: "rect", attrs: { x: Math.min(a.x, b.x), y: y0, width: Math.abs(b.x - a.x), height: y1 - y0 }, styles: fillOnly(fill(p)) },
+        line([{ x: a.x, y: y0 }, { x: a.x, y: y1 }]),
+        line([{ x: b.x, y: y0 }, { x: b.x, y: y1 }]),
+        line([{ x: a.x, y: cy }, head]),
+        line(arrowHead({ x: a.x, y: cy }, head, 8)),
+        ...infoBox(p, (a.x + b.x) / 2, y1 + 8, [span(p, pa, pb)]),
+      ];
+    },
+  },
+  {
+    name: "datePriceRange",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      const [pa, pb] = p.overlay.points;
+      const cx = (a.x + b.x) / 2;
+      const cy = (a.y + b.y) / 2;
+      return [
+        { type: "rect", attrs: { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) }, styles: fillOnly(fill(p)) },
+        line([{ x: cx, y: a.y }, { x: cx, y: b.y }]),
+        line(arrowHead({ x: cx, y: a.y }, { x: cx, y: b.y }, 8)),
+        line([{ x: a.x, y: cy }, { x: b.x, y: cy }]),
+        line(arrowHead({ x: a.x, y: cy }, { x: b.x, y: cy }, 8)),
+        ...infoBox(p, cx, Math.max(a.y, b.y) + 8, [priceChange(p, pa.value ?? 0, pb.value ?? 0), span(p, pa, pb)]),
+      ];
+    },
+  },
+];
+
+// ---------------------------------------------------------------------------- shapes
+
+/** Paths and polylines (OPEN_DRAWINGS) take up to this many clicks; KChart finishes them earlier. */
+const OPEN_STEPS = 200;
+
+const shapes: Template[] = [
+  {
+    name: "rect",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      return [{ type: "rect", attrs: { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) }, styles: shapeStyles(p) }];
+    },
+  },
+  {
+    name: "circle",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      return [{ type: "circle", attrs: { x: a.x, y: a.y, r: Math.hypot(b.x - a.x, b.y - a.y) }, styles: shapeStyles(p) }];
+    },
+  },
+  {
+    name: "ellipse",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      const c = mid(a, b);
+      const rx = Math.abs(b.x - a.x) / 2;
+      const ry = Math.abs(b.y - a.y) / 2;
+      const coordinates = Array.from({ length: 72 }, (_, i) => ({ x: c.x + rx * Math.cos((i / 72) * 2 * Math.PI), y: c.y + ry * Math.sin((i / 72) * 2 * Math.PI) }));
+      return [{ type: "polygon", attrs: { coordinates }, styles: shapeStyles(p) }];
+    },
+  },
+  {
+    name: "triangle",
+    totalStep: 4,
+    ...base,
+    createPointFigures: (p) => (p.coordinates.length < 3 ? [line(p.coordinates)] : [{ type: "polygon", attrs: { coordinates: p.coordinates }, styles: shapeStyles(p) }]),
+  },
+  {
+    name: "arc",
+    totalStep: 4,
+    ...base,
+    // start, end, then the bulge
+    createPointFigures: (p) => {
+      const [a, b, c] = p.coordinates;
+      if (!b) return [];
+      if (!c) return [line([a, b])];
+      const curve = quadratic(a, { x: 2 * c.x - (a.x + b.x) / 2, y: 2 * c.y - (a.y + b.y) / 2 }, b);
+      return [{ type: "polygon", attrs: { coordinates: curve }, styles: fillOnly(fill(p)) }, line(curve)];
+    },
+  },
+  {
+    name: "curve",
+    totalStep: 4,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b, c] = p.coordinates;
+      if (!b) return [];
+      if (!c) return [line([a, b])];
+      return [line(quadratic(a, { x: 2 * c.x - (a.x + b.x) / 2, y: 2 * c.y - (a.y + b.y) / 2 }, b))];
+    },
+  },
+  {
+    name: "path",
+    totalStep: OPEN_STEPS,
+    ...base,
+    createPointFigures: (p) => {
+      const cs = p.coordinates;
+      if (cs.length < 2) return [];
+      return [line(cs), line(arrowHead(cs[cs.length - 2], cs[cs.length - 1], 10))];
+    },
+  },
+  {
+    name: "polyline",
+    totalStep: OPEN_STEPS,
+    ...base,
+    createPointFigures: (p) => (p.coordinates.length < 2 ? [] : [line(p.coordinates)]),
+  },
+];
+
+// ---------------------------------------------------------------------------- annotation
+
+export const DEFAULT_TEXT_SIZE = 14;
+export const textOf = (o: Pick<Overlay, "extendData">) => (typeof o.extendData === "string" ? o.extendData : "");
+export const textSizeOf = (o: Pick<Overlay, "styles">) => (o.styles?.text?.size as number | undefined) ?? DEFAULT_TEXT_SIZE;
+
+const annotation: Template[] = [
+  {
+    name: "text",
+    totalStep: 2,
+    ...base,
+    needDefaultXAxisFigure: false,
+    needDefaultYAxisFigure: false,
+    createPointFigures: (p) => {
+      const [a] = p.coordinates;
+      const size = textSizeOf(p.overlay);
+      const color = lineOf(p.chart, p.overlay).color;
+      return textOf(p.overlay)
+        .split("\n")
+        .map((text, i) => ({
+          type: "text",
+          attrs: { x: a.x, y: a.y + i * Math.round(size * 1.35), text: text || " ", align: "left", baseline: "top" },
+          styles: { color, size, family: fontOf(p.chart), backgroundColor: "transparent", borderSize: 0, paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 },
+        }));
+    },
+  },
+  // KLineChart's own 注释 only reacts on its anchor point; this one can be picked and dragged by its text
+  {
+    name: "simpleAnnotation",
+    totalStep: 2,
+    needDefaultPointFigure: true,
+    createPointFigures: (p) => {
+      const [a] = p.coordinates;
+      const top = a.y - 6;
+      const end = top - 50;
+      const color = lineOf(p.chart, p.overlay).color;
+      return [
+        line([{ x: a.x, y: top }, { x: a.x, y: end }], DASHED, true),
+        { type: "polygon", attrs: { coordinates: [{ x: a.x, y: end }, { x: a.x - 4, y: end - 5 }, { x: a.x + 4, y: end - 5 }] }, styles: fillOnly(color), ignoreEvent: true },
+        { type: "text", attrs: { x: a.x, y: end - 5, text: textOf(p.overlay) || " ", align: "center", baseline: "bottom" }, styles: { size: textSizeOf(p.overlay), backgroundColor: color, borderColor: color, color: "#ffffff" } },
+      ];
+    },
+  },
+  {
+    name: "priceLabel",
+    totalStep: 2,
+    ...base,
+    needDefaultXAxisFigure: false,
+    createPointFigures: (p) => {
+      const [a] = p.coordinates;
+      const color = lineOf(p.chart, p.overlay).color;
+      return [
+        { type: "polygon", attrs: { coordinates: [a, { x: a.x - 5, y: a.y - 8 }, { x: a.x + 5, y: a.y - 8 }] }, styles: fillOnly(color) },
+        { ...tag(p, a.x, a.y - 8, fmt(p.chart, p.overlay.points[0]?.value ?? 0), "center", "bottom"), ignoreEvent: false },
+      ];
+    },
+  },
+  {
+    name: "arrow",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      return [line([a, b]), line(arrowHead(a, b, 12))];
+    },
+  },
+  arrowMark("arrowMarkUp", true),
+  arrowMark("arrowMarkDown", false),
+  {
+    name: "flag",
+    totalStep: 2,
+    ...base,
+    needDefaultXAxisFigure: false,
+    createPointFigures: (p) => {
+      const [a] = p.coordinates;
+      const color = lineOf(p.chart, p.overlay).color;
+      return [
+        line([a, { x: a.x, y: a.y - 28 }], { color, size: 2, style: "solid" }),
+        { type: "polygon", attrs: { coordinates: [{ x: a.x, y: a.y - 28 }, { x: a.x + 18, y: a.y - 23 }, { x: a.x, y: a.y - 17 }] }, styles: fillOnly(color) },
+      ];
+    },
+  },
+];
+
+/** TradingView's 向上 / 向下箭头: a fat arrow under (over) the point, green (red). */
+function arrowMark(name: string, up: boolean): Template {
+  return {
+    name,
+    totalStep: 2,
+    ...base,
+    needDefaultXAxisFigure: false,
+    createPointFigures: (p) => {
+      const [a] = p.coordinates;
+      const s = up ? 1 : -1;
+      const tip = { x: a.x, y: a.y + 4 * s };
+      const shape = [tip, { x: a.x + 9, y: tip.y + 10 * s }, { x: a.x + 4, y: tip.y + 10 * s }, { x: a.x + 4, y: tip.y + 24 * s }, { x: a.x - 4, y: tip.y + 24 * s }, { x: a.x - 4, y: tip.y + 10 * s }, { x: a.x - 9, y: tip.y + 10 * s }];
+      return [{ type: "polygon", attrs: { coordinates: shape }, styles: fillOnly(up ? theme.up : theme.down) }];
+    },
+  };
+}
+
+let registered = false;
+export function registerDrawingTemplates() {
+  if (registered) return;
+  registered = true;
+  for (const t of [...lines, ...fib, ...patterns, ...measure, ...shapes, ...annotation]) registerOverlay(t);
+}
