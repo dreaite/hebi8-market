@@ -1,14 +1,15 @@
 /**
  * Post-sync alerts: conditions marked `notify` (on every watched symbol) and `alerts` rules (on
  * one symbol each) are pushed when they newly hold. State lives in the `alert_state` table so a
- * restart does not repeat a message; a fresh cache records silently instead of replaying.
+ * restart does not repeat a message; a fresh cache records silently instead of replaying. Each
+ * vault is judged and delivered on its own, with its own rows.
  */
 import { loadDaily } from "./bars";
 import { evalRule } from "./conditions";
 import { allItems, type Config } from "./config";
 import { getDb } from "./db";
 import { nameOf } from "./names";
-import { channelNames, deliver, formatDigest, readNotifyConfig, type AlertEvent } from "./notify";
+import { channelNames, channelsFor, deliver, formatDigest, type AlertEvent } from "./notify";
 import type { ConditionResult } from "./stats";
 import { listSymbols } from "./store";
 import type { Timeframe } from "./symbols";
@@ -59,8 +60,8 @@ function checks(cfg: Config, conditions: Map<string, Record<string, ConditionRes
 
 const id = (rule: string, key: string) => `${rule}\u0000${key}`;
 
-function readState(): Map<string, StateRow> {
-  const rows = getDb().prepare("SELECT rule, key, state, fired_bar FROM alert_state").all() as {
+function readState(vault: string): Map<string, StateRow> {
+  const rows = getDb().prepare("SELECT rule, key, state, fired_bar FROM alert_state WHERE vault = ?").all(vault) as {
     rule: string;
     key: string;
     state: number | null;
@@ -69,39 +70,40 @@ function readState(): Map<string, StateRow> {
   return new Map(rows.map((r) => [id(r.rule, r.key), { state: r.state ? 1 : 0, firedBar: r.fired_bar }]));
 }
 
-function writeState(updates: { rule: string; key: string; row: StateRow; fired: boolean }[], keep: Set<string>): void {
+function writeState(vault: string, updates: { rule: string; key: string; row: StateRow; fired: boolean }[], keep: Set<string>): void {
   const db = getDb();
   const upsert = db.prepare(
-    `INSERT INTO alert_state (rule, key, state, fired_bar, fired_at) VALUES (@rule, @key, @state, @firedBar, @firedAt)
-     ON CONFLICT (rule, key) DO UPDATE SET state = @state, fired_bar = @firedBar, fired_at = coalesce(@firedAt, fired_at)`,
+    `INSERT INTO alert_state (vault, rule, key, state, fired_bar, fired_at) VALUES (@vault, @rule, @key, @state, @firedBar, @firedAt)
+     ON CONFLICT (vault, rule, key) DO UPDATE SET state = @state, fired_bar = @firedBar, fired_at = coalesce(@firedAt, fired_at)`,
   );
-  const all = db.prepare("SELECT rule, key FROM alert_state").all() as { rule: string; key: string }[];
-  const remove = db.prepare("DELETE FROM alert_state WHERE rule = ? AND key = ?");
+  const all = db.prepare("SELECT rule, key FROM alert_state WHERE vault = ?").all(vault) as { rule: string; key: string }[];
+  const remove = db.prepare("DELETE FROM alert_state WHERE vault = ? AND rule = ? AND key = ?");
   db.transaction(() => {
     for (const u of updates) {
-      upsert.run({ rule: u.rule, key: u.key, state: u.row.state, firedBar: u.row.firedBar, firedAt: u.fired ? Date.now() : null });
+      upsert.run({ vault, rule: u.rule, key: u.key, state: u.row.state, firedBar: u.row.firedBar, firedAt: u.fired ? Date.now() : null });
     }
     // rules or symbols that left the yaml start over silently if they come back
-    for (const r of all) if (!keep.has(id(r.rule, r.key))) remove.run(r.rule, r.key);
+    for (const r of all) if (!keep.has(id(r.rule, r.key))) remove.run(vault, r.rule, r.key);
   })();
 }
 
 const log = (msg: string) => console.log(`[hebi8] ${msg}`);
 
-/** Run after `syncAll` has written stats. Never throws; returns the events it found. */
-export async function runAlerts(cfg: Config, conditions: Map<string, Record<string, ConditionResult>>): Promise<AlertEvent[]> {
+/** Run for each vault after `syncAll` has written its stats. Never throws; returns the events it found. */
+export async function runAlerts(vault: string, cfg: Config, conditions: Map<string, Record<string, ConditionResult>>): Promise<AlertEvent[]> {
+  const who = vault ? ` (${vault})` : "";
   try {
     const list = checks(cfg, conditions);
     if (list.length === 0) {
-      writeState([], new Set());
+      writeState(vault, [], new Set());
       return [];
     }
-    const state = readState();
+    const state = readState(vault);
     const symbols = listSymbols();
     const updates: { rule: string; key: string; row: StateRow; fired: boolean }[] = [];
     const events: AlertEvent[] = [];
     for (const c of list) {
-      if (c.result.error) log(`alert ${c.rule} on ${c.key}: ${c.result.error}`);
+      if (c.result.error) log(`alert ${c.rule} on ${c.key}${who}: ${c.result.error}`);
       const { fire, next } = decide(state.get(id(c.rule, c.key)), c.result);
       if (next) updates.push({ rule: c.rule, key: c.key, row: next, fired: fire });
       if (!fire) continue;
@@ -116,26 +118,26 @@ export async function runAlerts(cfg: Config, conditions: Map<string, Record<stri
     const keep = new Set(list.map((c) => id(c.rule, c.key)));
 
     if (events.length === 0) {
-      writeState(updates, keep);
+      writeState(vault, updates, keep);
       return [];
     }
 
-    const { config, error } = readNotifyConfig();
+    const { config, error } = channelsFor(vault);
     if (error) log(`notify.json: ${error}`);
     const { title, text } = formatDigest(events, config.link);
-    log(`${events.length} new alert(s): ${events.map((e) => `${e.key} ${e.rule}`).join(", ")}`);
+    log(`${events.length} new alert(s)${who}: ${events.map((e) => `${e.key} ${e.rule}`).join(", ")}`);
     if (channelNames(config).length === 0) {
-      log("no notification channel configured, alerts only logged");
-      writeState(updates, keep);
+      log(`no notification channel configured${who}, alerts only logged`);
+      writeState(vault, updates, keep);
       return events;
     }
     const delivery = await deliver(config, title, text, events);
-    for (const f of delivery.failed) log(`notify via ${f.channel} failed: ${f.error}`);
+    for (const f of delivery.failed) log(`notify via ${f.channel}${who} failed: ${f.error}`);
     // nothing got through: leave the fired rows as they were so the next sync tries again
-    writeState(delivery.sent.length ? updates : updates.filter((u) => !u.fired), keep);
+    writeState(vault, delivery.sent.length ? updates : updates.filter((u) => !u.fired), keep);
     return events;
   } catch (err) {
-    log(`alerts failed: ${err instanceof Error ? err.message : String(err)}`);
+    log(`alerts${who} failed: ${err instanceof Error ? err.message : String(err)}`);
     return [];
   }
 }

@@ -23,6 +23,8 @@ interface UiValue {
   toast: (message: string, opts?: ToastOptions) => void;
   /** Open the help drawer, on a given tab or the last one used */
   openHelp: (tab?: HelpTab) => void;
+  /** 登录: the help drawer's GitHub device flow, started right away */
+  login: () => void;
 }
 
 const UiContext = createContext<UiValue | null>(null);
@@ -56,7 +58,7 @@ export function UiProvider({ ctx, children }: { ctx: SearchContext; children: Re
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [help, setHelp] = useState<{ tab: HelpTab | null; notice: string | null; seq: number } | null>(null);
+  const [help, setHelp] = useState<{ tab: HelpTab | null; notice: string | null; seq: number; autoLogin?: boolean } | null>(null);
   const seq = useRef(0);
 
   const toast = useCallback((message: string, opts: ToastOptions = {}) => {
@@ -76,6 +78,10 @@ export function UiProvider({ ctx, children }: { ctx: SearchContext; children: Re
     setHelp({ tab: tab ?? null, notice, seq: ++seq.current });
   }, []);
   const closeHelp = useCallback(() => setHelp(null), []);
+  const login = useCallback(() => {
+    setSearch(null);
+    setHelp({ tab: "feedback", notice: null, seq: ++seq.current, autoLogin: true });
+  }, []);
 
   // `?help=feedback|project` opens the drawer (a link to the feedback form), then leaves the URL
   useEffect(() => {
@@ -150,7 +156,10 @@ export function UiProvider({ ctx, children }: { ctx: SearchContext; children: Re
     });
   };
 
-  const value = useMemo<UiValue>(() => ({ searchCtx: ctx, openSearch, toast, openHelp: (tab?: HelpTab) => openHelp(tab) }), [ctx, openSearch, toast, openHelp]);
+  const value = useMemo<UiValue>(
+    () => ({ searchCtx: ctx, openSearch, toast, openHelp: (tab?: HelpTab) => openHelp(tab), login }),
+    [ctx, openSearch, toast, openHelp, login],
+  );
 
   return (
     <UiContext.Provider value={value}>
@@ -167,7 +176,7 @@ export function UiProvider({ ctx, children }: { ctx: SearchContext; children: Re
           </div>
         </div>
       )}
-      {help && <HelpPanel key={help.seq} tab={help.tab} notice={help.notice} onClose={closeHelp} toast={toast} />}
+      {help && <HelpPanel key={help.seq} tab={help.tab} notice={help.notice} autoLogin={help.autoLogin ?? false} onClose={closeHelp} toast={toast} />}
       {toasts.length > 0 && (
         <div className="pointer-events-none fixed inset-x-0 bottom-5 z-50 flex flex-col items-center gap-2 px-3">
           {toasts.map((t) => (
@@ -234,5 +243,68 @@ export function HelpButton() {
     >
       <IconHelp size={18} />
     </button>
+  );
+}
+
+/** 登录 as a button anywhere (notes, review): opens the help drawer's device flow. */
+export function LoginButton() {
+  const { login } = useUi();
+  return (
+    <button type="button" onClick={login} className="btn btn-secondary">
+      登录
+    </button>
+  );
+}
+
+/** The header's identity on a shared instance: 登录, or the avatar and login with a menu. */
+export function Account({ user, enabled }: { user: { login: string; avatarUrl: string } | null; enabled: boolean }) {
+  const { login } = useUi();
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  if (!user) {
+    return enabled ? (
+      <button type="button" onClick={login} className="btn">
+        登录
+      </button>
+    ) : null;
+  }
+  const logout = async () => {
+    setOpen(false);
+    await fetch("/api/github/logout", { method: "POST" }).catch(() => undefined);
+    router.refresh();
+  };
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="menu" className="btn gap-1.5" title={`已登录为 ${user.login}`}>
+        {/* eslint-disable-next-line @next/next/no-img-element -- GitHub avatar, no optimisation wanted */}
+        <img src={`${user.avatarUrl}${user.avatarUrl.includes("?") ? "&" : "?"}s=40`} alt="" width={18} height={18} className="rounded-full" />
+        <span className="max-w-[10rem] truncate">{user.login}</span>
+      </button>
+      {open && (
+        <div role="menu" aria-label="账号" className="menu mt-1">
+          <button role="menuitem" onClick={() => void logout()} className="menu-item">
+            退出
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

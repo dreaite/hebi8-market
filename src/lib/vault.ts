@@ -1,26 +1,82 @@
 /**
  * The vault is the user's content: `hebi8.yaml`, notes, journal, chart state. Writes go through
  * temp file + rename; yaml edits keep comments and order by mutating the parsed document.
+ *
+ * Every function takes the vault directory: the root vault (`vaultDir()`), or on a shared
+ * instance a person's `users/<login>/` (`userVaultDir()`). Callers get it from the viewer.
+ * Those paths are runtime data, so a few reads tell Turbopack not to trace them (it would
+ * otherwise pull the whole project into the build output).
  */
 import fs from "node:fs";
 import path from "node:path";
-import { isScalar, isSeq, parse, parseDocument, type Document } from "yaml";
-import { ConfigError, normalizeConfig, type Config } from "./config";
+import { isMap, isScalar, isSeq, parse, parseDocument, type Document } from "yaml";
+import { ConfigError, INSTANCE_KEYS, isLogin, normalizeConfig, normalizeUserConfig, type Config } from "./config";
 import { fileKey, hash6, isValidKey } from "./symbols";
 import { isWeekId } from "./week";
 
+/** The root vault: the single user's, or the owner's on a shared instance. */
 export function vaultDir(): string {
   return process.env.HEBI8_VAULT ?? path.join(process.cwd(), "vault");
 }
 
-const yamlPath = () => path.join(vaultDir(), "hebi8.yaml");
-const sub = (name: string) => path.join(vaultDir(), name);
+/** Someone else's vault on a shared instance. GitHub logins are case-insensitive, so the directory is lower case. */
+export function userVaultDir(login: string): string {
+  if (!isLogin(login)) throw new Error(`无效的 GitHub 用户名「${login}」`);
+  return path.join(vaultDir(), "users", login.toLowerCase());
+}
+
+// directories only ever come from vaultDir() / userVaultDir(), so the strings compare as they are
+const isRoot = (dir: string) => dir === vaultDir();
+const yamlPath = (dir: string) => path.join(dir, "hebi8.yaml");
 
 /** First run: start from the example config so the sample groups show up. */
 export function ensureVault(): void {
-  if (fs.existsSync(yamlPath())) return;
-  for (const d of ["notes", "journal", "charts"]) fs.mkdirSync(sub(d), { recursive: true });
-  fs.copyFileSync(path.join(process.cwd(), "vault.example", "hebi8.yaml"), yamlPath());
+  const yaml = path.join(vaultDir(), "hebi8.yaml");
+  if (fs.existsSync(yaml)) return;
+  // spelled out: a loop over the names makes Turbopack trace the whole project
+  fs.mkdirSync(path.join(vaultDir(), "notes"), { recursive: true });
+  fs.mkdirSync(path.join(vaultDir(), "journal"), { recursive: true });
+  fs.mkdirSync(path.join(vaultDir(), "charts"), { recursive: true });
+  fs.copyFileSync(path.join(process.cwd(), "vault.example", "hebi8.yaml"), yaml);
+}
+
+/**
+ * A person's first visit: their yaml starts as a copy of the root one without the instance
+ * settings and the owner's alerts; notes, journal and charts start empty. Returns the directory.
+ */
+export function ensureUserVault(login: string): string {
+  const dir = userVaultDir(login);
+  if (fs.existsSync(yamlPath(dir))) return dir;
+  const doc = parseYaml(fs.readFileSync(yamlPath(vaultDir()), "utf8"));
+  const drop: string[] = [...INSTANCE_KEYS, "alerts"];
+  // the yaml library hangs a file's opening comment on the first key; keep it when that key goes
+  const first = isMap(doc.contents) ? doc.contents.items[0]?.key : null;
+  if (isScalar(first) && first.commentBefore && drop.includes(String(first.value))) {
+    doc.commentBefore = [doc.commentBefore, first.commentBefore].filter(Boolean).join("\n");
+  }
+  for (const key of drop) doc.delete(key);
+  atomicWrite(yamlPath(dir), doc.toString({ lineWidth: 0 }));
+  return dir;
+}
+
+export interface VaultRef {
+  /** '' for the root vault, else the login in lower case (the `vault` column of stats and alert_state) */
+  id: string;
+  dir: string;
+}
+
+/** The root vault, plus everyone else's when the instance is shared (`owner` set in the root yaml). */
+export function listVaults(owner: string | null): VaultRef[] {
+  const out: VaultRef[] = [{ id: "", dir: vaultDir() }];
+  const users = path.join(vaultDir(), "users");
+  if (!owner || !fs.existsSync(users)) return out;
+  for (const id of fs.readdirSync(users).sort()) {
+    // the owner uses the root vault, even if they had a vault of their own before
+    if (id === owner.toLowerCase() || !isLogin(id) || id !== id.toLowerCase()) continue;
+    const dir = path.join(users, id);
+    if (fs.existsSync(yamlPath(dir))) out.push({ id, dir });
+  }
+  return out;
 }
 
 function atomicWrite(file: string, text: string): void {
@@ -32,7 +88,8 @@ function atomicWrite(file: string, text: string): void {
 
 // ---------------------------------------------------------------------------- hebi8.yaml
 
-let cached: { mtimeMs: number; size: number; config: Config } | null = null;
+/** Parsed configs by file; a user's also depends on the root config it was merged with. */
+const cache = new Map<string, { mtimeMs: number; size: number; root: Config | null; config: Config }>();
 
 function parseYaml(text: string): Document {
   const doc = parseDocument(text);
@@ -44,36 +101,41 @@ function parseYaml(text: string): Document {
   return doc;
 }
 
-export function readConfig(): Config {
-  const file = yamlPath();
+const normalizeIn = (raw: unknown, root: Config | null) => (root ? normalizeUserConfig(raw, root) : normalizeConfig(raw));
+
+export function readConfig(dir: string): Config {
+  const file = yamlPath(dir);
   let stat: fs.Stats;
   try {
     stat = fs.statSync(file);
   } catch {
     throw new ConfigError(`找不到 ${file}`);
   }
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.config;
-  const config = normalizeConfig(parseYaml(fs.readFileSync(file, "utf8")).toJS());
-  cached = { mtimeMs: stat.mtimeMs, size: stat.size, config };
+  const root = isRoot(dir) ? null : readConfig(vaultDir());
+  const hit = cache.get(file);
+  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size && hit.root === root) return hit.config;
+  const config = normalizeIn(parseYaml(fs.readFileSync(file, "utf8")).toJS(), root);
+  cache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, root, config });
   return config;
 }
 
-export function readConfigSafe(): { config: Config | null; error: string | null } {
+export function readConfigSafe(dir: string): { config: Config | null; error: string | null } {
   try {
-    return { config: readConfig(), error: null };
+    return { config: readConfig(dir), error: null };
   } catch (err) {
     return { config: null, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
 /** Edit the yaml in place; the result is validated before it is written. */
-export function updateConfig(mutate: (doc: Document) => void): Config {
-  const doc = parseYaml(fs.readFileSync(yamlPath(), "utf8"));
+export function updateConfig(dir: string, mutate: (doc: Document) => void): Config {
+  const file = yamlPath(dir);
+  const doc = parseYaml(fs.readFileSync(file, "utf8"));
   mutate(doc);
-  const config = normalizeConfig(doc.toJS());
+  const config = normalizeIn(doc.toJS(), isRoot(dir) ? null : readConfig(vaultDir()));
   // Comments and order survive; the library re-spaces inline comments, which is as close as it gets.
-  atomicWrite(yamlPath(), doc.toString({ lineWidth: 0 }));
-  cached = null;
+  atomicWrite(file, doc.toString({ lineWidth: 0 }));
+  cache.delete(file);
   return config;
 }
 
@@ -130,22 +192,22 @@ function jsonKey(text: string): string | null {
   }
 }
 
-const notePath = (key: string) => ownedPath(sub("notes"), key, ".md", frontKey);
+const notePath = (dir: string, key: string) => ownedPath(path.join(dir, "notes"), key, ".md", frontKey);
 
-export function readNote(key: string): string | null {
-  const file = notePath(key);
-  if (!fs.existsSync(file)) return null;
-  return fs.readFileSync(file, "utf8").replace(FRONTMATTER, "");
+export function readNote(dir: string, key: string): string | null {
+  const file = notePath(dir, key);
+  if (!fs.existsSync(/* turbopackIgnore: true */ file)) return null;
+  return fs.readFileSync(/* turbopackIgnore: true */ file, "utf8").replace(FRONTMATTER, "");
 }
 
 /** When the note was last written, for telling a local draft from the file. */
-export function noteMtime(key: string): number | null {
-  const file = notePath(key);
-  return fs.existsSync(file) ? fs.statSync(file).mtimeMs : null;
+export function noteMtime(dir: string, key: string): number | null {
+  const file = notePath(dir, key);
+  return fs.existsSync(/* turbopackIgnore: true */ file) ? fs.statSync(/* turbopackIgnore: true */ file).mtimeMs : null;
 }
 
-export function writeNote(key: string, body: string): void {
-  const file = notePath(key);
+export function writeNote(dir: string, key: string, body: string): void {
+  const file = notePath(dir, key);
   const trimmed = body.replace(/\s+$/, "");
   if (!trimmed) {
     fs.rmSync(file, { force: true });
@@ -154,15 +216,15 @@ export function writeNote(key: string, body: string): void {
   atomicWrite(file, `---\nkey: ${key}\n---\n${trimmed}\n`);
 }
 
-export function listNotes(): { key: string; body: string }[] {
-  const dir = sub("notes");
-  if (!fs.existsSync(dir)) return [];
+export function listNotes(dir: string): { key: string; body: string }[] {
+  const notes = path.join(dir, "notes");
+  if (!fs.existsSync(notes)) return [];
   return fs
-    .readdirSync(dir)
+    .readdirSync(notes)
     .filter((f) => f.endsWith(".md"))
     .sort()
     .flatMap((f) => {
-      const text = fs.readFileSync(path.join(dir, f), "utf8");
+      const text = fs.readFileSync(path.join(notes, f), "utf8");
       const key = frontKey(text);
       return key && isValidKey(key) ? [{ key, body: text.replace(FRONTMATTER, "") }] : [];
     });
@@ -172,34 +234,34 @@ export function listNotes(): { key: string; body: string }[] {
 
 export const JOURNAL_TEMPLATE = "## 市场\n\n\n## 持仓与自选\n\n\n## 变动\n\n\n## 下周看什么\n\n";
 
-const journalPath = (week: string) => {
+const journalPath = (dir: string, week: string) => {
   if (!isWeekId(week)) throw new Error(`无效的周「${week}」`);
-  return path.join(sub("journal"), `${week}.md`);
+  return path.join(dir, "journal", `${week}.md`);
 };
 
-export function readJournal(week: string): string | null {
-  const file = journalPath(week);
+export function readJournal(dir: string, week: string): string | null {
+  const file = journalPath(dir, week);
   return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
 }
 
-export function journalMtime(week: string): number | null {
-  const file = journalPath(week);
+export function journalMtime(dir: string, week: string): number | null {
+  const file = journalPath(dir, week);
   return fs.existsSync(file) ? fs.statSync(file).mtimeMs : null;
 }
 
-export function writeJournal(week: string, body: string): void {
-  atomicWrite(journalPath(week), body.replace(/\s+$/, "") + "\n");
+export function writeJournal(dir: string, week: string, body: string): void {
+  atomicWrite(journalPath(dir, week), body.replace(/\s+$/, "") + "\n");
 }
 
 /** Newest first. */
-export function listJournals(): { week: string; mtimeMs: number }[] {
-  const dir = sub("journal");
-  if (!fs.existsSync(dir)) return [];
+export function listJournals(dir: string): { week: string; mtimeMs: number }[] {
+  const journal = path.join(dir, "journal");
+  if (!fs.existsSync(journal)) return [];
   return fs
-    .readdirSync(dir)
+    .readdirSync(journal)
     .flatMap((f) => {
       const week = f.replace(/\.md$/, "");
-      return f.endsWith(".md") && isWeekId(week) ? [{ week, mtimeMs: fs.statSync(path.join(dir, f)).mtimeMs }] : [];
+      return f.endsWith(".md") && isWeekId(week) ? [{ week, mtimeMs: fs.statSync(path.join(journal, f)).mtimeMs }] : [];
     })
     .sort((a, b) => (a.week < b.week ? 1 : -1));
 }
@@ -227,7 +289,7 @@ export interface ChartState {
 
 export const EMPTY_CHART_STATE: ChartState = { compare: [], overlays: [] };
 
-const chartPath = (key: string) => ownedPath(sub("charts"), key, ".json", jsonKey);
+const chartPath = (dir: string, key: string) => ownedPath(path.join(dir, "charts"), key, ".json", jsonKey);
 
 function parseChartState(text: string): ChartState {
   try {
@@ -241,21 +303,21 @@ function parseChartState(text: string): ChartState {
   }
 }
 
-export function readChartState(key: string): ChartState {
-  const file = chartPath(key);
-  return fs.existsSync(file) ? parseChartState(fs.readFileSync(file, "utf8")) : EMPTY_CHART_STATE;
+export function readChartState(dir: string, key: string): ChartState {
+  const file = chartPath(dir, key);
+  return fs.existsSync(/* turbopackIgnore: true */ file) ? parseChartState(fs.readFileSync(/* turbopackIgnore: true */ file, "utf8")) : EMPTY_CHART_STATE;
 }
 
-export function writeChartState(key: string, state: ChartState): void {
-  atomicWrite(chartPath(key), JSON.stringify({ key, ...state }, null, 2) + "\n");
+export function writeChartState(dir: string, key: string, state: ChartState): void {
+  atomicWrite(chartPath(dir, key), JSON.stringify({ key, ...state }, null, 2) + "\n");
 }
 
 /** Compare targets across every chart, so they get synced too. */
-export function compareKeys(): string[] {
-  const dir = sub("charts");
-  if (!fs.existsSync(dir)) return [];
+export function compareKeys(dir: string): string[] {
+  const charts = path.join(dir, "charts");
+  if (!fs.existsSync(charts)) return [];
   return fs
-    .readdirSync(dir)
+    .readdirSync(charts)
     .filter((f) => f.endsWith(".json"))
-    .flatMap((f) => parseChartState(fs.readFileSync(path.join(dir, f), "utf8")).compare.map((c) => c.key));
+    .flatMap((f) => parseChartState(fs.readFileSync(path.join(charts, f), "utf8")).compare.map((c) => c.key));
 }

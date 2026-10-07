@@ -2,7 +2,7 @@
 import { maxSyncedAt } from "./store";
 import { syncAll } from "./sync";
 import { dayOf, partsIn, zonedToUtc } from "./tz";
-import { ensureVault, readConfigSafe } from "./vault";
+import { ensureVault, readConfigSafe, vaultDir } from "./vault";
 
 const DEFAULT_SYNC = { at: ["07:30", "17:30"], tz: "Asia/Tokyo" };
 
@@ -44,7 +44,7 @@ export function startScheduler(): void {
   const settings = () => {
     try {
       ensureVault();
-      return readConfigSafe().config?.sync ?? DEFAULT_SYNC;
+      return readConfigSafe(vaultDir()).config?.sync ?? DEFAULT_SYNC;
     } catch {
       return DEFAULT_SYNC;
     }

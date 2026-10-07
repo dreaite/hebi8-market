@@ -4,12 +4,14 @@ import { APP_INFO, DESIGN_DOC_URL, REPO_FULL_NAME, REPO_URL, feedbackRepo, fromA
 import { allItems } from "./config";
 import { nameOf } from "./names";
 import { nextRun, scheduledNextSync } from "./scheduler";
-import { getSession } from "./secrets";
 import { listSymbols, maxSyncedAt } from "./store";
-import { ensureVault, readConfigSafe, vaultDir } from "./vault";
+import { readConfigSafe, vaultDir } from "./vault";
+import type { Viewer } from "./viewer";
 
 export interface HelpInfo {
   app: typeof APP_INFO;
+  /** The instance is shared: logging in switches to your own vault */
+  shared: boolean;
   repo: { fullName: string; url: string; designUrl: string; issuesUrl: string };
   data: {
     watched: number;
@@ -32,15 +34,9 @@ export interface HelpInfo {
   };
 }
 
-export function helpInfo(sessionId: string | undefined): HelpInfo {
-  let config = null;
-  let configError: string | null = null;
-  try {
-    ensureVault();
-    ({ config, error: configError } = readConfigSafe());
-  } catch (err) {
-    configError = err instanceof Error ? err.message : String(err);
-  }
+export function helpInfo(viewer: Viewer): HelpInfo {
+  const { config, error: configError } = readConfigSafe(viewer.dir);
+  const schedule = readConfigSafe(vaultDir()).config?.sync ?? null;
 
   let symbols: ReturnType<typeof listSymbols> = {};
   let lastSync: number | null = null;
@@ -51,32 +47,32 @@ export function helpInfo(sessionId: string | undefined): HelpInfo {
     // cache unavailable: the overview reports it
   }
   const watched = config ? allItems(config) : [];
-  const nextSync = scheduledNextSync() ?? (config ? nextRun(new Date(), config.sync.at, config.sync.tz).getTime() : null);
+  const nextSync = scheduledNextSync() ?? (schedule ? nextRun(new Date(), schedule.at, schedule.tz).getTime() : null);
   const errors = Object.values(symbols)
     .filter((s) => s.syncError)
     .map((s) => ({ key: s.key, name: config ? nameOf(config, s.key, s.name) : (s.name ?? s.key), error: s.syncError! }));
 
   const enabled = Boolean(githubClientId());
-  const session = enabled ? getSession(sessionId) : null;
   const repo = feedbackRepo();
   return {
     app: APP_INFO,
+    shared: viewer.shared,
     repo: { fullName: REPO_FULL_NAME, url: REPO_URL, designUrl: DESIGN_DOC_URL, issuesUrl: fromAppIssuesUrl(repo) },
     data: {
       watched: watched.length,
       cached: Object.keys(symbols).length,
       lastSync,
       nextSync,
-      schedule: config ? `${config.sync.at.join(" ")} ${config.sync.tz}` : null,
+      schedule: schedule ? `${schedule.at.join(" ")} ${schedule.tz}` : null,
       errors,
-      vaultPath: path.relative(process.cwd(), vaultDir()) || ".",
+      vaultPath: path.relative(process.cwd(), viewer.dir) || ".",
       configError,
     },
     github: {
       enabled,
       feedbackRepo: repo,
       appUrl: `https://github.com/apps/${githubAppSlug()}`,
-      user: session ? { login: session.login, avatarUrl: session.avatar_url } : null,
+      user: enabled && viewer.login ? { login: viewer.login, avatarUrl: viewer.avatarUrl ?? "" } : null,
     },
   };
 }

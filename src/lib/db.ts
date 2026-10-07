@@ -52,6 +52,29 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
         PRIMARY KEY (rule, key)
       ) WITHOUT ROWID;
     `),
+  (db) =>
+    db.exec(`
+      -- One row per vault on a shared instance ('' is the root vault). Both are caches: the next
+      -- sync recomputes stats, and alerts record silently once before they fire again.
+      DROP TABLE stats;
+      DROP TABLE alert_state;
+      CREATE TABLE stats (
+        vault       TEXT    NOT NULL,
+        key         TEXT    NOT NULL,
+        computed_at INTEGER NOT NULL,
+        json        TEXT    NOT NULL,
+        PRIMARY KEY (vault, key)
+      );
+      CREATE TABLE alert_state (
+        vault     TEXT    NOT NULL,
+        rule      TEXT    NOT NULL,
+        key       TEXT    NOT NULL,
+        state     INTEGER,
+        fired_bar INTEGER,
+        fired_at  INTEGER,
+        PRIMARY KEY (vault, rule, key)
+      ) WITHOUT ROWID;
+    `),
 ];
 
 const dbFile = () => process.env.HEBI8_DB ?? path.join(process.cwd(), "data", "hebi8.db");

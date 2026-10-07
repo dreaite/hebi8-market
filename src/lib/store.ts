@@ -109,14 +109,15 @@ export function markSyncError(key: string, message: string): void {
   getDb().prepare("UPDATE symbols SET sync_error = ? WHERE key = ?").run(message, key);
 }
 
-export function writeStats(key: string, stats: Stats | null): void {
+/** Stats are per vault ('' = root): conditions and the prices mode are each person's own. */
+export function writeStats(vault: string, key: string, stats: Stats | null): void {
   const db = getDb();
-  if (!stats) db.prepare("DELETE FROM stats WHERE key = ?").run(key);
-  else db.prepare("INSERT OR REPLACE INTO stats (key, computed_at, json) VALUES (?, ?, ?)").run(key, Date.now(), JSON.stringify(stats));
+  if (!stats) db.prepare("DELETE FROM stats WHERE vault = ? AND key = ?").run(vault, key);
+  else db.prepare("INSERT OR REPLACE INTO stats (vault, key, computed_at, json) VALUES (?, ?, ?, ?)").run(vault, key, Date.now(), JSON.stringify(stats));
 }
 
-export function readAllStats(): Record<string, Stats> {
-  const rows = getDb().prepare("SELECT key, json FROM stats").all() as { key: string; json: string }[];
+export function readAllStats(vault: string): Record<string, Stats> {
+  const rows = getDb().prepare("SELECT key, json FROM stats WHERE vault = ?").all(vault) as { key: string; json: string }[];
   return Object.fromEntries(rows.map((r) => [r.key, JSON.parse(r.json) as Stats]));
 }
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { APP_INFO } from "@/lib/app-info";
 import { recentErrors } from "@/lib/client-errors";
@@ -77,12 +78,15 @@ const draft = { type: "bug" as FeedbackType, title: "", description: "", attach:
 export function HelpPanel({
   tab: initialTab,
   notice: initialNotice,
+  autoLogin,
   onClose,
   toast,
 }: {
   tab: HelpTab | null;
   /** Shown above the feedback form when the drawer opens */
   notice: string | null;
+  /** Opened by 登录: start the device flow right away */
+  autoLogin: boolean;
   onClose: () => void;
   toast: (message: string, opts?: ToastOptions) => void;
 }) {
@@ -174,7 +178,11 @@ export function HelpPanel({
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 text-xs" role="tabpanel">
           {loadError && <p className="mb-3 text-down">读取失败：{loadError}</p>}
-          {tab === "project" ? <ProjectTab info={info} /> : <FeedbackTab info={info} notice={notice} setNotice={setNotice} reload={load} toast={toast} />}
+          {tab === "project" ? (
+            <ProjectTab info={info} />
+          ) : (
+            <FeedbackTab info={info} notice={notice} setNotice={setNotice} autoLogin={autoLogin} reload={load} toast={toast} />
+          )}
         </div>
       </aside>
     </div>
@@ -358,29 +366,95 @@ function FeedbackTab({
   info,
   notice,
   setNotice,
+  autoLogin,
   reload,
   toast,
 }: {
   info: HelpInfo | null;
   notice: string | null;
   setNotice: (message: string | null) => void;
+  autoLogin: boolean;
   reload: () => Promise<void>;
   toast: (message: string, opts?: ToastOptions) => void;
 }) {
-  const [login, setLogin] = useState<PendingLogin | null>(currentLogin);
-  const [starting, setStarting] = useState(false);
-  const [loginError, setLoginError] = useState<string | null>(null);
   const [issuesVersion, setIssuesVersion] = useState(0);
 
   if (!info) return <p className="text-muted">读取中…</p>;
   const gh = info.github;
-  const user = gh.user;
 
-  const startLogin = async () => {
-    if (starting) return;
+  return (
+    <>
+      {notice && <p className="mb-3 rounded border border-down/40 px-2 py-1.5 text-down">{notice}</p>}
+      {!gh.enabled ? (
+        <div className="mb-3 rounded border border-line px-3 py-2 leading-relaxed">
+          <p className="mb-1 font-medium">反馈未启用</p>
+          <p className="text-muted">
+            这个 hebi8 没有配置 GitHub App（app-info.ts 的 GITHUB_APP_CLIENT_ID 或环境变量 HEBI8_GITHUB_CLIENT_ID），不能在应用里直接提交。填好下面的内容，点「在 GitHub
+            网页上提交」，会在 github.com 打开预填好的 issue。
+          </p>
+        </div>
+      ) : (
+        <AccountBlock
+          info={info}
+          autoLogin={autoLogin}
+          onStart={() => setNotice(null)}
+          reload={reload}
+          toast={toast}
+          intro={
+            <>
+              用你的 GitHub 账号登录，反馈会以你的名义提交到 <span className="font-mono">{gh.feedbackRepo}</span>。
+              {info.shared && "共用这台 hebi8 时，登录后用的是你自己的自选、笔记和通知。"}
+            </>
+          }
+          aside="不想登录也可以在 GitHub 网页上提交（表单下方）"
+        />
+      )}
+      <FeedbackForm
+        info={info}
+        canSubmit={gh.enabled && Boolean(gh.user)}
+        toast={toast}
+        onSubmitted={() => setIssuesVersion((n) => n + 1)}
+        onLoggedOut={(message) => {
+          setNotice(message);
+          void reload();
+        }}
+      />
+      <RecentIssues key={issuesVersion} issuesUrl={info.repo.issuesUrl} />
+    </>
+  );
+}
+
+/**
+ * Who is logged in, or 用 GitHub 登录 and the device flow in progress. Logging in or out changes
+ * which vault the pages show on a shared instance, so both refresh the page behind the drawer.
+ */
+function AccountBlock({
+  info,
+  intro,
+  aside,
+  autoLogin,
+  onStart,
+  reload,
+  toast,
+}: {
+  info: HelpInfo;
+  intro: ReactNode;
+  aside?: string;
+  autoLogin: boolean;
+  onStart?: () => void;
+  reload: () => Promise<void>;
+  toast: (message: string, opts?: ToastOptions) => void;
+}) {
+  const router = useRouter();
+  const [login, setLogin] = useState<PendingLogin | null>(currentLogin);
+  const [starting, setStarting] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const user = info.github.user;
+
+  const startLogin = useCallback(async () => {
     setStarting(true);
     setLoginError(null);
-    setNotice(null);
+    onStart?.();
     try {
       const res = await postJson("/api/github/device", {});
       const json = await res.json().catch(() => ({}));
@@ -398,7 +472,15 @@ function FeedbackTab({
     } finally {
       setStarting(false);
     }
-  };
+  }, [onStart]);
+
+  // 登录 in the header: show the code at once instead of another button to press
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!autoLogin || autoStarted.current || user || currentLogin()) return;
+    autoStarted.current = true;
+    void startLogin();
+  }, [autoLogin, user, startLogin]);
 
   const endLogin = (error: string | null) => {
     pendingLogin = null;
@@ -413,22 +495,12 @@ function FeedbackTab({
 
   const logout = async () => {
     await fetch("/api/github/logout", { method: "POST" }).catch(() => undefined);
+    router.refresh();
     await reload();
   };
 
-  let account: ReactNode;
-  if (!gh.enabled) {
-    account = (
-      <div className="mb-3 rounded border border-line px-3 py-2 leading-relaxed">
-        <p className="mb-1 font-medium">反馈未启用</p>
-        <p className="text-muted">
-          这个 hebi8 没有配置 GitHub App（app-info.ts 的 GITHUB_APP_CLIENT_ID 或环境变量 HEBI8_GITHUB_CLIENT_ID），不能在应用里直接提交。填好下面的内容，点「在 GitHub
-          网页上提交」，会在 github.com 打开预填好的 issue。
-        </p>
-      </div>
-    );
-  } else if (user) {
-    account = (
+  if (user) {
+    return (
       <div className="mb-3 flex items-center gap-2">
         {/* eslint-disable-next-line @next/next/no-img-element -- GitHub avatar, no optimisation wanted */}
         <img src={`${user.avatarUrl}${user.avatarUrl.includes("?") ? "&" : "?"}s=48`} alt="" width={20} height={20} className="rounded-full" />
@@ -439,8 +511,9 @@ function FeedbackTab({
         </button>
       </div>
     );
-  } else if (login) {
-    account = (
+  }
+  if (login) {
+    return (
       <DeviceLogin
         key={login.flowId}
         login={login}
@@ -450,43 +523,23 @@ function FeedbackTab({
         onDone={(who) => {
           endLogin(null);
           toast(`已登录为 ${who}`);
+          router.refresh();
           void reload();
         }}
       />
-    );
-  } else {
-    account = (
-      <div className="mb-3 flex flex-col gap-2 rounded border border-line px-3 py-2">
-        <p className="leading-relaxed">
-          用你的 GitHub 账号登录，反馈会以你的名义提交到 <span className="font-mono">{gh.feedbackRepo}</span>。
-        </p>
-        {loginError && <p className="text-down">{loginError}</p>}
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className="btn btn-primary" disabled={starting} onClick={() => void startLogin()}>
-            {starting ? "正在联系 GitHub…" : "用 GitHub 登录"}
-          </button>
-          <span className="text-[11px] text-muted">不想登录也可以在 GitHub 网页上提交（表单下方）</span>
-        </div>
-      </div>
     );
   }
-
   return (
-    <>
-      {notice && <p className="mb-3 rounded border border-down/40 px-2 py-1.5 text-down">{notice}</p>}
-      {account}
-      <FeedbackForm
-        info={info}
-        canSubmit={gh.enabled && Boolean(user)}
-        toast={toast}
-        onSubmitted={() => setIssuesVersion((n) => n + 1)}
-        onLoggedOut={(message) => {
-          setNotice(message);
-          void reload();
-        }}
-      />
-      <RecentIssues key={issuesVersion} issuesUrl={info.repo.issuesUrl} />
-    </>
+    <div className="mb-3 flex flex-col gap-2 rounded border border-line px-3 py-2">
+      <p className="leading-relaxed">{intro}</p>
+      {loginError && <p className="text-down">{loginError}</p>}
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="btn btn-primary" disabled={starting} onClick={() => void startLogin()}>
+          {starting ? "正在联系 GitHub…" : "用 GitHub 登录"}
+        </button>
+        {aside && <span className="text-[11px] text-muted">{aside}</span>}
+      </div>
+    </div>
   );
 }
 

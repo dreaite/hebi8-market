@@ -94,6 +94,15 @@ export function readNotifyConfig(): { config: NotifyConfig; error: string | null
   }
 }
 
+/**
+ * Where one vault's alerts go. notify.json's chat and webhook are the root vault's (single user
+ * or the owner); nobody else has channels yet, only the chart link.
+ */
+export function channelsFor(vault: string): { config: NotifyConfig; error: string | null } {
+  const { config, error } = readNotifyConfig();
+  return vault === "" ? { config, error } : { config: config.link ? { link: config.link } : {}, error };
+}
+
 export const channelNames = (cfg: NotifyConfig): string[] =>
   [cfg.telegram ? "telegram" : null, cfg.webhook ? "webhook" : null].filter((c): c is string => c !== null);
 

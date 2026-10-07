@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import type { BarsResponse } from "@/lib/api-types";
 import { loadDaily, loadRefs } from "@/lib/bars";
 import { findItem } from "@/lib/config";
@@ -7,16 +7,19 @@ import { aggregate } from "@/lib/series";
 import { pricePrecision } from "@/lib/stats";
 import { getSymbol, maxSyncedAt } from "@/lib/store";
 import { isSynthetic, isTimeframe, isValidKey, parseKey } from "@/lib/symbols";
+import { SESSION_COOKIE } from "@/lib/github";
 import { readConfigSafe } from "@/lib/vault";
+import { resolveViewer } from "@/lib/viewer";
 
 export const dynamic = "force-dynamic";
 
 /** Trim float noise from adjusted prices to keep the payload small. */
 const round = (x: number) => Number(x.toPrecision(8));
 
-export async function GET(request: Request) {
-  const params = new URL(request.url).searchParams;
-  const { config, error } = readConfigSafe();
+export async function GET(request: NextRequest) {
+  const params = request.nextUrl.searchParams;
+  // names, benchmarks and synthetic aliases come from the viewer's own yaml
+  const { config, error } = readConfigSafe(resolveViewer(request.cookies.get(SESSION_COOKIE)?.value).dir);
   if (!config) return NextResponse.json({ error }, { status: 500 });
 
   const key = params.get("key") ?? "";

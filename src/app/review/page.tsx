@@ -2,26 +2,38 @@ import Link from "next/link";
 import { Badge } from "@/components/Badge";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
 import { JournalEditor } from "@/components/JournalEditor";
+import { LoginButton } from "@/components/UiProvider";
 import { plainFirstLine, renderMarkdown } from "@/lib/markdown";
 import { nameOf as displayNameOf } from "@/lib/names";
-import { listSymbols, readAllStats } from "@/lib/store";
-import { ensureVault, JOURNAL_TEMPLATE, journalMtime, listNotes, readConfigSafe, readJournal, vaultDir } from "@/lib/vault";
+import { listSymbols } from "@/lib/store";
+import { JOURNAL_TEMPLATE, journalMtime, listNotes, readConfigSafe, readJournal } from "@/lib/vault";
+import { statsFor } from "@/lib/sync";
+import { getViewer } from "@/lib/viewer";
 import { currentWeekId, shiftWeek } from "@/lib/week";
 
 export const dynamic = "force-dynamic";
 
 export default async function ReviewPage() {
-  ensureVault();
-  const { config, error } = readConfigSafe();
-  if (!config) return <ConfigErrorView error={error} vaultPath={vaultDir()} />;
+  const viewer = await getViewer();
+  const { config, error } = readConfigSafe(viewer.dir);
+  if (!config) return <ConfigErrorView error={error} vaultPath={viewer.dir} />;
+  // the owner's journal and notes are theirs; a visitor is asked to log in
+  if (!viewer.canWrite) {
+    return (
+      <main className="mx-auto flex w-full max-w-[1400px] flex-col items-start gap-2 px-5 py-10 text-sm">
+        <p className="text-muted">复盘和笔记是各人自己的，登录后看自己的。</p>
+        <LoginButton />
+      </main>
+    );
+  }
 
   const week = currentWeekId(config.sync.tz);
   const lastWeek = shiftWeek(week, -1);
-  const current = readJournal(week) ?? JOURNAL_TEMPLATE;
-  const previous = readJournal(lastWeek);
+  const current = readJournal(viewer.dir, week) ?? JOURNAL_TEMPLATE;
+  const previous = readJournal(viewer.dir, lastWeek);
 
   const symbols = listSymbols();
-  const stats = readAllStats();
+  const stats = statsFor(viewer.vault, config);
   const nameOf = (key: string) => displayNameOf(config, key, symbols[key]?.name);
   const labels = Object.fromEntries(config.conditions.map((c) => [c.id, c.label]));
 
@@ -35,13 +47,13 @@ export default async function ReviewPage() {
     ),
   })).filter((g) => g.items.length > 0);
 
-  const notes = listNotes().map((n) => ({ ...n, name: nameOf(n.key), summary: plainFirstLine(n.body) }));
+  const notes = listNotes(viewer.dir).map((n) => ({ ...n, name: nameOf(n.key), summary: plainFirstLine(n.body) }));
 
   return (
     <main className="mx-auto w-full max-w-[1400px] px-5 py-5">
       <div className="grid gap-5 lg:grid-cols-[1fr_1fr]">
         <section>
-          <JournalEditor key={week} week={week} initial={current} savedAt={journalMtime(week)} />
+          <JournalEditor key={week} week={week} initial={current} savedAt={journalMtime(viewer.dir, week)} />
         </section>
         <section className="flex flex-col gap-5">
           <div className="rounded-lg border border-line bg-card">

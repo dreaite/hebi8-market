@@ -65,6 +65,8 @@ export interface ChartPrefs {
 }
 
 export interface Config {
+  /** GitHub login that owns the root vault; set means the instance is shared (root vault only) */
+  owner: string | null;
   sync: { at: string[]; tz: string };
   prices: Prices;
   periods: ChangePeriod[];
@@ -77,6 +79,8 @@ export interface Config {
   /** Dataset name → git URL or local directory (absolute, `~/`, or relative to the vault) */
   datasets: Record<string, string>;
   chart: ChartPrefs;
+  /** Instance settings written in a user's yaml, which only the root vault's count */
+  ignored: string[];
 }
 
 export class ConfigError extends Error {}
@@ -143,8 +147,14 @@ function parseParams(raw: unknown): ParamOverrides {
   return out;
 }
 
+/** What GitHub allows in a login: letters, digits and single inner hyphens, at most 39 characters. */
+export const isLogin = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}$/.test(v);
+
 export function normalizeConfig(raw: unknown): Config {
   const root = obj(raw);
+
+  const owner = root.owner == null ? null : text(root.owner);
+  if (root.owner != null && !isLogin(owner)) throw new ConfigError(`owner：「${String(root.owner)}」不是 GitHub 用户名`);
 
   const sync = obj(root.sync);
   const at = list(sync.at)
@@ -228,6 +238,7 @@ export function normalizeConfig(raw: unknown): Config {
   if (typeof style !== "string" || !(style in CHART_STYLES)) throw new ConfigError(`chart.style：未知样式「${String(style)}」`);
 
   return {
+    owner,
     sync: { at: at.length ? at : ["07:30", "17:30"], tz },
     prices,
     periods: periods.length ? periods : DEFAULT_PERIODS,
@@ -245,7 +256,19 @@ export function normalizeConfig(raw: unknown): Config {
       indicators: Array.isArray(chart.indicators) ? chart.indicators.map(String) : DEFAULT_CHART.indicators,
       params: parseParams(chart.params),
     },
+    ignored: [],
   };
+}
+
+/** Settings that belong to the instance, not a person: read from the root vault only. */
+export const INSTANCE_KEYS = ["owner", "sync", "datasets"] as const;
+
+/** A user's yaml on a shared instance: the instance settings come from the root vault's config. */
+export function normalizeUserConfig(raw: unknown, root: Config): Config {
+  const own = { ...obj(raw) };
+  const ignored = INSTANCE_KEYS.filter((k) => k in own);
+  for (const k of INSTANCE_KEYS) delete own[k];
+  return { ...normalizeConfig(own), owner: root.owner, sync: root.sync, datasets: root.datasets, ignored };
 }
 
 /** Remote repos are cloned into the cache; anything path-like is read in place. */

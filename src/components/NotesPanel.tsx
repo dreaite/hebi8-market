@@ -5,6 +5,7 @@ import { saveNote } from "@/app/actions";
 import { fileKey } from "@/lib/symbols";
 import { draftTime, statusText, useAutosave } from "@/lib/use-autosave";
 import { IconClose } from "./chart-icons";
+import { LoginButton } from "./UiProvider";
 
 interface NotesPanelProps {
   symbolKey: string;
@@ -86,6 +87,24 @@ export function NotesPanel({ symbolKey, note, html, savedAt, onClose, closeSeq =
           写下为什么看它
         </button>
       )}
+    </aside>
+  );
+}
+
+/** The notes panel for a visitor on a shared instance: the owner's notes stay private. */
+export function LoginPrompt({ text, onClose, className = "" }: { text: string; onClose: () => void; className?: string }) {
+  return (
+    <aside className={`flex flex-col bg-card text-xs ${className}`} aria-label="笔记">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line pr-1 pl-3">
+        <span className="flex-1 font-medium">笔记</span>
+        <button onClick={onClose} className="tb-btn h-7 min-w-7" title="收起" aria-label="收起笔记">
+          <IconClose size={16} />
+        </button>
+      </div>
+      <div className="flex flex-col items-start gap-2 p-3 text-muted">
+        <p>{text}</p>
+        <LoginButton />
+      </div>
     </aside>
   );
 }

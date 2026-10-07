@@ -50,7 +50,7 @@ import { CompareDialog } from "./CompareDialog";
 import { Dialog, Dropdown } from "./Dialog";
 import { IndicatorDialog, ParamDialog } from "./IndicatorDialog";
 import type { DrawingModes } from "./KChart";
-import { NotesPanel } from "./NotesPanel";
+import { LoginPrompt, NotesPanel } from "./NotesPanel";
 import { chartHref, isEditable, useUi } from "./UiProvider";
 import { WatchlistPanel, type WatchlistGroup } from "./WatchlistPanel";
 
@@ -96,6 +96,8 @@ interface ChartViewProps {
   note: string | null;
   noteHtml: string | null;
   noteSavedAt: number | null;
+  /** A visitor on a shared instance: preferences stay in this page, drawings and notes need a login */
+  readOnly: boolean;
 }
 
 export function ChartView({
@@ -113,6 +115,7 @@ export function ChartView({
   note,
   noteHtml,
   noteSavedAt,
+  readOnly,
 }: ChartViewProps) {
   const router = useRouter();
   const { openSearch, openHelp, searchCtx } = useUi();
@@ -207,7 +210,9 @@ export function ChartView({
   }, []);
 
   const report = (result: { ok: boolean; error?: string }) => setMessage(result.ok ? null : (result.error ?? "操作失败"));
-  const persist = (partial: Parameters<typeof setChartPrefs>[0]) => void setChartPrefs(partial).then(report);
+  const persist = (partial: Parameters<typeof setChartPrefs>[0]) => {
+    if (!readOnly) void setChartPrefs(partial).then(report);
+  };
 
   const tfOverrides = useMemo(() => overrides[tf] ?? {}, [overrides, tf]);
   const params = useMemo(
@@ -271,6 +276,10 @@ export function ChartView({
   };
 
   const saveState = async (next: Partial<ChartState>) => {
+    if (readOnly) {
+      setMessage("登录后才能保存画线和比较商品");
+      return false;
+    }
     const result = await saveChartState(symbolKey, { ...stateRef.current, ...next });
     report(result);
     return result.ok;
@@ -479,7 +488,11 @@ export function ChartView({
         className="h-full"
       />
     ) : panel === "notes" ? (
-      <NotesPanel symbolKey={symbolKey} note={note} html={noteHtml} savedAt={noteSavedAt} onClose={() => togglePanel("notes")} className="h-full" />
+      readOnly ? (
+        <LoginPrompt text="登录后看自己的笔记" onClose={() => togglePanel("notes")} className="h-full" />
+      ) : (
+        <NotesPanel symbolKey={symbolKey} note={note} html={noteHtml} savedAt={noteSavedAt} onClose={() => togglePanel("notes")} className="h-full" />
+      )
     ) : null;
 
   return (

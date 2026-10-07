@@ -4,9 +4,11 @@ import { allItems, findItem } from "@/lib/config";
 import { renderMarkdown } from "@/lib/markdown";
 import { benchLabel, nameOf } from "@/lib/names";
 import { CHANGE_PERIODS } from "@/lib/periods";
-import { listSymbols, readAllStats } from "@/lib/store";
+import { listSymbols } from "@/lib/store";
 import { isValidKey } from "@/lib/symbols";
-import { ensureVault, noteMtime, readChartState, readConfigSafe, readNote, vaultDir } from "@/lib/vault";
+import { noteMtime, readChartState, readConfigSafe, readNote } from "@/lib/vault";
+import { statsFor } from "@/lib/sync";
+import { getViewer } from "@/lib/viewer";
 
 export const dynamic = "force-dynamic";
 
@@ -21,15 +23,16 @@ function decodeKey(raw: string): string {
 
 export default async function ChartPage({ params }: { params: Promise<{ key: string }> }) {
   const key = decodeKey((await params).key);
-  ensureVault();
-  const { config, error } = readConfigSafe();
-  if (!config) return <ConfigErrorView error={error} vaultPath={vaultDir()} />;
+  const viewer = await getViewer();
+  const { config, error } = readConfigSafe(viewer.dir);
+  if (!config) return <ConfigErrorView error={error} vaultPath={viewer.dir} />;
   if (!isValidKey(key)) return <main className="p-6 text-sm text-muted">无效的 key「{key}」，例如 /chart/yahoo%3ASPY</main>;
 
   const item = findItem(config, key);
   const symbols = listSymbols();
-  const state = readChartState(key);
-  const note = readNote(key);
+  const state = readChartState(viewer.dir, key);
+  // a visitor sees the owner's chart and drawings, not their notes
+  const note = viewer.canWrite ? readNote(viewer.dir, key) : null;
 
   // display names for everything the chart may show: yaml name > dictionary > source
   const names: Record<string, string> = {};
@@ -37,7 +40,7 @@ export default async function ChartPage({ params }: { params: Promise<{ key: str
     names[k] = nameOf(config, k, symbols[k]?.name);
   }
   // the watchlist in yaml order and groups, for the side panel and Space / Shift+Space
-  const stats = readAllStats();
+  const stats = statsFor(viewer.vault, config);
   const period = config.periods[0] ?? "1W";
   const watchlist = config.groups.map((g) => ({
     name: g.name,
@@ -60,7 +63,8 @@ export default async function ChartPage({ params }: { params: Promise<{ key: str
       chartState={state}
       note={note}
       noteHtml={note ? renderMarkdown(note) : null}
-      noteSavedAt={noteMtime(key)}
+      noteSavedAt={viewer.canWrite ? noteMtime(viewer.dir, key) : null}
+      readOnly={!viewer.canWrite}
     />
   );
 }

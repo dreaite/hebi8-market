@@ -38,6 +38,8 @@ export interface OverviewData {
   firstRun: boolean;
   /** Relative to the working directory, e.g. `vault` */
   vaultPath: string;
+  /** Muted lines above the table: whose list a visitor sees, yaml settings that are ignored */
+  notices: string[];
 }
 
 type SortKey = "last" | "ddAth" | "pos52" | ChangePeriod;
@@ -223,6 +225,11 @@ export function Overview({ data }: { data: OverviewData }) {
 
   return (
     <main className="mx-auto w-full max-w-[1400px] px-5 py-5">
+      {data.notices.map((n) => (
+        <p key={n} className="mb-2 text-xs text-muted">
+          {n}
+        </p>
+      ))}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-baseline gap-3">
           <h1 className="text-base font-medium">自选</h1>

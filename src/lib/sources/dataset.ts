@@ -197,7 +197,8 @@ export const dataset: SourceAdapter = {
     const m = DATA_TICKER.exec(ticker);
     if (!m) throw new Error(`无效的数据集 key「data:${ticker}」`);
     const [, name, id] = m;
-    const location = readConfig().datasets[name];
+    // datasets are an instance setting: only the root vault's yaml names them
+    const location = readConfig(vaultDir()).datasets[name];
     if (!location) throw new Error(`hebi8.yaml 的 datasets 里没有「${name}」`);
     const root = await datasetRoot(name, location);
     const manifest = readManifest(root);
@@ -222,7 +223,7 @@ export const dataset: SourceAdapter = {
   async search(query) {
     const q = query.trim().toLowerCase().replace(/^data:/, "");
     if (!q) return [];
-    const datasets = readConfigSafe().config?.datasets ?? {};
+    const datasets = readConfigSafe(vaultDir()).config?.datasets ?? {};
     const hits: SearchHit[] = [];
     for (const [name, location] of Object.entries(datasets)) {
       const root = rootOnDisk(name, location);

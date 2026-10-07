@@ -95,7 +95,7 @@ describe("vault files", () => {
   });
 
   it("writes yaml back with comments, order and flow style intact", () => {
-    updateConfig((doc) => {
+    updateConfig(dir, (doc) => {
       setScalar(doc, ["chart", "tf"], "M");
       setList(doc, ["periods"], ["1M", "YTD"]);
       setList(doc, ["chart", "params", "D", "MA"], [20, 50]);
@@ -111,7 +111,7 @@ describe("vault files", () => {
     expect(text).toContain("{ id: x, label: x, pane: sub, formula: close }");
     expect(text.indexOf("sync:")).toBeLessThan(text.indexOf("aliases:"));
     expect(text.indexOf("aliases:")).toBeLessThan(text.indexOf("groups:"));
-    const cfg = readConfig();
+    const cfg = readConfig(dir);
     expect(cfg.chart.tf).toBe("M");
     expect(cfg.periods).toEqual(["1M", "YTD"]);
     expect(cfg.chart.params.D).toEqual({ MA: [20, 50] });
@@ -119,35 +119,35 @@ describe("vault files", () => {
   });
 
   it("refuses to write an invalid document", () => {
-    expect(() => updateConfig((doc) => setScalar(doc, ["prices"], "nope"))).toThrow(ConfigError);
-    expect(readConfig().prices).toBe("split");
+    expect(() => updateConfig(dir, (doc) => setScalar(doc, ["prices"], "nope"))).toThrow(ConfigError);
+    expect(readConfig(dir).prices).toBe("split");
   });
 
   it("stores notes under the key's file name with the key as frontmatter", () => {
-    writeNote("tv:TVC:US10Y", "# 为什么看\n利率顶");
+    writeNote(dir, "tv:TVC:US10Y", "# 为什么看\n利率顶");
     expect(fs.readFileSync(path.join(dir, "notes", "tv_TVC_US10Y.md"), "utf8")).toBe("---\nkey: tv:TVC:US10Y\n---\n# 为什么看\n利率顶\n");
-    expect(readNote("tv:TVC:US10Y")).toBe("# 为什么看\n利率顶\n");
-    expect(readNote("yahoo:SPY")).toBeNull();
-    writeNote("tv:TVC:US10Y", "  ");
-    expect(readNote("tv:TVC:US10Y")).toBeNull();
+    expect(readNote(dir, "tv:TVC:US10Y")).toBe("# 为什么看\n利率顶\n");
+    expect(readNote(dir, "yahoo:SPY")).toBeNull();
+    writeNote(dir, "tv:TVC:US10Y", "  ");
+    expect(readNote(dir, "tv:TVC:US10Y")).toBeNull();
   });
 
   it("gives colliding keys a hashed file name and trusts the frontmatter", () => {
-    writeNote("yahoo:A_B", "first");
-    writeNote("yahoo:A/B", "second");
-    expect(readNote("yahoo:A_B")).toBe("first\n");
-    expect(readNote("yahoo:A/B")).toBe("second\n");
+    writeNote(dir, "yahoo:A_B", "first");
+    writeNote(dir, "yahoo:A/B", "second");
+    expect(readNote(dir, "yahoo:A_B")).toBe("first\n");
+    expect(readNote(dir, "yahoo:A/B")).toBe("second\n");
     expect(fs.existsSync(path.join(dir, "notes", `yahoo_A_B_${hash6("yahoo:A/B")}.md`))).toBe(true);
   });
 
   it("round-trips journals and chart state", () => {
-    writeJournal("2026-W41", "## 市场\n平静");
-    expect(readJournal("2026-W41")).toBe("## 市场\n平静\n");
-    expect(() => writeJournal("nope", "x")).toThrow("无效的周");
+    writeJournal(dir, "2026-W41", "## 市场\n平静");
+    expect(readJournal(dir, "2026-W41")).toBe("## 市场\n平静\n");
+    expect(() => writeJournal(dir, "nope", "x")).toThrow("无效的周");
     const state = { compare: [{ key: "yahoo:QQQ", mode: "percent" as const, color: "#e8891d" }], overlays: [{ name: "horizontalStraightLine", points: [{ timestamp: 1, value: 2 }] }] };
-    writeChartState("=BTC/GOLD", state);
+    writeChartState(dir, "=BTC/GOLD", state);
     expect(JSON.parse(fs.readFileSync(path.join(dir, "charts", "expr_BTC_GOLD.json"), "utf8")).key).toBe("=BTC/GOLD");
-    expect(readChartState("=BTC/GOLD")).toEqual(state);
-    expect(readChartState("yahoo:SPY")).toEqual({ compare: [], overlays: [] });
+    expect(readChartState(dir, "=BTC/GOLD")).toEqual(state);
+    expect(readChartState(dir, "yahoo:SPY")).toEqual({ compare: [], overlays: [] });
   });
 });

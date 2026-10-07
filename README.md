@@ -20,7 +20,7 @@
 - **合成标的**：`=BTC/GOLD` 这样的表达式当作标的看图、算统计、算条件，逐字段计算，和 TradingView 的 spread 一样。
 - **同步后通知**：标了 `notify` 的条件和 `alerts` 里的价位规则，在某次同步后**新成立**时推一条摘要到 Telegram 或 webhook（ntfy、Discord 等）。只看日线，不做盘中实时。
 
-约束：单用户、无登录、只在内网用；只存日线，周 / 月 / 季线读时合成；读取永远不碰网络；通知只往外发，不开任何入口。
+约束：默认单用户、无登录、只在内网用（局域网里几个人共用一台见[下文](#共用一台实例)）；只存日线，周 / 月 / 季线读时合成；读取永远不碰网络；通知只往外发，不开任何入口。
 
 ### 应用内反馈
 
@@ -119,6 +119,7 @@ vault/
   notes/<fileKey>.md          每个标的的笔记，frontmatter 里的 key 是权威
   journal/<YYYY>-W<ww>.md     每周复盘（ISO 周）
   charts/<fileKey>.json       每个标的的对比列表和画线
+  users/<login>/              共用实例里其他人的 vault，结构同上
 ```
 
 `hebi8.yaml` 的样子见 `vault.example/hebi8.yaml`。界面上改周期、涨跌色、图表偏好、添加 / 移除 / 移动 / 改名标的、设基准、编辑公式指标时会写回这个文件，注释和顺序都保留；同步时间、别名、条件直接改文件，不用重启。搜索时用中文词添加的标的，这个词会记进 `aliases`。
@@ -128,6 +129,22 @@ vault/
 - `bench` 是相对强弱和 `close(bench)` 的默认基准。
 - `conditions` 在每次同步后按周线计算，`prev != now` 就是本周的变化。
 - `fileKey`：`tv:TVC:US10Y → tv_TVC_US10Y`，`=BTC/GOLD → expr_BTC_GOLD`。
+
+## 共用一台实例
+
+在根 vault 的 `hebi8.yaml` 里写 `owner: <你的 GitHub 用户名>`，局域网里的几个人就能共用这台 hebi8：K 线缓存、同步和数据集是共享的，自选、别名、公式、条件、告警、图表偏好、笔记、复盘、画线和通知是各人的。不写 `owner` 就是单用户模式，和以前完全一样。
+
+| 访问者 | 看到 | 能改 |
+|---|---|---|
+| owner 登录 | 根 vault | 根 vault，含实例设置 |
+| 其他人登录 | `vault/users/<login>/` | 自己的 vault |
+| 未登录 | owner 的总览和图表（含画线） | 不能改；笔记和复盘要登录后看自己的 |
+
+- 页头右侧的「登录」走帮助抽屉里同一套 GitHub device flow（和反馈共用会话，30 天）；登录后显示头像和用户名，菜单里可以退出。退出只删会话，不动 vault。
+- 第一次登录的人从根 vault 的 `hebi8.yaml` 复制一份起点，去掉 `owner`、`sync`、`datasets`、`alerts`；笔记、复盘、画线从空开始。之后两边互不影响。
+- `owner`、`sync`、`datasets` 是实例设置，只认根 vault 的；写在自己 yaml 里会被忽略，总览上会提示。
+- 同步拉的是所有人引用到的标的的并集；同步后每个人的统计和通知各算各的。
+- GitHub 登录只用来区分局域网里的人，不防恶意访问者，不要把实例开到公网。
 
 ## 通知
 
@@ -230,7 +247,8 @@ src/
     ├── github.ts secrets.ts  GitHub 调用（device flow 登录、刷新、issue）与 ~/.config/hebi8 里的登录会话
     ├── feedback.ts           反馈 issue 的正文、hebi8-context 格式与 GitHub 网页预填链接
     ├── sources/              yahoo / binance / tradingview / dataset（自定义数据集）适配器
-    ├── vault.ts config.ts    vault 的读写层、hebi8.yaml 的类型与校验
+    ├── vault.ts config.ts    vault 的读写层（按目录，根 vault 或 users/<login>/）、hebi8.yaml 的类型与校验
+    ├── viewer.ts             这次请求是谁、看哪个 vault、能不能写（共用实例）
     ├── db.ts store.ts        SQLite 缓存（symbols、bars、stats、alert_state）
     ├── sync.ts scheduler.ts  同步、同步后算 stats 和通知、每日定时
     ├── series.ts synth.ts    周/月/季线合成、对齐、合成标的

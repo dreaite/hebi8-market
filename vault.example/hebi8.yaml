@@ -1,3 +1,4 @@
+# owner: your-github-login    # 写了就是局域网共用：这个 GitHub 账号用这份 vault，其他人登录后各用 vault/users/<login>/
 sync:
   at: ["07:30", "17:30"]       # 本地时间，按 tz 解释；美股收盘后、亚洲收盘后各一次
   tz: Asia/Tokyo

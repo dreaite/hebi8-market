@@ -11,6 +11,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 # hebi8 market
 
 - `vault/` is the user's content (`hebi8.yaml`, notes, journal, chart state; gitignored, `HEBI8_VAULT`); `data/hebi8.db` is a cache that is rebuilt by syncing. Read `docs/design.md` before changing either layout.
+- On a shared instance (`owner` in the root yaml) each GitHub login has its own vault under `vault/users/<login>/`. Every page, route and Server Action resolves the viewer (`src/lib/viewer.ts`) first and reads and writes only `viewer.dir`; vault functions take the directory explicitly. `stats` and `alert_state` rows are keyed by `vault` ('' = root).
 - `hebi8.yaml` is edited through `src/lib/vault.ts` with the `yaml` package's `parseDocument` so comments and order survive; writes are atomic. `src/lib/config.ts` is the typed, validated view of it.
 - Daily bars are the only stored granularity (`bars` table, unix seconds at UTC midnight of the trading day, split-adjusted prices plus a dividend factor `adj`); weekly/monthly/quarterly are aggregated on read in `src/lib/series.ts`. Synthetic symbols (`=BTC/GOLD`) are computed on read in `src/lib/synth.ts`.
 - Source adapters live in `src/lib/sources/` and must map timestamps through `tradingDay()` with the exchange timezone (the `data` source is the exception: its CSV dates are already calendar days, stored as UTC midnight).

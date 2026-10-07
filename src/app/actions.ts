@@ -24,13 +24,15 @@ import {
   writeNote,
   type ChartState,
 } from "@/lib/vault";
+import { getViewer, requireWriter, type Viewer } from "@/lib/viewer";
 import { isWeekId } from "@/lib/week";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
-async function attempt(fn: () => Promise<void> | void): Promise<ActionResult> {
+/** Every action writes as the viewer, into the viewer's vault only; nobody else's directory is reachable from here. */
+async function attempt(fn: (viewer: Viewer) => Promise<void> | void): Promise<ActionResult> {
   try {
-    await fn();
+    await fn(requireWriter(await getViewer()));
     revalidatePath("/", "layout");
     return { ok: true };
   } catch (err) {
@@ -103,8 +105,8 @@ export interface AddSymbolInput {
 }
 
 export async function addSymbol(input: AddSymbolInput): Promise<ActionResult> {
-  return attempt(async () => {
-    const cfg = readConfig();
+  return attempt(async ({ dir, vault }) => {
+    const cfg = readConfig(dir);
     const ref = str(input.key);
     const key = resolveKey(ref, cfg.aliases);
     const group = str(input.group);
@@ -132,7 +134,7 @@ export async function addSymbol(input: AddSymbolInput): Promise<ActionResult> {
     // a Chinese search term that found this key is worth keeping as an alias
     const alias = str(input.alias);
     const keepAlias = alias && isCJK(alias) && !alias.includes(":") && !cfg.aliases[alias] && alias !== name;
-    updateConfig((doc) => {
+    updateConfig(dir, (doc) => {
       const symbols = seqOf(groupNode(doc, group), "symbols", doc);
       const entry: Record<string, string> = { key: ref };
       if (name) entry.name = name;
@@ -144,16 +146,16 @@ export async function addSymbol(input: AddSymbolInput): Promise<ActionResult> {
         else doc.set("aliases", doc.createNode({ [alias]: key }));
       }
     });
-    recomputeStats(readConfig());
+    recomputeStats(vault, readConfig(dir));
   });
 }
 
 export async function moveSymbol(key: string, group: string): Promise<ActionResult> {
-  return attempt(() => {
+  return attempt(({ dir }) => {
     const target = str(group);
     if (!target) throw new Error("请选择分组");
-    updateConfig((doc) => {
-      const found = locateEntry(doc, key, readConfig().aliases);
+    updateConfig(dir, (doc) => {
+      const found = locateEntry(doc, key, readConfig(dir).aliases);
       if (!found) throw new Error(`${key} 不在自选里`);
       const [item] = found.symbols.items.splice(found.index, 1);
       seqOf(groupNode(doc, target), "symbols", doc).add(item);
@@ -162,10 +164,10 @@ export async function moveSymbol(key: string, group: string): Promise<ActionResu
 }
 
 export async function renameSymbol(key: string, name: string): Promise<ActionResult> {
-  return attempt(() => {
+  return attempt(({ dir }) => {
     const next = str(name);
-    updateConfig((doc) => {
-      const found = locateEntry(doc, key, readConfig().aliases);
+    updateConfig(dir, (doc) => {
+      const found = locateEntry(doc, key, readConfig(dir).aliases);
       if (!found) throw new Error(`${key} 不在自选里`);
       const entry = entryAsMap(doc, found.symbols, found.index);
       if (next) entry.set("name", next);
@@ -175,8 +177,8 @@ export async function renameSymbol(key: string, name: string): Promise<ActionRes
 }
 
 export async function setBench(key: string, bench: string | null): Promise<ActionResult> {
-  return attempt(async () => {
-    const cfg = readConfig();
+  return attempt(async ({ dir, vault }) => {
+    const cfg = readConfig(dir);
     const benchRef = str(bench);
     const target = benchRef ? resolveKey(benchRef, cfg.aliases) : null;
     if (target) {
@@ -187,48 +189,48 @@ export async function setBench(key: string, bench: string | null): Promise<Actio
         if (!outcome.ok) throw new Error(`拉取 ${target} 失败：${outcome.error}`);
       }
     }
-    updateConfig((doc) => {
+    updateConfig(dir, (doc) => {
       const found = locateEntry(doc, key, cfg.aliases);
       if (!found) throw new Error(`${key} 不在自选里`);
       const entry = entryAsMap(doc, found.symbols, found.index);
       if (benchRef) entry.set("bench", benchRef);
       else entry.delete("bench");
     });
-    recomputeStats(readConfig());
+    recomputeStats(vault, readConfig(dir));
   });
 }
 
 export async function removeSymbol(key: string): Promise<ActionResult> {
-  return attempt(() => {
-    updateConfig((doc) => {
-      const found = locateEntry(doc, key, readConfig().aliases);
+  return attempt(({ dir }) => {
+    updateConfig(dir, (doc) => {
+      const found = locateEntry(doc, key, readConfig(dir).aliases);
       if (found) found.symbols.delete(found.index);
     });
   });
 }
 
 export async function saveNote(key: string, body: string): Promise<ActionResult> {
-  return attempt(() => {
+  return attempt(({ dir }) => {
     if (!isValidKey(key)) throw new Error("无效的 key");
-    writeNote(key, String(body ?? ""));
+    writeNote(dir, key, String(body ?? ""));
   });
 }
 
 export async function saveJournal(week: string, body: string): Promise<ActionResult> {
-  return attempt(() => {
+  return attempt(({ dir }) => {
     if (!isWeekId(week)) throw new Error("无效的周");
-    writeJournal(week, String(body ?? ""));
+    writeJournal(dir, week, String(body ?? ""));
   });
 }
 
-function checkFormula(def: { id: unknown; label: unknown; formula: unknown }): { id: string; label: string; formula: string } {
+function checkFormula(dir: string, def: { id: unknown; label: unknown; formula: unknown }): { id: string; label: string; formula: string } {
   const id = str(def.id);
   const label = str(def.label) || id;
   const formula = str(def.formula);
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(id)) throw new Error("id 只能用字母、数字、下划线");
   if (!formula) throw new Error("公式为空");
   try {
-    compile(formula, { aliases: readConfig().aliases });
+    compile(formula, { aliases: readConfig(dir).aliases });
   } catch (err) {
     throw new Error(describeError(err));
   }
@@ -236,8 +238,8 @@ function checkFormula(def: { id: unknown; label: unknown; formula: unknown }): {
 }
 
 /** Insert or replace a `{ id, … }` entry in a top-level list, keeping the others untouched. */
-function upsertById(listName: string, entry: Record<string, unknown>) {
-  updateConfig((doc) => {
+function upsertById(dir: string, listName: string, entry: Record<string, unknown>) {
+  updateConfig(dir, (doc) => {
     const seq = seqOf(doc.contents as YAMLMap, listName, doc);
     const index = seq.items.findIndex((item) => isMap(item) && item.get("id") === entry.id);
     const node = flowNode(doc, entry);
@@ -246,8 +248,8 @@ function upsertById(listName: string, entry: Record<string, unknown>) {
   });
 }
 
-function deleteById(listName: string, id: string) {
-  updateConfig((doc) => {
+function deleteById(dir: string, listName: string, id: string) {
+  updateConfig(dir, (doc) => {
     const seq = doc.get(listName);
     if (!isSeq(seq)) return;
     const index = seq.items.findIndex((item) => isMap(item) && item.get("id") === id);
@@ -261,14 +263,14 @@ function deleteById(listName: string, id: string) {
 }
 
 export async function saveIndicator(def: FormulaDef): Promise<ActionResult> {
-  return attempt(() => {
-    const { id, label, formula } = checkFormula(def);
+  return attempt(({ dir }) => {
+    const { id, label, formula } = checkFormula(dir, def);
     const pane = def.pane === "main" ? "main" : "sub";
-    const isNew = !readConfig().indicators.some((d) => d.id === id);
-    upsertById("indicators", { id, label, pane, formula });
+    const isNew = !readConfig(dir).indicators.some((d) => d.id === id);
+    upsertById(dir, "indicators", { id, label, pane, formula });
     if (isNew) {
-      updateConfig((doc) => {
-        const enabled = readConfig().chart.indicators;
+      updateConfig(dir, (doc) => {
+        const enabled = readConfig(dir).chart.indicators;
         if (!enabled.includes(id)) setList(doc, ["chart", "indicators"], [...enabled, id]);
       });
     }
@@ -276,33 +278,33 @@ export async function saveIndicator(def: FormulaDef): Promise<ActionResult> {
 }
 
 export async function deleteIndicator(id: string): Promise<ActionResult> {
-  return attempt(() => deleteById("indicators", str(id)));
+  return attempt(({ dir }) => deleteById(dir, "indicators", str(id)));
 }
 
 export async function saveCondition(def: Omit<ConditionDef, "notify"> & { notify?: boolean }): Promise<ActionResult> {
-  return attempt(() => {
-    const { id, label, formula } = checkFormula(def);
+  return attempt(({ dir, vault }) => {
+    const { id, label, formula } = checkFormula(dir, def);
     const entry: Record<string, unknown> = { id, label, formula };
     if (isTimeframe(def.tf) && def.tf !== "W") entry.tf = def.tf;
     // an editor that does not know about notify keeps whatever the yaml says
-    const notify = typeof def.notify === "boolean" ? def.notify : readConfig().conditions.find((c) => c.id === id)?.notify;
+    const notify = typeof def.notify === "boolean" ? def.notify : readConfig(dir).conditions.find((c) => c.id === id)?.notify;
     if (notify) entry.notify = true;
-    upsertById("conditions", entry);
-    recomputeStats(readConfig());
+    upsertById(dir, "conditions", entry);
+    recomputeStats(vault, readConfig(dir));
   });
 }
 
 export async function deleteCondition(id: string): Promise<ActionResult> {
-  return attempt(() => {
-    deleteById("conditions", str(id));
-    recomputeStats(readConfig());
+  return attempt(({ dir, vault }) => {
+    deleteById(dir, "conditions", str(id));
+    recomputeStats(vault, readConfig(dir));
   });
 }
 
 export async function saveChartState(key: string, state: ChartState): Promise<ActionResult> {
-  return attempt(async () => {
+  return attempt(async ({ dir }) => {
     if (!isValidKey(key)) throw new Error("无效的 key");
-    const cfg = readConfig();
+    const cfg = readConfig(dir);
     const compare = (Array.isArray(state.compare) ? state.compare : []).flatMap((c) => {
       const target = resolveKey(str(c.key), cfg.aliases);
       if (!isValidKey(target) || target === key) return [];
@@ -321,14 +323,14 @@ export async function saveChartState(key: string, state: ChartState): Promise<Ac
         if (!outcome.ok) throw new Error(`拉取 ${c.key} 失败：${outcome.error}`);
       }
     }
-    writeChartState(key, { compare, overlays });
+    writeChartState(dir, key, { compare, overlays });
   });
 }
 
 export async function setChartPrefs(partial: Partial<ChartPrefs> & { prices?: Prices }): Promise<ActionResult> {
-  return attempt(() => {
-    const cfg = readConfig();
-    updateConfig((doc) => {
+  return attempt(({ dir, vault }) => {
+    const cfg = readConfig(dir);
+    updateConfig(dir, (doc) => {
       if (partial.tf !== undefined) {
         if (!isTimeframe(partial.tf)) throw new Error("无效的周期");
         setScalar(doc, ["chart", "tf"], partial.tf);
@@ -355,22 +357,22 @@ export async function setChartPrefs(partial: Partial<ChartPrefs> & { prices?: Pr
         setScalar(doc, ["prices"], partial.prices);
       }
     });
-    if (partial.prices !== undefined && partial.prices !== cfg.prices) recomputeStats(readConfig());
+    if (partial.prices !== undefined && partial.prices !== cfg.prices) recomputeStats(vault, readConfig(dir));
   });
 }
 
 export async function setPeriods(list: string[]): Promise<ActionResult> {
-  return attempt(() => {
+  return attempt(({ dir }) => {
     const valid = new Set<string>(CHANGE_PERIODS.map((p) => p.key));
     const periods = (Array.isArray(list) ? list : []).filter((p) => valid.has(p)).slice(0, MAX_PERIODS);
     if (!periods.length) throw new Error("至少选一个周期");
-    updateConfig((doc) => setList(doc, ["periods"], periods));
+    updateConfig(dir, (doc) => setList(doc, ["periods"], periods));
   });
 }
 
 export async function setUpdown(mode: string): Promise<ActionResult> {
-  return attempt(() => {
+  return attempt(({ dir }) => {
     if (mode !== "green-up" && mode !== "red-up") throw new Error("无效的涨跌色");
-    updateConfig((doc) => setScalar(doc, ["updown"], mode));
+    updateConfig(dir, (doc) => setScalar(doc, ["updown"], mode));
   });
 }

@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ErrorCapture } from "@/components/ErrorCapture";
-import { HelpButton, SearchTrigger, UiProvider } from "@/components/UiProvider";
+import { Account, HelpButton, SearchTrigger, UiProvider } from "@/components/UiProvider";
+import { githubClientId } from "@/lib/app-info";
 import type { SearchContext } from "@/lib/search";
 import { searchContextFor } from "@/lib/search-context";
-import { ensureVault, readConfigSafe } from "@/lib/vault";
+import { readConfigSafe } from "@/lib/vault";
+import { getViewer, type Viewer } from "@/lib/viewer";
 import "./globals.css";
 
 export const dynamic = "force-dynamic";
@@ -14,12 +16,13 @@ export const metadata: Metadata = {
   description: "七天一个轮回，第八天观测市场。周度复盘：总览、长期图表、对比、笔记。",
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   let updown = "green-up";
   let searchCtx: SearchContext = { watchlist: [], aliases: {}, groups: [] };
+  let viewer: Viewer | null = null;
   try {
-    ensureVault();
-    const config = readConfigSafe().config;
+    viewer = await getViewer();
+    const config = readConfigSafe(viewer.dir).config;
     updown = config?.updown ?? "green-up";
     searchCtx = searchContextFor(config);
   } catch {
@@ -46,6 +49,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
                 <Link href="/review" className="hover:text-fg">
                   复盘
                 </Link>
+                {viewer?.shared && (
+                  <Account user={viewer.login ? { login: viewer.login, avatarUrl: viewer.avatarUrl ?? "" } : null} enabled={Boolean(githubClientId())} />
+                )}
                 <HelpButton />
               </nav>
             </div>

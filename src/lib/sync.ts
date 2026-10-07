@@ -3,10 +3,10 @@ import { loadDaily } from "./bars";
 import { evalConditions } from "./conditions";
 import { allItems, syncKeys, type Config } from "./config";
 import { adapters } from "./sources";
-import { computeStats, type ConditionResult } from "./stats";
-import { ensureSymbol, getSymbol, latestBarTime, listSymbols, markSyncError, markSynced, writeBars, writeStats } from "./store";
+import { computeStats, type ConditionResult, type Stats } from "./stats";
+import { ensureSymbol, getSymbol, hasBars, latestBarTime, listSymbols, markSyncError, markSynced, readAllStats, writeBars, writeStats } from "./store";
 import { parseKey } from "./symbols";
-import { compareKeys, readConfig, readConfigSafe } from "./vault";
+import { compareKeys, listVaults, readConfig, readConfigSafe, vaultDir, type VaultRef } from "./vault";
 
 /** Without `force`, a symbol synced this recently is left alone. */
 const FRESH_MS = 60 * 60 * 1000;
@@ -67,13 +67,32 @@ async function syncMany(keys: string[], force: boolean, concurrency = 4): Promis
   return results;
 }
 
+export interface VaultConfig extends VaultRef {
+  config: Config;
+}
+
+/** Every vault that syncs, with its config. A broken root yaml throws; a person's broken yaml only leaves them out. */
+export function loadVaults(): VaultConfig[] {
+  const root = readConfig(vaultDir());
+  return listVaults(root.owner).flatMap((v) => {
+    if (v.id === "") return [{ ...v, config: root }];
+    const { config, error } = readConfigSafe(v.dir);
+    if (!config) console.warn(`[hebi8] vault ${v.id} skipped: ${error}`);
+    return config ? [{ ...v, config }] : [];
+  });
+}
+
+/** What a sync fetches: the union of every vault's references and chart comparisons. */
+export function unionSyncKeys(vaults: VaultConfig[]): string[] {
+  return [...new Set(vaults.flatMap((v) => syncKeys(v.config, compareKeys(v.dir))))];
+}
+
 /**
- * Stats for every watched symbol (synthetic ones included) and benchmark, from the cache only.
- * Returns the condition results by key so the alerts pass does not evaluate them twice.
+ * Stats for every watched symbol (synthetic ones included) and benchmark of one vault, from the
+ * cache only. Returns the condition results by key so the alerts pass does not evaluate them twice.
  */
-export function recomputeStats(cfg: Config | null): Map<string, Record<string, ConditionResult>> {
+export function recomputeStats(vault: string, cfg: Config): Map<string, Record<string, ConditionResult>> {
   const results = new Map<string, Record<string, ConditionResult>>();
-  if (!cfg) return results;
   const symbols = listSymbols();
   const items = allItems(cfg);
   const keys = new Set([...items.map((i) => i.key), ...items.flatMap((i) => (i.bench ? [i.bench] : []))]);
@@ -82,7 +101,7 @@ export function recomputeStats(cfg: Config | null): Map<string, Record<string, C
       const daily = loadDaily(key, cfg.prices, cfg);
       const conditions = daily.length ? evalConditions(key, cfg) : {};
       results.set(key, conditions);
-      writeStats(key, computeStats(daily, { currency: symbols[key]?.currency ?? null, conditions }));
+      writeStats(vault, key, computeStats(daily, { currency: symbols[key]?.currency ?? null, conditions }));
     } catch (err) {
       console.warn(`[hebi8] stats for ${key} failed: ${message(err)}`);
     }
@@ -90,27 +109,39 @@ export function recomputeStats(cfg: Config | null): Map<string, Record<string, C
   return results;
 }
 
+/**
+ * A vault's stats for a page. A vault nobody has computed yet (someone's first login, or the
+ * cache right after stats became per vault) gets them from the cached bars now rather than at
+ * the next sync, which can be a day away. No network.
+ */
+export function statsFor(vault: string, cfg: Config): Record<string, Stats> {
+  const stats = readAllStats(vault);
+  if (Object.keys(stats).length > 0 || allItems(cfg).length === 0 || !hasBars()) return stats;
+  recomputeStats(vault, cfg);
+  return readAllStats(vault);
+}
+
 /** Sync one key and refresh stats; used when adding a symbol (the fetch doubles as validation). */
 export async function syncOne(key: string, force = false): Promise<SyncOutcome> {
   const outcome = await fetchKey(key, force);
-  recomputeStats(readConfigSafe().config);
+  if (readConfigSafe(vaultDir()).config) for (const v of loadVaults()) recomputeStats(v.id, v.config);
   return outcome;
 }
 
-/** Everything the vault references, 4 at a time, then stats and alerts; concurrent callers share the run. */
+/** Everything any vault references, 4 at a time, then stats and alerts per vault; concurrent callers share the run. */
 export function syncAll(force = false): Promise<SyncOutcome[]> {
   if (allInFlight) return allInFlight;
   allInFlight = (async () => {
-    const cfg = readConfig();
+    const vaults = loadVaults();
     const started = Date.now();
-    const results = await syncMany(syncKeys(cfg, compareKeys()), force);
-    const conditions = recomputeStats(cfg);
+    const results = await syncMany(unionSyncKeys(vaults), force);
+    const conditions = vaults.map((v) => recomputeStats(v.id, v.config));
     const failed = results.filter((r) => !r.ok);
     console.log(
       `[hebi8] synced ${results.length} symbols in ${((Date.now() - started) / 1000).toFixed(1)}s` +
         (failed.length ? `, failed: ${failed.map((r) => `${r.key} (${r.error})`).join(", ")}` : ""),
     );
-    await runAlerts(cfg, conditions);
+    for (const [i, v] of vaults.entries()) await runAlerts(v.id, v.config, conditions[i]);
     return results;
   })().finally(() => {
     allInFlight = null;
