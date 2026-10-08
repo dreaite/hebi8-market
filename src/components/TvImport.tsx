@@ -8,7 +8,7 @@ import { parseTvList, planTvImport, type ExportResult, type ImportMode } from "@
 import { chartHref } from "./UiProvider";
 
 const body = "flex flex-col gap-3 px-4 py-3 text-xs";
-const th = "px-2 py-1 text-left text-[11px] font-normal text-muted";
+const th = "whitespace-nowrap px-2 py-1 text-left text-[11px] font-normal text-muted";
 const td = "border-t border-line px-2 py-1";
 
 const STATUS = { new: "新增", exists: "已在自选", duplicate: "重复，跳过" } as const;
@@ -312,7 +312,7 @@ export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWr
                         </Link>
                       ) : (
                         <label className="flex items-center gap-1.5">
-                          <span className="text-muted">不在自选</span>
+                          <span className="whitespace-nowrap text-muted">不在自选</span>
                           <select className="input" value={add[s.symbol] ?? SKIP} onChange={(e) => setAdd((a) => ({ ...a, [s.symbol]: e.target.value }))}>
                             <option value={SKIP}>跳过</option>
                             {[...groups, ...(groups.includes(NEW_GROUP) ? [] : [NEW_GROUP])].map((g) => (
