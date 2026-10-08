@@ -186,6 +186,30 @@ export function ChartView({
   useEffect(() => {
     stateRef.current = chartState;
   }, [chartState]);
+
+  // Back in view (another tab may have imported drawings or changed the comparisons): read the
+  // page again, then let the chart take over drawings that differ, before anything here saves.
+  const [reloadSeq, setReloadSeq] = useState(0);
+  const [reloading, startReload] = useTransition();
+  const reloadedRef = useRef(false);
+  useEffect(() => {
+    const reload = () => {
+      if (document.visibilityState !== "visible") return;
+      reloadedRef.current = true;
+      startReload(() => router.refresh());
+    };
+    document.addEventListener("visibilitychange", reload);
+    window.addEventListener("focus", reload);
+    return () => {
+      document.removeEventListener("visibilitychange", reload);
+      window.removeEventListener("focus", reload);
+    };
+  }, [router]);
+  useEffect(() => {
+    if (reloading || !reloadedRef.current) return;
+    reloadedRef.current = false;
+    setReloadSeq((n) => n + 1);
+  }, [reloading]);
   const paramTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const scope = useMemo(() => ({ aliases, bench }), [aliases, bench]);
@@ -778,6 +802,7 @@ export function ChartView({
                 onDrawDone={() => setDrawTool(null)}
                 clearSeq={clearSeq}
                 revealSeq={revealSeq}
+                reloadSeq={reloadSeq}
                 drawing={drawing}
                 controlRef={control}
                 onAutoScaleChange={setAutoScale}

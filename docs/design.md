@@ -139,9 +139,9 @@ key: yahoo:NVDA
 }
 ```
 
-- `overlays` 是 KLineChart overlay 的可序列化字段：`name`、`points`、`styles?`（颜色 / 线宽 / 线型 / 字号，绘图工具栏改过才有）、`lock?`、`hidden?`（单条隐藏）、`extendData?`（文字类绘图的文字）。点是 `{timestamp, value}`，所以周线上画的线在日线/月线上也在。
+- `overlays` 是 KLineChart overlay 的可序列化字段：`name`、`points`、`styles?`（颜色 / 线宽 / 线型 / 字号，绘图工具栏改过才有）、`lock?`、`hidden?`（单条隐藏）、`extendData?`（文字类绘图的文字）、`tvId?`（从 TradingView 导入的，见下）。点是 `{timestamp, value}`，所以周线上画的线在日线/月线上也在。
 - `compare[].mode`：`percent`（主图叠加，同百分比坐标）或 `pane`（独立副图）。
-- `tvIds?`：从 TradingView 导入进 `overlays` 的画线的 TradingView id（§5.5），再导入同一批时跳过它们。图表页保存画线时只发 `compare` 和 `overlays`，`saveChartState` 原样保留文件里的 `tvIds`；导入后在图上删掉的画线，id 还在，所以不会被再次导入。没有这个字段的旧文件照常读写。
+- `overlays[].tvId?`：从 TradingView 导入的画线带着它在 TradingView 的 id（§5.5），再导入时跳过文件里已有这个 id 的。id 挂在每条画线上，图表页随画线一起读写（KLineChart 的 overlay 没有这个字段，`KChart` 把它和单条的 lock / hidden 放在一起，按 overlay id 记着），所以画线在图上删掉了，或者被一个过时的图表页保存冲掉了，它的 id 也跟着没了，再导入一次就回来。没有这个字段的旧画线照常读写。
 
 ### 1.4 SQLite 缓存
 
@@ -551,7 +551,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 - **选中后的浮动工具栏**（TV 的绘图工具栏，图表顶部居中）：工具图标 · 颜色（TV 调色板：一行色相一行灰）· 线宽 1–4px · 线型 实线 / 虚线 / 点线；文字类（文本、注释）换成颜色 · 字号 · 编辑文字 ｜ 设置 · 添加警报（水平线、水平射线、十字线）｜ 锁定 · 隐藏 · 删除。改动立刻写回。**设置**弹窗：颜色、线宽、线型（文字类为字号和文字）、每个点的价格（只写回改过的价格，没改的保持原精度）。和页面其他弹窗一样，`Esc` 关闭、开着时快捷键不响应。双击画线 = 设置，双击文字 = 原地编辑。只有画完的绘图会被选中（路径画到一半没有工具栏）；每次点击画线都会选中它（KLineChart 只在换了一条时报告选中）。
 - **文字**：TV 的做法，先在图上点位置，再在原处输入（`TextEditor`，`Enter` 确定、`Shift+Enter` 换行、`Esc` 取消、点别处确定；空文字即删除；输入法选字时的 `Enter` / `Esc` 归输入法）；文字能点中、拖动、双击编辑。
 - **锁定 / 隐藏**：单条的 `lock` / `hidden` 写进这条画线；「锁定所有绘图」「隐藏所有绘图」是界面模式，叠加在上面，不写进每条画线。锁住的画线仍能选中（改样式、解锁），只是不能拖。
-- 画完 / 拖动结束 / 删除 / 改样式即序列化 `getOverlays()` 写回 `charts/<fileKey>.json`（跳过 `currentStep` 还没到完成态的那条）；图表挂载后第一批 K 线到了时 `createOverlay` 恢复一次（换标的会挂载新图表）。之后换周期、切 ADJ 重新取数据时绘图原样保留（KLineChart 按时间戳重新定位），选中、画到一半的、正在输入的文字都不受影响。**删除必须写回**：KLineChart 在把 overlay 从列表移除之前就调用 `onRemoved`，所以序列化时按 id 排除正在删除的那条。只保存主图（`candle_pane`）上的画线；在副图上点击会被丢弃并重新开始同一个工具（10.0.3 的 `paneId` 并不能把绘制钉在某个 pane）。KLineChart 在 `createOverlay` 里就调用 `onDrawStart`，所以正在画的那条 overlay 在创建后用 `getOverlays({ id })` 取。KLineChart 会把 500ms 内落在别处的第二次点击吞掉（只认双击），画线时点得太快第二个点不算。
+- 画完 / 拖动结束 / 删除 / 改样式即序列化 `getOverlays()` 写回 `charts/<fileKey>.json`（跳过 `currentStep` 还没到完成态的那条）；图表挂载后第一批 K 线到了时 `createOverlay` 恢复一次（换标的会挂载新图表）；页面回到前台时按服务端的文件对一遍，不一样才重建（§5.5）。之后换周期、切 ADJ 重新取数据时绘图原样保留（KLineChart 按时间戳重新定位），选中、画到一半的、正在输入的文字都不受影响。**删除必须写回**：KLineChart 在把 overlay 从列表移除之前就调用 `onRemoved`，所以序列化时按 id 排除正在删除的那条。只保存主图（`candle_pane`）上的画线；在副图上点击会被丢弃并重新开始同一个工具（10.0.3 的 `paneId` 并不能把绘制钉在某个 pane）。KLineChart 在 `createOverlay` 里就调用 `onDrawStart`，所以正在画的那条 overlay 在创建后用 `getOverlays({ id })` 取。KLineChart 会把 500ms 内落在别处的第二次点击吞掉（只认双击），画线时点得太快第二个点不算。
 
 **警报**（TV 的「警报」，§2.6）：
 
@@ -620,7 +620,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 - 新标的写成 `tv:EXCH:SYM`（tv 源什么都有；字典里有中文名的照 `addSymbol` 写成 `{ key, name }`）。
 - 自选里已经有等价标的（任何 key）的标「已在「组名」」，不再加；文件里重复的（同一 identity）只保留第一次，其余标「重复」。
-- 第一个 `###` 之前的标的进一个默认组，组名默认是文件名（去扩展名），可改。同名的节在文件里出现两次合成一节。
+- 第一个 `###` 之前的标的进一个默认组，组名默认是文件名（去扩展名），可改。同名的节在文件里出现两次合成一组：先按文件顺序定下每个标的第一次出现在哪一节，再把同名的节合起来，所以 `###A,NASDAQ:NVDA,###B,NASDAQ:AAPL,###A,BATS:AAPL` 里 AAPL 属于 B。
 - **合并**（默认）：新标的加到同名分组末尾，没有就在 `groups` 最后新建；已在自选的不动。全都已在自选时报错，什么也不写。
 - **替换**（按钮要点两次确认）：`groups` 整个换成文件里的节；已在自选的标的沿用原来那条 yaml 条目（别名写法、名字、基准、行尾注释都在），只是挪到新位置，文件里没有的从自选里去掉。其他顶层字段和注释不动。
 - `importTvList` 在服务端按当前 yaml 重新算一遍计划再写（`parseDocument` 改写，原子写入），不信任浏览器算的状态。写完不等拉数据：后台跑一次 `syncAll()`（新标的从没同步过，会被拉；一小时内拉过的跳过），之后照常算 stats 和警报，拉不到的在总览那一行显示同步错误。
@@ -630,11 +630,13 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 **导入画线**：TradingView 没有画线导出，两种来源：
 
 1. **从布局取**：布局链接或 ID（`https://www.tradingview.com/chart/<ID>/`）+ 两个 cookie `sessionid`、`sessionid_sign`。服务端（`src/lib/tv-layout.ts`）先取用户 id：不用库的 `getUser`——它读首页，页面上没有登录用户时（cookie 不对，或者首页对这台服务器回 403：devNuc 上就是这样，CloudFront 挡了 `/`）会无止境地递归请求自己；改成自己按顺序请求 `https://www.tradingview.com/` 和 `/markets/` 各一次（带 cookie 和浏览器 UA，15 秒超时），页面里有 `auth_token` 或 `"is_authenticated":true` 才算登录，从里面读 `"id"`。然后对每个 chart id 调 `getDrawings(layout, "", { id, session, signature }, chartId)`（库里每次先 `getChartToken`，再请求 `charts-storage.tradingview.com/charts-storage/get/layout/<ID>/sources?chart_id=&jwt=&symbol=`）。chart id：`_shared` 是开了「同步画线」的那部分；多图布局里每个图表自己的画线在各自的 chart id 下，库没有列出它们的办法，所以按 `1`…`8` 依次试，取不到的跳过（`_shared` 取不到就报错：布局不对或这个账号打不开）。页面列出每个 chart id 取到几条，同一条画线在几个 chart id 下出现只算一次。**cookie 只在这一次请求里用**：不存、不写日志、不进错误信息（错误只说「cookie 不对或已过期」「布局不存在或打不开」「连不上」），请求发出后浏览器里的输入框也清空；页面上写明 cookie 只从服务器发给 tradingview.com。
-2. **粘贴 JSON**：开发者工具 Network 面板里 `sources` 请求的响应（`{ payload: { sources: {…} } }`），或者其中的 `sources` 对象、画线数组、单条画线。在浏览器里解析成精简的画线（`normalizeDrawing`：只留 id、symbol、type、points 和用得到的样式字段），原文不上传。
+2. **粘贴 JSON**：开发者工具 Network 面板里 `sources` 请求的响应（`{ payload: { sources: {…} } }`），或者其中的 `sources` 对象、画线数组、单条画线。在浏览器里解析成精简的画线（`normalizeDrawing`：只留 id、symbol、type、points 和用得到的样式字段），原文不上传。Server Action 请求体上限在 `next.config.ts` 调到 10mb（`experimental.serverActions.bodySizeLimit`，默认 1MB：一条 3 万个点的画笔就超了），确认导入时画线要整批发回服务端；请求被拒绝（超限、服务不在）时面板上显示错误，不抛给 React。
 
 存储格式两种都认：`{ id, symbol, state: { type, points, state: {样式} } }`（接口原样）和库 `getDrawings` 返回的「外层 `state` 摊平」的样子。`symbol` 是 `EXCH:SYM`，也可能是 `={"symbol":"NASDAQ:NVDA","adjustment":"splits"}`。点是 `{ time_t（秒）, price, offset, interval? }`。
 
-**预览**（`previewTvDrawings`）按 `drawing.symbol` 分组，用上面的 identity 对到自选里的标的；每个标的列出可导入几条、以前导入过几条、跳过几条及原因（按原因计数，没有对应工具的按 TradingView 类型名计数）。对不上的标的可以选「加入「某组」」（写成 `tv:EXCH:SYM`，组可以是现有的或新建「TradingView」）或跳过。**确认**（`importTvDrawings`）：要加入的标的先 `syncOne(key, true)`（顺便校验，失败的列出来、不写），写进 yaml，再逐个标的转换，**追加**到 `charts/<fileKey>.json` 的 `overlays` 末尾，`compare` 和已有画线不动，转换成功的 TradingView id 追加进 `tvIds`（§1.3）。
+**预览**（`previewTvDrawings`）按 `drawing.symbol` 分组，用上面的 identity 对到自选里的标的；每个标的列出可导入几条、以前导入过几条、跳过几条及原因（按原因计数，没有对应工具的按 TradingView 类型名计数）。对不上的标的可以选「加入「某组」」（写成 `tv:EXCH:SYM`，组可以是现有的或新建「TradingView」）或跳过；同一批里等价的几个代码（`NASDAQ:NVDA` 和 `BATS:NVDA`）只有第一个能选，后面的标「同 NASDAQ:NVDA」，跟着它走，加入时也只加一次、画线都进第一个的 key。**确认**（`importTvDrawings`）：要加入的标的先 `syncOne(key, true)`（顺便校验，失败的列出来、不写），写进 yaml，再逐个标的转换，**追加**到 `charts/<fileKey>.json` 的 `overlays` 末尾，`compare` 和已有画线不动，每条带上 `tvId`（§1.3）。
+
+**图表页回到前台**（`visibilitychange` 变成可见或窗口 `focus`）时 `router.refresh()` 重读页面，刷新完成后 `KChart` 比较服务端的画线和图上的：不一样就按服务端的重建（正在画的那条、正在输入的文字不动），对比列表本来就跟着页面数据走。典型场景是在另一个标签页的设置页导入完切回来。没有用保存时带版本号、过期就拒绝的办法：图表的保存是每次改动就发，拒绝后用户刚做的改动也要丢，而 `tvId` 跟着画线走以后，被冲掉的导入画线再导入一次就能回来。
 
 **类型映射**（`TV_TOOLS` + 几个特殊处理，对应 `DRAW_GROUPS`）：
 
@@ -663,7 +665,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 **点**：`time_t` 是这个点所在 K 线的时间（画线时的周期），日线是开盘时刻：美股纽约 09:30，亚洲按当地开盘，外汇 / 期货 / TVC 是前一晚 17:00 / 18:00 纽约，加密是 UTC 0 点；日内周期上画的点是那根日内 K 线的时间。换成本应用的点（`pointDay`）：取交易所时区的当地日期，时区不是 UTC 且当地时间 ≥ 17:00 时算下一个交易日（晚上开盘的那一节）。不能直接用 `tradingDay`：它的 +12h 只适合开盘时刻，会把美股下午的点推到第二天。时区取缓存里这个标的的 `timezone`（数据源报的），没有就当 UTC。然后对齐到库里的交易日（`bars.t`）：落在节假日、周末的点归到前一根，和 KLineChart 的定位一致（`timestampToDataIndex` 在数据范围内二分取不大于它的那根，范围外按周期推算），范围外的日期原样保留。最后存成毫秒时间戳，所以导入的线和手画的一样跨周期。
 
-**`offset`**（点在当时最后一根 K 线右边多少根）：`interval` 是日线或没写（当日线）时，从 `time_t` 那根起按库里的交易日数 `offset` 根，超出最后一根的部分每根算一个日历日（图表在右边空白处就是这样排的）；周线、月线按周、月加；日内周期换算不了，整条跳过并计入报告。
+**`offset`**（点在当时最后一根 K 线右边多少根）：`interval` 是日线或没写（当日线）时，从 `time_t` 那根起按库里的交易日数 `offset` 根，超出最后一根的部分每根算一个日历日（图表在右边空白处就是这样排的）；`time_t` 本身就在缓存最后一根之后时（缓存比 TradingView 旧），从它起直接按日历日加；周线、月线按周、月加，月份加完日子超过目标月末的落在月末（2026-01-31 + 1 个月 = 02-28，和 KLineChart 推算月线的规则一样）；日内周期换算不了，整条跳过并计入报告。
 
 **样式**：颜色取 `linecolor`（文字取 `color`，注释和标签取 `backgroundColor` 等，斐波那契取 `trendline.color`），`#RRGGBB`、`#RGB`、`#RRGGBBAA`、`rgba()` 都转成 `#rrggbb`（透明度丢掉，应用只有一个颜色）；`linewidth` 取整到 1–4；`linestyle` 0 实线、1 / 4 点线、2 / 3 虚线；文字类加 `styles.text.size = fontsize`。用 `drawingStyles()` 生成，和浮动工具条改出来的完全一样。没有颜色就不写 `styles`（默认样式）。`state.visible === false` → `hidden`，`state.frozen` → `lock`。
 

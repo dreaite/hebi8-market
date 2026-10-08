@@ -96,6 +96,12 @@ describe("importTvList", () => {
     expect(read()).toBe(YAML);
   });
 
+  it("replace: a symbol stays in the section it first appears in, even when a section name comes back", async () => {
+    const { importTvList } = await import("@/app/tv-actions");
+    expect(await importTvList({ text: "###A,NASDAQ:NVDA,###B,NASDAQ:AAPL,###A,BATS:AAPL", fallback: "TV", mode: "replace" })).toEqual({ ok: true, added: 1, groups: 2 });
+    expect(await groups()).toEqual(["A:yahoo:NVDA", "B:tv:NASDAQ:AAPL"]);
+  });
+
   it("replace: the groups become the file's, a watched symbol keeps its entry", async () => {
     const { importTvList } = await import("@/app/tv-actions");
     expect(await importTvList({ text: FILE, fallback: "TV", mode: "replace" })).toEqual({ ok: true, added: 3, groups: 3 });
@@ -168,8 +174,12 @@ describe("TradingView drawings", () => {
     const nvda = JSON.parse(fs.readFileSync(path.join(root, "charts", "yahoo_NVDA.json"), "utf8"));
     expect(nvda.key).toBe("yahoo:NVDA");
     expect(nvda.compare).toHaveLength(1);
-    expect(nvda.tvIds).toEqual(["h1", "t1", "x1"]);
-    expect(nvda.overlays.map((o: { name: string }) => o.name)).toEqual(["segment", "horizontalStraightLine", "rayLine", "text"]);
+    expect(nvda.overlays.map((o: { name: string; tvId?: string }) => [o.name, o.tvId])).toEqual([
+      ["segment", undefined],
+      ["horizontalStraightLine", "h1"],
+      ["rayLine", "t1"],
+      ["text", "x1"],
+    ]);
     // Sep 28 is the second last bar: 4 bars on are Sep 30 and two calendar days after it
     expect(nvda.overlays[2].points).toEqual([
       { timestamp: day("2026-09-01") * 1000, value: 95 },
@@ -194,15 +204,49 @@ describe("TradingView drawings", () => {
     expect(second.ok && second.symbols[0]).toMatchObject({ ready: 0, already: 3 });
   });
 
-  it("keeps the imported ids when the chart saves its drawings", async () => {
+  it("keeps the ids through the chart's saves, and brings back what a stale chart dropped", async () => {
     const { importTvDrawings } = await import("@/app/tv-actions");
     const { saveChartState } = await import("@/app/actions");
     const { parseTvSources } = await import("@/lib/tv-drawings");
     const { readChartState } = await import("@/lib/vault");
-    await importTvDrawings({ drawings: parseTvSources(JSON.stringify(RESPONSE)), add: {} });
-    const state = readChartState(root, "yahoo:NVDA");
-    expect(await saveChartState("yahoo:NVDA", { compare: [], overlays: state.overlays.slice(1) })).toEqual({ ok: true });
-    expect(readChartState(root, "yahoo:NVDA")).toMatchObject({ overlays: state.overlays.slice(1), tvIds: ["h1", "t1", "x1"] });
+    const drawings = parseTvSources(JSON.stringify(RESPONSE));
+    const mine = { name: "segment", points: [{ timestamp: day("2026-09-02") * 1000, value: 100 }, { timestamp: day("2026-09-04") * 1000, value: 101 }] };
+    // a chart page opened before the import, with its own drawing
+    expect(await saveChartState("yahoo:NVDA", { compare: [], overlays: [mine] })).toEqual({ ok: true });
+    await importTvDrawings({ drawings, add: {} });
+    const imported = readChartState(root, "yahoo:NVDA").overlays;
+    // a chart that has them saves them with their ids
+    expect(await saveChartState("yahoo:NVDA", { compare: [], overlays: imported.slice(0, 3) })).toEqual({ ok: true });
+    expect(readChartState(root, "yahoo:NVDA").overlays.map((o) => o.tvId)).toEqual([undefined, "h1", "t1"]);
+    // the stale page saves what it had: the imported drawings are gone, and the next import puts them back once
+    expect(await saveChartState("yahoo:NVDA", { compare: [], overlays: [mine] })).toEqual({ ok: true });
+    const again = await importTvDrawings({ drawings, add: {} });
+    expect(again.ok && again.symbols[0]).toMatchObject({ imported: 3, already: 0 });
+    expect(readChartState(root, "yahoo:NVDA").overlays.map((o) => o.tvId)).toEqual([undefined, "h1", "t1", "x1"]);
+    const third = await importTvDrawings({ drawings, add: {} });
+    expect(third.ok && third.symbols[0]).toMatchObject({ imported: 0, already: 3 });
+  });
+
+  it("adds equivalent unwatched symbols once, with the first choice, and previews them as one", async () => {
+    const { importTvDrawings, previewTvDrawings } = await import("@/app/tv-actions");
+    const { readChartState } = await import("@/lib/vault");
+    const drawings = [
+      { id: "a1", symbol: "NASDAQ:AAPL", type: "LineToolHorzLine", points: [{ time_t: t("2026-09-08"), price: 200 }], state: {} },
+      { id: "a2", symbol: "BATS:AAPL", type: "LineToolHorzLine", points: [{ time_t: t("2026-09-09"), price: 210 }], state: {} },
+    ];
+    const preview = await previewTvDrawings({ drawings });
+    expect(preview.ok && preview.symbols.map((s) => [s.symbol, s.key, s.sameAs])).toEqual([
+      ["NASDAQ:AAPL", null, undefined],
+      ["BATS:AAPL", null, "NASDAQ:AAPL"],
+    ]);
+    const result = await importTvDrawings({ drawings, add: { "NASDAQ:AAPL": "美股", "BATS:AAPL": "加密" } });
+    expect(synced.one).toEqual(["tv:NASDAQ:AAPL"]);
+    expect(await groups()).toEqual(["美股:yahoo:NVDA,yahoo:SPY,tv:NASDAQ:AAPL", "加密:binance:BTCUSDT"]);
+    expect(result.ok && result.symbols.map((s) => [s.symbol, s.key, s.imported])).toEqual([
+      ["NASDAQ:AAPL", "tv:NASDAQ:AAPL", 1],
+      ["BATS:AAPL", "tv:NASDAQ:AAPL", 1],
+    ]);
+    expect(readChartState(root, "tv:NASDAQ:AAPL").overlays.map((o) => o.tvId)).toEqual(["a1", "a2"]);
   });
 
   it("skips unwatched symbols not chosen, and reports one whose first fetch fails", async () => {

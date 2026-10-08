@@ -25,10 +25,11 @@ describe("parseTvList", () => {
     expect(parseTvList("NASDAQ:NVDA", "TradingView")).toEqual([{ name: "TradingView", symbols: ["NASDAQ:NVDA"] }]);
   });
 
-  it("continues a section named twice and keeps repeats for the plan to flag", () => {
+  it("keeps a section named twice in file order, repeats included, for the plan to settle", () => {
     expect(parseTvList("###A,X:1,###B,X:2,###A,X:3,X:1", "f")).toEqual([
-      { name: "A", symbols: ["X:1", "X:3", "X:1"] },
+      { name: "A", symbols: ["X:1"] },
       { name: "B", symbols: ["X:2"] },
+      { name: "A", symbols: ["X:3", "X:1"] },
     ]);
   });
 
@@ -105,6 +106,22 @@ describe("planTvImport", () => {
           { symbol: "BATS:AAPL", key: "tv:BATS:AAPL", status: "duplicate", group: "美股" },
         ],
       },
+    ]);
+  });
+
+  it("joins sections of the same name after the first places are settled in file order", () => {
+    const plan = planTvImport(parseTvList("###A,NASDAQ:NVDA,###B,NASDAQ:AAPL,###A,BATS:AAPL,TVC:DXY", "f"), [], "replace");
+    expect(plan).toEqual([
+      {
+        name: "A",
+        existing: false,
+        rows: [
+          { symbol: "NASDAQ:NVDA", key: "tv:NASDAQ:NVDA", status: "new" },
+          { symbol: "BATS:AAPL", key: "tv:BATS:AAPL", status: "duplicate", group: "B" },
+          { symbol: "TVC:DXY", key: "tv:TVC:DXY", status: "new" },
+        ],
+      },
+      { name: "B", existing: false, rows: [{ symbol: "NASDAQ:AAPL", key: "tv:NASDAQ:AAPL", status: "new" }] },
     ]);
   });
 

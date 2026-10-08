@@ -64,6 +64,8 @@ interface KChartProps {
   clearSeq: number;
   /** Bumped by 显示所有绘图: drawings hidden one by one come back too */
   revealSeq: number;
+  /** Bumped when `overlays` was read again from the server (the page came back into view): drawings that differ are put back */
+  reloadSeq: number;
   drawing: DrawingModes;
   /** Filled with the imperative handle for hotkeys and the bottom bar */
   controlRef: RefObject<ChartControl | null>;
@@ -86,8 +88,11 @@ const PRICE_LINES = new Set(["horizontalStraightLine", "horizontalRayLine", "cro
 /** KLineChart's `currentStep` once a drawing is finished. */
 const DRAW_DONE = -1;
 
-/** Per-drawing lock and hide; "lock all" and "hide all" are UI modes applied on top. */
-type DrawingFlags = { lock?: boolean; hidden?: boolean };
+/**
+ * Per-drawing lock and hide ("lock all" and "hide all" are UI modes applied on top), and the
+ * TradingView drawing an imported one came from: kept beside KLineChart, which has no field for them.
+ */
+type DrawingFlags = { lock?: boolean; hidden?: boolean; tvId?: string };
 
 /** The y-axis object behind `getYAxes`; KLineChart keeps these methods off its public type. */
 interface AxisImpl {
@@ -271,22 +276,29 @@ function distinctPoints(points: Partial<Point>[]): Partial<Point>[] {
   return points.filter((p, i) => i === 0 || p.timestamp !== points[i - 1].timestamp || p.value !== points[i - 1].value);
 }
 
+/** A finished drawing as saved; null for one without points. */
+function specOf(o: Overlay, flags: Map<string, DrawingFlags>): OverlaySpec | null {
+  const points = o.points
+    .filter((p) => typeof p.timestamp === "number" && typeof p.value === "number")
+    .map((p) => ({ timestamp: p.timestamp!, value: p.value! }));
+  if (points.length === 0) return null;
+  const spec: OverlaySpec = { name: o.name, points };
+  if (o.styles) spec.styles = o.styles;
+  // "lock all" and "hide all" are UI modes, not properties of each drawing
+  const f = flags.get(o.id);
+  if (f?.lock) spec.lock = true;
+  if (f?.hidden) spec.hidden = true;
+  if (o.extendData !== undefined && o.extendData !== null && typeof o.extendData !== "function") spec.extendData = o.extendData;
+  if (f?.tvId) spec.tvId = f.tvId;
+  return spec;
+}
+
 /** Finished drawings on the main pane; `except` is one being removed right now. */
 function serializeOverlays(chart: Chart, flags: Map<string, DrawingFlags>, except?: string): OverlaySpec[] {
   return chart.getOverlays().flatMap((o) => {
     if (o.paneId !== CANDLE_PANE || o.id === except || o.groupId === ALERT_GROUP || o.currentStep !== DRAW_DONE) return [];
-    const points = o.points
-      .filter((p) => typeof p.timestamp === "number" && typeof p.value === "number")
-      .map((p) => ({ timestamp: p.timestamp!, value: p.value! }));
-    if (points.length === 0) return [];
-    const spec: OverlaySpec = { name: o.name, points };
-    if (o.styles) spec.styles = o.styles;
-    // "lock all" and "hide all" are UI modes, not properties of each drawing
-    const f = flags.get(o.id);
-    if (f?.lock) spec.lock = true;
-    if (f?.hidden) spec.hidden = true;
-    if (o.extendData !== undefined && o.extendData !== null && typeof o.extendData !== "function") spec.extendData = o.extendData;
-    return [spec];
+    const spec = specOf(o, flags);
+    return spec ? [spec] : [];
   });
 }
 
@@ -358,6 +370,7 @@ export function KChart({
   onDrawDone,
   clearSeq,
   revealSeq,
+  reloadSeq,
   drawing,
   controlRef,
   onAutoScaleChange,
@@ -490,6 +503,28 @@ export function KChart({
     return { mode: m.magnet ? "weak_magnet" : "normal", lock: Boolean(flags.lock) || m.locked, visible: !flags.hidden && !m.hidden };
   };
   const modesOf = (id: string) => overlayModes(flagsRef.current.get(id));
+
+  /** Saved drawings onto the chart; their flags by the new ids. */
+  const createDrawings = (chart: Chart, specs: OverlaySpec[]): Map<string, DrawingFlags> => {
+    const flags = new Map<string, DrawingFlags>();
+    if (!specs.length) return flags;
+    const ids = chart.createOverlay(
+      specs.map((o) => ({
+        name: o.name,
+        points: o.points,
+        extendData: o.extendData,
+        paneId: CANDLE_PANE,
+        ...(o.styles ? { styles: o.styles as OverlayCreate["styles"] } : {}),
+        ...overlayModes({ lock: o.lock, hidden: o.hidden }),
+        ...overlayHandlers(),
+      })),
+    ) as (string | null)[];
+    ids.forEach((id, i) => {
+      const { lock, hidden, tvId } = specs[i];
+      if (id && (lock || hidden || tvId)) flags.set(id, { lock, hidden, tvId });
+    });
+    return flags;
+  };
 
   const overlayHandlers = (): Partial<OverlayCreate> => ({
     onDrawEnd: (e) => {
@@ -962,28 +997,7 @@ export function KChart({
     }
     restoredRef.current = true;
     restoringRef.current = true;
-    const specs = overlaysRef.current;
-    const flags = new Map<string, DrawingFlags>();
-    if (specs.length) {
-      const ids = chart.createOverlay(
-        specs.map((o) => {
-          const f = { lock: o.lock, hidden: o.hidden };
-          return {
-            name: o.name,
-            points: o.points,
-            extendData: o.extendData,
-            paneId: CANDLE_PANE,
-            ...(o.styles ? { styles: o.styles as OverlayCreate["styles"] } : {}),
-            ...overlayModes(f),
-            ...overlayHandlers(),
-          };
-        }),
-      ) as (string | null)[];
-      ids.forEach((id, i) => {
-        if (id && (specs[i].lock || specs[i].hidden)) flags.set(id, { lock: specs[i].lock, hidden: specs[i].hidden });
-      });
-    }
-    flagsRef.current = flags;
+    flagsRef.current = createDrawings(chart, overlaysRef.current);
     restoringRef.current = false;
     crosshairRef.current = null;
     scheduleLegend();
@@ -1100,6 +1114,38 @@ export function KChart({
     if (drawTool) startDrawing(drawTool);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one overlay per tool selection
   }, [drawTool]);
+
+  /**
+   * The saved drawings changed on the server (imported in another tab): take them over unless they
+   * are what the chart has. The drawing being drawn and the text being typed stay as they are.
+   */
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || reloadSeq === 0 || !restoredRef.current) return;
+    const specs = overlaysRef.current;
+    if (JSON.stringify(serializeOverlays(chart, flagsRef.current)) === JSON.stringify(specs)) return;
+    const typing = editor ? chart.getOverlays({ id: editor.id })[0] : undefined;
+    let typed = typing ? JSON.stringify(specOf(typing, flagsRef.current)) : null;
+    restoringRef.current = true;
+    setMenu(null);
+    setSettings(null);
+    for (const o of chart.getOverlays({ paneId: CANDLE_PANE })) {
+      if (o.groupId !== ALERT_GROUP && o.currentStep === DRAW_DONE && o.id !== typing?.id) chart.removeOverlay({ id: o.id });
+    }
+    // the text being typed is already on the chart
+    const rest = specs.filter((s) => {
+      if (typed === null || JSON.stringify(s) !== typed) return true;
+      typed = null;
+      return false;
+    });
+    const flags = createDrawings(chart, rest);
+    const typingFlags = typing && flagsRef.current.get(typing.id);
+    if (typing && typingFlags) flags.set(typing.id, typingFlags);
+    flagsRef.current = flags;
+    restoringRef.current = false;
+    scheduleLegend();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per reload
+  }, [reloadSeq]);
 
   useEffect(() => {
     const chart = chartRef.current;

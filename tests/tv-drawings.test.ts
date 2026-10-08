@@ -5,6 +5,7 @@ import {
   convertDrawing,
   convertDrawings,
   hexColor,
+  importedIds,
   layoutId,
   normalizeDrawing,
   parseTvSources,
@@ -207,6 +208,17 @@ describe("convertDrawing: points", () => {
     expect(line([pt("2026-09-01", 1), pt("2026-09-28", 2, { offset: 2, interval: "1D" })])).toEqual(["2026-09-01", "2026-09-30"]);
   });
 
+  it("counts calendar days from an anchor past the cached bars (the cache can be behind TradingView)", () => {
+    const utc: DrawingContext = { days: DAYS, timeZone: "UTC" };
+    const r = convertDrawing(drawing("LineToolTrendLine", [{ time_t: day("2026-09-01"), price: 1 }, { time_t: day("2026-10-08"), price: 2, offset: 2, interval: "1D" }]), utc);
+    expect(r.ok && r.overlay.points[1].timestamp).toBe(ms("2026-10-10"));
+  });
+
+  it("ends a month offset on the target month's last day, as KLineChart does", () => {
+    const r = convertDrawing(drawing("LineToolTrendLine", [{ time_t: day("2026-01-02"), price: 1 }, { time_t: day("2026-01-31"), price: 2, offset: 1, interval: "1M" }]), { days: [], timeZone: "UTC" });
+    expect(r.ok && r.overlay.points[1].timestamp).toBe(ms("2026-02-28"));
+  });
+
   it("counts weekly and monthly offsets in weeks and months, and gives up on intraday ones", () => {
     expect(line([pt("2026-09-01", 1), pt("2026-08-31", 2, { offset: 2, interval: "1W" })])).toEqual(["2026-09-01", "2026-09-14"]);
     expect(line([pt("2026-09-01", 1), pt("2026-09-01", 2, { offset: 2, interval: "M" })])).toEqual(["2026-09-01", "2026-11-01"]);
@@ -265,11 +277,14 @@ describe("convertDrawings", () => {
 
   it("converts, counts the skipped by reason and leaves out what was imported before", () => {
     const first = convertDrawings(list, US, new Set());
-    expect(first.ids).toEqual(["a", "b"]);
-    expect(first.overlays.map((o) => o.name)).toEqual(["horizontalStraightLine", "verticalStraightLine"]);
+    expect(first.overlays.map((o) => [o.name, o.tvId])).toEqual([
+      ["horizontalStraightLine", "a"],
+      ["verticalStraightLine", "b"],
+    ]);
     expect(first.skipped).toEqual({ "没有对应的工具：LineToolSineLine": 2 });
-    const again = convertDrawings(list, US, new Set(first.ids));
-    expect(again).toMatchObject({ overlays: [], ids: [], already: 2 });
+    expect(convertDrawings(list, US, importedIds(first.overlays))).toMatchObject({ overlays: [], already: 2 });
+    // one deleted on the chart comes back
+    expect(convertDrawings(list, US, importedIds(first.overlays.slice(1))).overlays.map((o) => o.tvId)).toEqual(["a"]);
   });
 });
 

@@ -170,7 +170,9 @@ function intervalUnit(interval: string | undefined): { unit: "D" | "W" | "M"; n:
 /**
  * The day `offset` bars after the bar on `day`. Daily bars are counted on the stored trading
  * days; past the last one each bar is a calendar day, which is how the chart places points in
- * the empty area on the right. Null when it cannot be worked out.
+ * the empty area on the right (so is an anchor already past the cache, which can be behind
+ * TradingView). Months end on the target month's last day when it is shorter, as KLineChart
+ * counts them. Null when it cannot be worked out.
  */
 function offsetDay(days: number[], day: number, offset: number, interval: string | undefined): number | null {
   const step = intervalUnit(interval);
@@ -179,12 +181,14 @@ function offsetDay(days: number[], day: number, offset: number, interval: string
   if (step.unit === "W") return day + bars * 7 * DAY;
   if (step.unit === "M") {
     const d = new Date(day * 1000);
-    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + bars, d.getUTCDate()) / 1000;
+    const lastOfMonth = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + bars + 1, 0)).getUTCDate();
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + bars, Math.min(d.getUTCDate(), lastOfMonth)) / 1000;
   }
+  const last = days.length - 1;
+  if (last >= 0 && day > days[last]) return day + bars * DAY;
   const i = floorIndex(days, day);
   if (i < 0) return null;
   const target = i + bars;
-  const last = days.length - 1;
   return target <= last ? days[target] : days[last] + (target - last) * DAY;
 }
 
@@ -432,29 +436,29 @@ export function convertDrawing(d: TvDrawing, ctx: DrawingContext): Converted {
   return { ok: true, overlay };
 }
 
+/** TradingView ids of the imported drawings still on a chart; one deleted there comes back with the next import. */
+export const importedIds = (overlays: OverlaySpec[]) => new Set(overlays.flatMap((o) => (o.tvId ? [o.tvId] : [])));
+
 export interface Conversion {
+  /** Each with the `tvId` of its drawing */
   overlays: OverlaySpec[];
-  /** TradingView ids of the drawings in `overlays` */
-  ids: string[];
-  /** Imported before (their ids are in the chart file) */
+  /** Imported before (a drawing in the chart file has their id) */
   already: number;
   /** Why the rest were left out, with counts */
   skipped: Record<string, number>;
 }
 
-/** The drawings of one symbol, minus those imported before. */
+/** The drawings of one symbol, minus those imported before (`importedIds` of its chart). */
 export function convertDrawings(drawings: TvDrawing[], ctx: DrawingContext, imported: ReadonlySet<string>): Conversion {
-  const out: Conversion = { overlays: [], ids: [], already: 0, skipped: {} };
+  const out: Conversion = { overlays: [], already: 0, skipped: {} };
   for (const d of drawings) {
     if (imported.has(d.id)) {
       out.already++;
       continue;
     }
     const r = convertDrawing(d, ctx);
-    if (r.ok) {
-      out.overlays.push(r.overlay);
-      out.ids.push(d.id);
-    } else out.skipped[r.reason] = (out.skipped[r.reason] ?? 0) + 1;
+    if (r.ok) out.overlays.push({ ...r.overlay, tvId: d.id });
+    else out.skipped[r.reason] = (out.skipped[r.reason] ?? 0) + 1;
   }
   return out;
 }

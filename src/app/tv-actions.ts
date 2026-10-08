@@ -9,7 +9,7 @@ import { isMap, isSeq, type Document, type YAMLMap, type YAMLSeq } from "yaml";
 import { findItem, type Config } from "@/lib/config";
 import { getSymbol, readDaily } from "@/lib/store";
 import { recomputeStats, syncAll, syncOne } from "@/lib/sync";
-import { convertDrawings, layoutId, normalizeDrawing, type DrawingContext, type TvDrawing } from "@/lib/tv-drawings";
+import { convertDrawings, importedIds, layoutId, normalizeDrawing, type DrawingContext, type TvDrawing } from "@/lib/tv-drawings";
 import { parseTvList, planTvImport, tvIdentity, tvKey, watchedByIdentity, type ImportMode } from "@/lib/tv-import";
 import { fetchLayoutDrawings } from "@/lib/tv-layout";
 import { entryKey, flowNode, groupNode, readChartState, readConfig, seqOf, updateConfig, writeChartState } from "@/lib/vault";
@@ -112,6 +112,8 @@ export interface SymbolDrawings {
   /** The watched key it maps to; null when it is not watched */
   key: string | null;
   group: string | null;
+  /** Unwatched and the same listing as an earlier row (`BATS:NVDA` after `NASDAQ:NVDA`): it follows that row's choice */
+  sameAs?: string;
   total: number;
   /** Would be imported now (for an unwatched symbol: once it is added, from what is cached) */
   ready: number;
@@ -141,12 +143,16 @@ function bySymbol(drawings: TvDrawing[]): Map<string, TvDrawing[]> {
 
 function summarize(dir: string, cfg: Config, drawings: TvDrawing[]): SymbolDrawings[] {
   const watched = watchedByIdentity(watchedGroups(cfg));
+  const unwatched = new Map<string, string>();
   return [...bySymbol(drawings)].map(([symbol, list]) => {
-    const hit = watched.get(tvIdentity(symbol));
-    const key = hit?.key ?? tvKey(symbol);
-    const imported = new Set(hit ? (readChartState(dir, key).tvIds ?? []) : []);
+    const id = tvIdentity(symbol);
+    const hit = watched.get(id);
+    const first = hit ? undefined : unwatched.get(id);
+    if (!hit && !first) unwatched.set(id, symbol);
+    const key = hit?.key ?? tvKey(first ?? symbol);
+    const imported = hit ? importedIds(readChartState(dir, key).overlays) : new Set<string>();
     const conv = convertDrawings(list, contextOf(key), imported);
-    return { symbol, key: hit?.key ?? null, group: hit?.group ?? null, total: list.length, ready: conv.overlays.length, already: conv.already, skipped: conv.skipped };
+    return { symbol, key: hit?.key ?? null, group: hit?.group ?? null, ...(first ? { sameAs: first } : {}), total: list.length, ready: conv.overlays.length, already: conv.already, skipped: conv.skipped };
   });
 }
 
@@ -203,8 +209,11 @@ export async function importTvDrawings(input: DrawingsImportInput): Promise<TvRe
       if (!groups.has(symbol) || !target || watched.has(tvIdentity(symbol))) continue;
       const key = tvKey(symbol);
       const outcome = await syncOne(key, true);
-      if (outcome.ok) adding.push([symbol, key, target]);
-      else failed.push({ symbol, error: outcome.error ?? "拉取失败" });
+      if (outcome.ok) {
+        adding.push([symbol, key, target]);
+        // an equivalent symbol later in the batch goes with this one
+        watched.set(tvIdentity(symbol), { key, group: target });
+      } else failed.push({ symbol, error: outcome.error ?? "拉取失败" });
     }
     if (adding.length) {
       updateConfig(dir, (doc) => {
@@ -220,8 +229,8 @@ export async function importTvDrawings(input: DrawingsImportInput): Promise<TvRe
       const key = byId.get(tvIdentity(symbol))?.key;
       if (!key || !findItem(cfg, key)) continue;
       const state = readChartState(dir, key);
-      const conv = convertDrawings(list, contextOf(key), new Set(state.tvIds ?? []));
-      if (conv.overlays.length) writeChartState(dir, key, { ...state, overlays: [...state.overlays, ...conv.overlays], tvIds: [...(state.tvIds ?? []), ...conv.ids] });
+      const conv = convertDrawings(list, contextOf(key), importedIds(state.overlays));
+      if (conv.overlays.length) writeChartState(dir, key, { ...state, overlays: [...state.overlays, ...conv.overlays] });
       symbols.push({ symbol, key, imported: conv.overlays.length, already: conv.already, skipped: conv.skipped });
     }
     revalidatePath("/", "layout");

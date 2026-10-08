@@ -13,8 +13,9 @@ export interface TvSection {
 }
 
 /**
- * Sections of an exported list. Symbols before the first `###` go into a section named `fallback`
- * (the file name, or「TradingView」); a section header repeated later continues the same section.
+ * Sections of an exported list in file order. Symbols before the first `###` go into a section
+ * named `fallback` (the file name, or「TradingView」). A header repeated later starts another
+ * section of the same name; the plan puts them together once it knows where each symbol came first.
  */
 export function parseTvList(text: string, fallback: string): TvSection[] {
   const sections: TvSection[] = [];
@@ -23,9 +24,7 @@ export function parseTvList(text: string, fallback: string): TvSection[] {
     const token = raw.trim();
     if (!token) continue;
     if (token.startsWith("###")) {
-      const name = token.slice(3).trim() || fallback;
-      current = sections.find((s) => s.name === name) ?? null;
-      if (!current) sections.push((current = { name, symbols: [] }));
+      sections.push((current = { name: token.slice(3).trim() || fallback, symbols: [] }));
       continue;
     }
     if (!current) sections.push((current = { name: fallback, symbols: [] }));
@@ -168,23 +167,27 @@ export interface PlanGroup {
 
 /**
  * What an import does, row by row. A symbol is only ever in one group: one already watched (any
- * equivalent key) is not added again, and one repeated in the file keeps its first place.
+ * equivalent key) is not added again, and one repeated in the file keeps its first place. Sections
+ * of the same name become one group, after the first places are settled in file order.
  */
 export function planTvImport(sections: TvSection[], watched: { name: string; keys: string[] }[], mode: ImportMode): PlanGroup[] {
   const byId = watchedByIdentity(watched);
   const seen = new Map<string, string>();
-  return sections.map((section) => ({
-    name: section.name,
-    existing: mode === "merge" && watched.some((g) => g.name === section.name),
-    rows: section.symbols.map((symbol): PlanRow => {
+  const groups: PlanGroup[] = [];
+  for (const section of sections) {
+    const rows = section.symbols.map((symbol): PlanRow => {
       const id = tvIdentity(symbol);
       const first = seen.get(id);
       if (first !== undefined) return { symbol, key: tvKey(symbol), status: "duplicate", group: first };
       seen.set(id, section.name);
       const hit = byId.get(id);
       return hit ? { symbol, key: hit.key, status: "exists", group: hit.group } : { symbol, key: tvKey(symbol), status: "new" };
-    }),
-  }));
+    });
+    const same = groups.find((g) => g.name === section.name);
+    if (same) same.rows.push(...rows);
+    else groups.push({ name: section.name, existing: mode === "merge" && watched.some((g) => g.name === section.name), rows });
+  }
+  return groups;
 }
 
 // ---------------------------------------------------------------------------- export

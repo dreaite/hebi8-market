@@ -202,22 +202,23 @@ export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWr
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
+  /** A rejected request (over the size limit, the server gone) never reaches the action; shown here, not thrown at React. */
+  const failure = (err: unknown) => setError(err instanceof Error ? err.message : String(err));
+
   const load = () =>
     startTransition(async () => {
       setError(null);
       setDone(null);
       let result;
-      if (source === "layout") {
-        result = await previewTvDrawings({ layout, sessionid, sign });
-        // the cookies are not kept any longer than this one request
-        setSessionid("");
-        setSign("");
-      } else {
-        try {
-          result = await previewTvDrawings({ drawings: parseTvSources(json) });
-        } catch (err) {
-          return setError(err instanceof Error ? err.message : String(err));
-        }
+      try {
+        if (source === "layout") {
+          // the cookies are not kept any longer than this one request
+          setSessionid("");
+          setSign("");
+          result = await previewTvDrawings({ layout, sessionid, sign });
+        } else result = await previewTvDrawings({ drawings: parseTvSources(json) });
+      } catch (err) {
+        return failure(err);
       }
       if (!result.ok) {
         setPreview(null);
@@ -230,13 +231,19 @@ export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWr
   const commit = () =>
     startTransition(async () => {
       if (!preview) return;
-      const result = await importTvDrawings({ drawings: preview.drawings, add: Object.fromEntries(Object.entries(add).filter(([, g]) => g !== SKIP)) });
+      setError(null);
+      let result;
+      try {
+        result = await importTvDrawings({ drawings: preview.drawings, add: Object.fromEntries(Object.entries(add).filter(([, g]) => g !== SKIP)) });
+      } catch (err) {
+        return failure(err);
+      }
       if (!result.ok) return setError(result.error);
       setDone(result);
       setPreview(null);
     });
 
-  const count = preview?.symbols.reduce((n, s) => n + (s.key || (add[s.symbol] ?? SKIP) !== SKIP ? s.ready : 0), 0) ?? 0;
+  const count = preview?.symbols.reduce((n, s) => n + (s.key || (add[s.sameAs ?? s.symbol] ?? SKIP) !== SKIP ? s.ready : 0), 0) ?? 0;
 
   return (
     <div className={body}>
@@ -306,7 +313,9 @@ export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWr
                   <tr key={s.symbol}>
                     <td className={`${td} font-mono`}>{s.symbol}</td>
                     <td className={td}>
-                      {s.key ? (
+                      {s.sameAs ? (
+                        <span className="text-muted">同 {s.sameAs}</span>
+                      ) : s.key ? (
                         <Link href={chartHref(s.key)} className="font-mono hover:underline">
                           {s.key}
                         </Link>

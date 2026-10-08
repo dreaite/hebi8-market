@@ -331,13 +331,13 @@ export interface OverlaySpec {
   /** Hidden from the floating toolbar's eye; 显示所有绘图 brings it back */
   hidden?: boolean;
   extendData?: unknown;
+  /** The TradingView drawing it was imported from (§5.5), so importing it again adds nothing */
+  tvId?: string;
 }
 
 export interface ChartState {
   compare: CompareEntry[];
   overlays: OverlaySpec[];
-  /** TradingView drawings imported into `overlays` (§5.5), so importing them again adds nothing */
-  tvIds?: string[];
 }
 
 export const EMPTY_CHART_STATE: ChartState = { compare: [], overlays: [] };
@@ -350,7 +350,6 @@ function parseChartState(text: string): ChartState {
     return {
       compare: Array.isArray(raw.compare) ? raw.compare.filter((c) => isValidKey(c?.key)) : [],
       overlays: Array.isArray(raw.overlays) ? raw.overlays.filter((o) => typeof o?.name === "string") : [],
-      ...(Array.isArray(raw.tvIds) ? { tvIds: raw.tvIds.filter((id) => typeof id === "string") } : {}),
     };
   } catch {
     return EMPTY_CHART_STATE;

@@ -14,6 +14,8 @@ function gitCommit(): string {
 const nextConfig: NextConfig = {
   // Node-only market data clients: load them with native require instead of bundling.
   serverExternalPackages: ["better-sqlite3", "yahoo-finance2", "@mathieuc/tradingview"],
+  // TradingView drawings go back with the import's confirmation; a layout full of brush strokes passes 1 MB
+  experimental: { serverActions: { bodySizeLimit: "10mb" } },
   // Shown in the help panel and attached to in-app feedback; inlined on both server and client.
   env: {
     HEBI8_VERSION: pkg.version,
