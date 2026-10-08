@@ -274,15 +274,15 @@ export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWr
           </div>
           <p className="text-[11px] leading-relaxed text-muted">
             两个 cookie 在已登录 tradingview.com 的浏览器里找：开发者工具 → Application（应用）→ Cookies → https://www.tradingview.com。它们只随这一次请求发到本服务器，再由服务器发给
-            tradingview.com，不保存、不写日志，取完就从这里清掉。会取共享画线（_shared）和布局里 1–8 号图表各自的画线；多于 8 个图表的布局，其余的用「粘贴 JSON」。
+            tradingview.com，不保存、不写日志，取完就从这里清掉。会取这个布局里所有图表的画线（含开了同步画线的 _shared），以及在所有布局间全局同步的画线。
           </p>
         </div>
       ) : (
         <div className="flex flex-col gap-2">
           <textarea className="input h-28 py-1.5 font-mono" placeholder='{"success":true,"payload":{"sources":{…}}}' value={json} onChange={(e) => setJson(e.target.value)} />
           <p className="text-[11px] leading-relaxed text-muted">
-            在 TradingView 打开那个布局，开发者工具的 Network（网络）面板里搜 <code>sources</code>，找到 charts-storage.tradingview.com 的请求（每个图表一个，开了同步画线的是 chart_id=_shared）。
-            把 Response（响应）整段复制过来；只复制里面的 sources 对象或画线数组也行。多个图表就分几次导入，重复的不会多出来。
+            在 TradingView 打开那个布局，开发者工具的 Network（网络）面板里搜 <code>sources</code>，找到 charts-storage.tradingview.com 的请求（每个标的一个：布局里的是 get/layout/…/sources，全局同步的是 get/user/sources）。
+            把 Response（响应）整段复制过来；只复制里面的 sources 对象或画线数组也行。多个标的就分几次导入，重复的不会多出来。
           </p>
         </div>
       )}
@@ -296,7 +296,14 @@ export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWr
 
       {preview && (
         <>
-          {preview.perChart && <p className="text-[11px] text-muted">取到：{preview.perChart.map((c) => `${c.chartId} ${c.count} 条`).join("，")}</p>}
+          {preview.origins && (
+            <p className="text-[11px] text-muted">
+              取到：
+              {preview.origins
+                .map((o) => `${o.source === "user" ? "全局同步" : o.chartId === "_shared" ? "布局（同步画线 _shared）" : `布局图表 ${o.chartId}`} ${o.count} 条${o.count === o.expected ? "" : `（TradingView 记的是 ${o.expected} 条）`}`)
+                .join("，")}
+            </p>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full border-collapse">
               <thead>
@@ -313,7 +320,9 @@ export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWr
                   <tr key={s.symbol}>
                     <td className={`${td} font-mono`}>{s.symbol}</td>
                     <td className={td}>
-                      {s.sameAs ? (
+                      {s.expression ? (
+                        <span className="text-muted">表达式，跳过</span>
+                      ) : s.sameAs ? (
                         <span className="text-muted">同 {s.sameAs}</span>
                       ) : s.key ? (
                         <Link href={chartHref(s.key)} className="font-mono hover:underline">

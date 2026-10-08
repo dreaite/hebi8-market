@@ -9,9 +9,9 @@ import { isMap, isSeq, type Document, type YAMLMap, type YAMLSeq } from "yaml";
 import { findItem, type Config } from "@/lib/config";
 import { getSymbol, readDaily } from "@/lib/store";
 import { recomputeStats, syncAll, syncOne } from "@/lib/sync";
-import { convertDrawings, importedIds, layoutId, normalizeDrawing, type DrawingContext, type TvDrawing } from "@/lib/tv-drawings";
-import { parseTvList, planTvImport, tvIdentity, tvKey, watchedByIdentity, type ImportMode } from "@/lib/tv-import";
-import { fetchLayoutDrawings } from "@/lib/tv-layout";
+import { convertDrawings, importedIds, layoutId, sessionMinutes, tickOf, normalizeDrawing, type DrawingContext, type TvDrawing } from "@/lib/tv-drawings";
+import { isTvSymbol, parseTvList, planTvImport, tvIdentity, tvKey, watchedByIdentity, type ImportMode } from "@/lib/tv-import";
+import { fetchLayoutDrawings, type DrawingOrigin } from "@/lib/tv-layout";
 import { entryKey, flowNode, groupNode, readChartState, readConfig, seqOf, updateConfig, writeChartState } from "@/lib/vault";
 import { getViewer, requireWriter, type Viewer } from "@/lib/viewer";
 import { wellKnownName } from "@/lib/wellknown";
@@ -114,6 +114,8 @@ export interface SymbolDrawings {
   group: string | null;
   /** Unwatched and the same listing as an earlier row (`BATS:NVDA` after `NASDAQ:NVDA`): it follows that row's choice */
   sameAs?: string;
+  /** An expression of several symbols (`1/FX:USDJPY*TVC:DXY`): nothing to put its drawings on */
+  expression?: boolean;
   total: number;
   /** Would be imported now (for an unwatched symbol: once it is added, from what is cached) */
   ready: number;
@@ -126,13 +128,19 @@ export interface DrawingsPreview {
   /** Normalized, to be sent back with the confirmation */
   drawings: TvDrawing[];
   symbols: SymbolDrawings[];
-  /** Layout fetches: drawings found per chart id */
-  perChart?: { chartId: string; count: number }[];
+  /** Layout fetches: drawings found per place they are stored, against TradingView's own count */
+  origins?: DrawingOrigin[];
 }
 
-/** Bars and timezone of a key from the cache, what points are lined up against. */
-function contextOf(key: string): DrawingContext {
-  return { days: readDaily(key).map((b) => b.t), timeZone: getSymbol(key)?.timezone ?? "UTC" };
+/** What the drawings of a TradingView symbol are lined up against: the cached bars of its key, their timezone and price step. */
+function contextOf(key: string, symbol: string): DrawingContext {
+  const bars = readDaily(key);
+  return {
+    days: bars.map((b) => b.t),
+    timeZone: getSymbol(key)?.timezone ?? "UTC",
+    sessionMinutes: sessionMinutes(symbol),
+    tick: tickOf(bars.slice(-50).map((b) => b.c)),
+  };
 }
 
 function bySymbol(drawings: TvDrawing[]): Map<string, TvDrawing[]> {
@@ -141,17 +149,20 @@ function bySymbol(drawings: TvDrawing[]): Map<string, TvDrawing[]> {
   return out;
 }
 
+const EXPRESSION = "表达式标的，没有对应的图表";
+
 function summarize(dir: string, cfg: Config, drawings: TvDrawing[]): SymbolDrawings[] {
   const watched = watchedByIdentity(watchedGroups(cfg));
   const unwatched = new Map<string, string>();
-  return [...bySymbol(drawings)].map(([symbol, list]) => {
+  return [...bySymbol(drawings)].map(([symbol, list]): SymbolDrawings => {
+    if (!isTvSymbol(symbol)) return { symbol, key: null, group: null, expression: true, total: list.length, ready: 0, already: 0, skipped: { [EXPRESSION]: list.length } };
     const id = tvIdentity(symbol);
     const hit = watched.get(id);
     const first = hit ? undefined : unwatched.get(id);
     if (!hit && !first) unwatched.set(id, symbol);
     const key = hit?.key ?? tvKey(first ?? symbol);
     const imported = hit ? importedIds(readChartState(dir, key).overlays) : new Set<string>();
-    const conv = convertDrawings(list, contextOf(key), imported);
+    const conv = convertDrawings(list, contextOf(key, symbol), imported);
     return { symbol, key: hit?.key ?? null, group: hit?.group ?? null, ...(first ? { sameAs: first } : {}), total: list.length, ready: conv.overlays.length, already: conv.already, skipped: conv.skipped };
   });
 }
@@ -165,17 +176,17 @@ const normalizeAll = (list: unknown[]) => (Array.isArray(list) ? list : []).map(
 export async function previewTvDrawings(source: DrawingsSource): Promise<TvResult<DrawingsPreview>> {
   return run(async ({ dir }) => {
     let drawings: TvDrawing[];
-    let perChart: DrawingsPreview["perChart"];
+    let origins: DrawingsPreview["origins"];
     if ("layout" in source) {
       const layout = layoutId(String(source.layout ?? ""));
       if (!layout) throw new Error("看不出布局 ID：填 https://www.tradingview.com/chart/<ID>/ 或 ID 本身");
       const session = String(source.sessionid ?? "").trim();
       const sign = String(source.sign ?? "").trim();
       if (!session || !sign) throw new Error("sessionid 和 sessionid_sign 都要填");
-      ({ drawings, perChart } = await fetchLayoutDrawings(layout, session, sign));
+      ({ drawings, origins } = await fetchLayoutDrawings(layout, session, sign));
     } else drawings = normalizeAll(source.drawings);
     if (!drawings.length) throw new Error("没有找到画线");
-    return { drawings, symbols: summarize(dir, readConfig(dir), drawings), ...(perChart ? { perChart } : {}) };
+    return { drawings, symbols: summarize(dir, readConfig(dir), drawings), ...(origins ? { origins } : {}) };
   });
 }
 
@@ -206,7 +217,7 @@ export async function importTvDrawings(input: DrawingsImportInput): Promise<TvRe
     const watched = watchedByIdentity(watchedGroups(readConfig(dir)));
     for (const [symbol, group] of Object.entries(input.add ?? {})) {
       const target = String(group ?? "").trim();
-      if (!groups.has(symbol) || !target || watched.has(tvIdentity(symbol))) continue;
+      if (!groups.has(symbol) || !target || !isTvSymbol(symbol) || watched.has(tvIdentity(symbol))) continue;
       const key = tvKey(symbol);
       const outcome = await syncOne(key, true);
       if (outcome.ok) {
@@ -229,7 +240,7 @@ export async function importTvDrawings(input: DrawingsImportInput): Promise<TvRe
       const key = byId.get(tvIdentity(symbol))?.key;
       if (!key || !findItem(cfg, key)) continue;
       const state = readChartState(dir, key);
-      const conv = convertDrawings(list, contextOf(key), importedIds(state.overlays));
+      const conv = convertDrawings(list, contextOf(key, symbol), importedIds(state.overlays));
       if (conv.overlays.length) writeChartState(dir, key, { ...state, overlays: [...state.overlays, ...conv.overlays] });
       symbols.push({ symbol, key, imported: conv.overlays.length, already: conv.already, skipped: conv.skipped });
     }

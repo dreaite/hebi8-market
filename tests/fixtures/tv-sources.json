@@ -1,0 +1,521 @@
+{
+ "success": true,
+ "payload": {
+  "sources": {
+   "CokSCP": {
+    "id": "CokSCP",
+    "symbol": "AMEX:GLD",
+    "state": {
+     "type": "LineToolTrendLine",
+     "id": "CokSCP",
+     "points": [
+      {
+       "time_t": 1760981400,
+       "offset": 0,
+       "price": 403.2250915921136,
+       "interval": "240"
+      },
+      {
+       "time_t": 1764081000,
+       "offset": 25,
+       "price": 370.1670316037478,
+       "interval": "240"
+      }
+     ],
+     "state": {
+      "linecolor": "rgba(41, 98, 255, 1)",
+      "textcolor": "#2962FF",
+      "linewidth": 2,
+      "linestyle": 0,
+      "text": "",
+      "fontsize": 14,
+      "extendLeft": false,
+      "extendRight": false,
+      "visible": true,
+      "frozen": false,
+      "interval": "240"
+     }
+    }
+   },
+   "v1WgAe": {
+    "id": "v1WgAe",
+    "symbol": "BINANCE:ETHUSD",
+    "state": {
+     "type": "LineToolTrendLine",
+     "id": "v1WgAe",
+     "points": [
+      {
+       "time_t": 1710288000,
+       "offset": 0,
+       "price": 4082.58
+      },
+      {
+       "time_t": 1714262400,
+       "offset": 23,
+       "price": 3147.2258980687516
+      }
+     ],
+     "state": {
+      "linecolor": "#2962FF",
+      "textcolor": "#2962FF",
+      "linewidth": 2,
+      "linestyle": 0,
+      "text": "",
+      "fontsize": 14,
+      "extendLeft": false,
+      "extendRight": false,
+      "visible": true,
+      "frozen": false,
+      "interval": "1D"
+     }
+    }
+   },
+   "HDb2sy": {
+    "id": "HDb2sy",
+    "symbol": "BINANCE:YGGUSDT.P",
+    "state": {
+     "type": "LineToolTrendLine",
+     "id": "HDb2sy",
+     "points": [
+      {
+       "time_t": 1712197800,
+       "offset": 0,
+       "price": 1.1656746702530802
+      },
+      {
+       "time_t": 1712289600,
+       "offset": 118,
+       "price": 1.2351714165633472
+      }
+     ],
+     "state": {
+      "linecolor": "#2962FF",
+      "textcolor": "#2962FF",
+      "linewidth": 2,
+      "linestyle": 0,
+      "text": "",
+      "fontsize": 14,
+      "extendLeft": false,
+      "extendRight": false,
+      "visible": true,
+      "frozen": false,
+      "interval": "15"
+     }
+    }
+   },
+   "yBic3F": {
+    "id": "yBic3F",
+    "symbol": "AMEX:GLD",
+    "state": {
+     "type": "LineToolRectangle",
+     "id": "yBic3F",
+     "points": [
+      {
+       "time_t": 1711373400,
+       "offset": 0,
+       "price": 315.4923307801342,
+       "interval": "1W"
+      },
+      {
+       "time_t": 1760967000,
+       "offset": 60,
+       "price": 298.3185282163366,
+       "interval": "1W"
+      }
+     ],
+     "state": {
+      "color": "#9c27b0",
+      "textColor": "#9c27b0",
+      "backgroundColor": "rgba(156, 39, 176, 0.2)",
+      "linewidth": 2,
+      "linestyle": 0,
+      "text": "",
+      "extendLeft": false,
+      "extendRight": false,
+      "visible": true,
+      "frozen": false,
+      "interval": "1W"
+     }
+    }
+   },
+   "pc59Wh": {
+    "id": "pc59Wh",
+    "symbol": "BINANCE:BTCUSDT",
+    "state": {
+     "type": "LineToolHorzLine",
+     "id": "pc59Wh",
+     "points": [
+      {
+       "time_t": 1704067200,
+       "offset": 0,
+       "price": 93576,
+       "interval": "12M"
+      }
+     ],
+     "state": {
+      "linecolor": "#2962FF",
+      "textcolor": "#2962FF",
+      "linewidth": 2,
+      "linestyle": 0,
+      "text": "",
+      "fontsize": 12,
+      "visible": true,
+      "frozen": false,
+      "interval": "12M"
+     }
+    }
+   },
+   "I59nN0": {
+    "id": "I59nN0",
+    "symbol": "SSE:601985",
+    "state": {
+     "type": "LineToolRiskRewardLong",
+     "id": "I59nN0",
+     "points": [
+      {
+       "time_t": 1778031000,
+       "offset": 79,
+       "price": 8.53,
+       "interval": "1W"
+      },
+      {
+       "time_t": 1778031000,
+       "offset": 262,
+       "price": 8.53,
+       "interval": "1W"
+      }
+     ],
+     "state": {
+      "linecolor": "#808080",
+      "textcolor": "#ffffff",
+      "linewidth": 1,
+      "fontsize": 12,
+      "visible": true,
+      "frozen": false,
+      "stopLevel": 88,
+      "profitLevel": 1473,
+      "interval": "1W"
+     }
+    }
+   },
+   "Bh6G3N": {
+    "id": "Bh6G3N",
+    "symbol": "AMEX:ASHR",
+    "state": {
+     "type": "LineToolBezierQuadro",
+     "id": "Bh6G3N",
+     "points": [
+      {
+       "time_t": 1706884200,
+       "offset": 0,
+       "price": 21.66800604756118,
+       "interval": "1D"
+      },
+      {
+       "time_t": 1772548200,
+       "offset": 58,
+       "price": 59.757295866313385,
+       "interval": "1D"
+      },
+      {
+       "time_t": 1770388200,
+       "offset": 0,
+       "price": 29.658362017504913,
+       "interval": "1D"
+      }
+     ],
+     "state": {
+      "linecolor": "#2962FF",
+      "backgroundColor": "rgba(41, 98, 255, 0.2)",
+      "linewidth": 2,
+      "linestyle": 0,
+      "extendLeft": false,
+      "extendRight": false,
+      "visible": true,
+      "frozen": false,
+      "interval": "60"
+     }
+    }
+   },
+   "xMPC0k": {
+    "id": "xMPC0k",
+    "symbol": "1/FX:USDJPY*TVC:DXY",
+    "state": {
+     "type": "LineToolFibRetracement",
+     "id": "xMPC0k",
+     "points": [
+      {
+       "time_t": 63842400,
+       "offset": 0,
+       "price": 1.0931244804756888,
+       "interval": "1W"
+      },
+      {
+       "time_t": 1750626000,
+       "offset": 479,
+       "price": 0.3242547404182171,
+       "interval": "1W"
+      }
+     ],
+     "state": {
+      "visible": true,
+      "frozen": false,
+      "trendline": {
+       "visible": true,
+       "color": "#808080",
+       "linewidth": 2,
+       "linestyle": 2
+      },
+      "interval": "1W"
+     }
+    }
+   },
+   "scJOBL": {
+    "id": "scJOBL",
+    "symbol": "AMEX:SIL",
+    "state": {
+     "type": "LineToolFibRetracement",
+     "id": "scJOBL",
+     "points": [
+      {
+       "time_t": 1436794200,
+       "offset": 0,
+       "price": 54.19355665907262,
+       "interval": "1W"
+      },
+      {
+       "time_t": 1760362200,
+       "offset": 148,
+       "price": 16.06901233461242,
+       "interval": "1W"
+      }
+     ],
+     "state": {
+      "visible": true,
+      "frozen": false,
+      "trendline": {
+       "visible": true,
+       "color": "#808080",
+       "linewidth": 2,
+       "linestyle": 2
+      },
+      "interval": "1W"
+     }
+    }
+   },
+   "8mOqp4": {
+    "id": "8mOqp4",
+    "symbol": "FOREXCOM:CNHJPY",
+    "state": {
+     "type": "LineToolTrendBasedFibExtension",
+     "id": "8mOqp4",
+     "points": [
+      {
+       "time_t": 1776805200,
+       "offset": 0,
+       "price": 23.476676450633764,
+       "interval": "1D"
+      },
+      {
+       "time_t": 1777928400,
+       "offset": 0,
+       "price": 22.73394013286859,
+       "interval": "1D"
+      },
+      {
+       "time_t": 1781211600,
+       "offset": 16,
+       "price": 23.731829952587823,
+       "interval": "1D"
+      }
+     ],
+     "state": {
+      "visible": true,
+      "frozen": false,
+      "trendline": {
+       "color": "rgba(49, 121, 245, 0.6242)",
+       "visible": true,
+       "linewidth": 2,
+       "linestyle": 2
+      },
+      "interval": "1D"
+     }
+    }
+   },
+   "HE8uhV": {
+    "id": "HE8uhV",
+    "symbol": "AMEX:SIL",
+    "state": {
+     "type": "LineToolText",
+     "id": "HE8uhV",
+     "points": [
+      {
+       "time_t": 1760635800,
+       "offset": 173,
+       "price": 129.46467471289907,
+       "interval": "240"
+      }
+     ],
+     "state": {
+      "color": "rgba(242, 54, 69, 1)",
+      "backgroundColor": "rgba(41, 98, 255, 0.25)",
+      "text": "SILVER 80",
+      "fontsize": 14,
+      "visible": true,
+      "frozen": false,
+      "interval": "240"
+     }
+    }
+   },
+   "QJnGxR": {
+    "id": "QJnGxR",
+    "symbol": "FX:USDJPY",
+    "state": {
+     "type": "LineToolHorzRay",
+     "id": "QJnGxR",
+     "points": [
+      {
+       "time_t": 349912800,
+       "offset": 0,
+       "price": 203.15,
+       "interval": "1M"
+      }
+     ],
+     "state": {
+      "linecolor": "#2962FF",
+      "textcolor": "#2962FF",
+      "linewidth": 2,
+      "linestyle": 0,
+      "text": "",
+      "fontsize": 12,
+      "visible": true,
+      "frozen": false,
+      "interval": "1M"
+     }
+    }
+   },
+   "ho1k65": {
+    "id": "ho1k65",
+    "symbol": "FX:USDJPY",
+    "state": {
+     "type": "LineToolHeadAndShoulders",
+     "id": "ho1k65",
+     "points": [
+      {
+       "time_t": 896648400,
+       "offset": 0,
+       "price": 146.79,
+       "interval": "1M"
+      },
+      {
+       "time_t": 1091394000,
+       "offset": 0,
+       "price": 98.53589819857129,
+       "interval": "1M"
+      },
+      {
+       "time_t": 1177966800,
+       "offset": 0,
+       "price": 121.98,
+       "interval": "1M"
+      },
+      {
+       "time_t": 1317589200,
+       "offset": 0,
+       "price": 75.56500000000001,
+       "interval": "1M"
+      },
+      {
+       "time_t": 1430427600,
+       "offset": 0,
+       "price": 124.461,
+       "interval": "1M"
+      },
+      {
+       "time_t": 1609452000,
+       "offset": 0,
+       "price": 102.59100000000001,
+       "interval": "1M"
+      },
+      {
+       "time_t": 1717362000,
+       "offset": 0,
+       "price": 160.83499999999998,
+       "interval": "1M"
+      }
+     ],
+     "state": {
+      "color": "#089981",
+      "textcolor": "#ffffff",
+      "backgroundColor": "#089981",
+      "linewidth": 2,
+      "fontsize": 12,
+      "visible": true,
+      "frozen": false,
+      "interval": "1M"
+     }
+    }
+   },
+   "6VPuED": {
+    "id": "6VPuED",
+    "symbol": "BYBIT:ETHUSDT.P",
+    "state": {
+     "type": "LineToolArrow",
+     "id": "6VPuED",
+     "points": [
+      {
+       "time_t": 1697414400,
+       "offset": 0,
+       "price": 1556.93,
+       "interval": "1W"
+      },
+      {
+       "time_t": 1737936000,
+       "offset": 74,
+       "price": 3769.8956312156997,
+       "interval": "1W"
+      }
+     ],
+     "state": {
+      "linecolor": "#2962FF",
+      "textcolor": "#2962FF",
+      "linewidth": 2,
+      "linestyle": 0,
+      "text": "",
+      "fontsize": 14,
+      "extendLeft": false,
+      "extendRight": false,
+      "visible": true,
+      "frozen": false,
+      "interval": "1W"
+     }
+    }
+   },
+   "ExR8Lv": {
+    "id": "ExR8Lv",
+    "symbol": "BINANCE:SOLUSDT",
+    "state": {
+     "type": "LineToolFixedRangeVolumeProfile",
+     "id": "ExR8Lv",
+     "points": [
+      {
+       "time_t": 1710756000,
+       "offset": 0,
+       "price": 211.46177258201533
+      },
+      {
+       "time_t": 1710964800,
+       "offset": 0,
+       "price": 162.45
+      }
+     ],
+     "state": {
+      "visible": true,
+      "frozen": false,
+      "interval": "60"
+     }
+    }
+   }
+  }
+ }
+}

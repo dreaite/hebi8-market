@@ -51,8 +51,8 @@ const STATE_KEYS = [
   "extendRight",
   "visible",
   "frozen",
-  "stopPrice",
-  "targetPrice",
+  "stopLevel",
+  "profitLevel",
   "trendline",
 ];
 
@@ -79,13 +79,15 @@ export function normalizeDrawing(raw: unknown): TvDrawing | null {
   const type = flat.type;
   const symbol = symbolOf(flat.symbol ?? raw.symbol);
   if (typeof type !== "string" || !type.startsWith("LineTool") || !symbol || !Array.isArray(flat.points)) return null;
+  const styles = isObj(flat.state) ? flat.state : {};
+  // the drawing's own interval stands in for a point that does not say
+  const interval = typeof styles.interval === "string" ? styles.interval : undefined;
   const points = flat.points.filter(isObj).map((p) => ({
     time_t: Number(p.time_t),
     price: Number(p.price),
     ...(Number(p.offset) ? { offset: Number(p.offset) } : {}),
-    ...(typeof p.interval === "string" ? { interval: p.interval } : {}),
+    ...(typeof p.interval === "string" ? { interval: p.interval } : interval ? { interval } : {}),
   }));
-  const styles = isObj(flat.state) ? flat.state : {};
   const state = Object.fromEntries(STATE_KEYS.filter((k) => styles[k] !== undefined).map((k) => [k, styles[k]]));
   const id = typeof flat.id === "string" || typeof flat.id === "number" ? String(flat.id) : `h${hash6(type + symbol + JSON.stringify(points))}`;
   return { id, symbol, type, points, state };
@@ -110,8 +112,8 @@ export function parseTvSources(text: string): TvDrawing[] {
   return dedupeDrawings(list.map(normalizeDrawing).filter((d): d is TvDrawing => d !== null));
 }
 
-/** The same drawing fetched under two chart ids counts once. */
-export function dedupeDrawings(list: TvDrawing[]): TvDrawing[] {
+/** A drawing pasted twice counts once. */
+function dedupeDrawings(list: TvDrawing[]): TvDrawing[] {
   const seen = new Set<string>();
   return list.filter((d) => !seen.has(d.id) && seen.add(d.id));
 }
@@ -123,6 +125,37 @@ export interface DrawingContext {
   days: number[];
   /** The exchange's timezone, as the source reported it */
   timeZone: string;
+  /** Trading minutes in a day (`sessionMinutes`), for turning an intraday offset into days */
+  sessionMinutes: number;
+  /** Smallest price step (`tickOf` the cached closes), for a position's levels counted in ticks; null without bars */
+  tick: number | null;
+}
+
+/** Trading minutes per day of the exchanges that close overnight; the rest (crypto, FX, futures, CFDs) trade around the clock. */
+const SESSIONS: [RegExp, number][] = [
+  [/^(NASDAQ|NYSE|AMEX|NYSEARCA|ARCA|BATS|CBOE|OTC|SP|DJ):/, 390],
+  [/^(SSE|SZSE):/, 240],
+  [/^(HKEX|HSI):/, 330],
+  [/^TSE:/, 300],
+  [/^(LSE|XETR|EURONEXT|SIX):/, 510],
+];
+
+/** About how many minutes a day the exchange of a TradingView symbol trades. */
+export function sessionMinutes(symbol: string): number {
+  return SESSIONS.find(([re]) => re.test(symbol))?.[1] ?? 1440;
+}
+
+/**
+ * The price step the closes are quoted in: the fewest decimals that write every one of them (up
+ * to 8). Yahoo's prices are float32 (186.5800018…), so a thousandth of a step is close enough.
+ */
+export function tickOf(closes: number[]): number | null {
+  if (!closes.length) return null;
+  for (let d = 0; d <= 8; d++) {
+    const f = 10 ** d;
+    if (closes.every((c) => Math.abs(c * f - Math.round(c * f)) < 1e-3)) return 1 / f;
+  }
+  return 1e-8;
 }
 
 const UTC_ZONE = /^(Etc\/)?(UTC|GMT|Universal|Zulu)$/i;
@@ -161,9 +194,11 @@ function snap(days: number[], day: number): number {
   return days[floorIndex(days, day)];
 }
 
-/** `1D`, `D`, `2W`, `M`, `60`: the unit and count of one bar; null for intraday. */
-function intervalUnit(interval: string | undefined): { unit: "D" | "W" | "M"; n: number } | null {
-  const m = /^(\d*)([DWM])$/i.exec(interval ?? "D");
+/** `1D`, `D`, `2W`, `M`, `12M`: the unit and count of one bar; `60`, `240`: minutes; null for anything else (seconds, ticks). */
+function intervalUnit(interval: string | undefined): { unit: "D" | "W" | "M" | "min"; n: number } | null {
+  const s = interval ?? "D";
+  if (/^\d+$/.test(s)) return { unit: "min", n: Number(s) };
+  const m = /^(\d*)([DWM])$/i.exec(s);
   return m ? { unit: m[2].toUpperCase() as "D" | "W" | "M", n: Number(m[1] || 1) } : null;
 }
 
@@ -174,10 +209,11 @@ function intervalUnit(interval: string | undefined): { unit: "D" | "W" | "M"; n:
  * TradingView). Months end on the target month's last day when it is shorter, as KLineChart
  * counts them. Null when it cannot be worked out.
  */
-function offsetDay(days: number[], day: number, offset: number, interval: string | undefined): number | null {
+function offsetDay(days: number[], day: number, offset: number, interval: string | undefined, sessionMinutes: number): number | null {
   const step = intervalUnit(interval);
   if (!step) return null;
-  const bars = offset * step.n;
+  // intraday bars, roughly: as many trading days as the minutes fill, a started day counting
+  const bars = step.unit === "min" ? Math.ceil((offset * step.n) / sessionMinutes) : offset * step.n;
   if (step.unit === "W") return day + bars * 7 * DAY;
   if (step.unit === "M") {
     const d = new Date(day * 1000);
@@ -201,7 +237,7 @@ function convertPoint(p: TvPoint, ctx: DrawingContext): Pt | string {
   if (!Number.isFinite(p.time_t) || !Number.isFinite(p.price)) return REASON_POINTS;
   let day = snap(ctx.days, pointDay(p.time_t, ctx.timeZone));
   if (p.offset) {
-    const moved = offsetDay(ctx.days, day, p.offset, p.interval);
+    const moved = offsetDay(ctx.days, day, p.offset, p.interval, ctx.sessionMinutes);
     if (moved === null) return REASON_OFFSET;
     day = moved;
   }
@@ -339,7 +375,7 @@ export type Converted = { ok: true; overlay: OverlaySpec } | { ok: false; reason
 const mid = (a: Pt, b: Pt): Pt => ({ timestamp: (a.timestamp + b.timestamp) / 2, value: (a.value + b.value) / 2 });
 
 /** The app's name and points for a drawing whose points are already converted; a string is why not. */
-function shape(d: TvDrawing, pts: Pt[]): { name: string; points: Pt[] } | string {
+function shape(d: TvDrawing, pts: Pt[], ctx: DrawingContext): { name: string; points: Pt[] } | string {
   const need = (n: number) => (pts.length >= n ? null : `点不够（${d.type} 要 ${n} 个）`);
   switch (d.type) {
     case "LineToolTrendLine": {
@@ -387,10 +423,15 @@ function shape(d: TvDrawing, pts: Pt[]): { name: string; points: Pt[] } | string
     case "LineToolRiskRewardShort": {
       const short = need(1);
       if (short) return short;
-      const target = Number(d.state.targetPrice);
-      const stop = Number(d.state.stopPrice);
-      if (!Number.isFinite(target) || !Number.isFinite(stop)) return "多空持仓没有目标价和止损价";
+      // TradingView keeps the target and the stop as distances in ticks from the entry
+      const profit = Number(d.state.profitLevel);
+      const loss = Number(d.state.stopLevel);
+      if (!Number.isFinite(profit) || !Number.isFinite(loss)) return "多空持仓缺少止盈 / 止损";
+      if (ctx.tick === null) return "没有 K 线，算不出最小变动价位";
       const [entry, edge] = pts;
+      const dir = d.type === "LineToolRiskRewardLong" ? 1 : -1;
+      const target = entry.value + dir * profit * ctx.tick;
+      const stop = entry.value - dir * loss * ctx.tick;
       const end = edge && edge.timestamp > entry.timestamp ? edge.timestamp : entry.timestamp + 20 * DAY * 1000;
       return {
         name: d.type === "LineToolRiskRewardLong" ? "longPosition" : "shortPosition",
@@ -424,7 +465,7 @@ export function convertDrawing(d: TvDrawing, ctx: DrawingContext): Converted {
     if (typeof r === "string") return { ok: false, reason: r };
     pts.push(r);
   }
-  const s = shape(d, pts);
+  const s = shape(d, pts, ctx);
   if (typeof s === "string") return { ok: false, reason: s };
 
   const overlay: OverlaySpec = { name: s.name, points: s.points.map((p) => (p.timestamp % (DAY * 1000) ? toDay(p, ctx.days) : p)) };

@@ -227,6 +227,19 @@ describe("TradingView drawings", () => {
     expect(third.ok && third.symbols[0]).toMatchObject({ imported: 0, already: 3 });
   });
 
+  it("previews a drawing on an expression of symbols as skipped, and imports nothing for it", async () => {
+    const { importTvDrawings, previewTvDrawings } = await import("@/app/tv-actions");
+    const drawings = [{ id: "e1", symbol: "1/FX:USDJPY*TVC:DXY", type: "LineToolHorzLine", points: [{ time_t: t("2026-09-08"), price: 1 }], state: {} }];
+    const preview = await previewTvDrawings({ drawings });
+    expect(preview.ok && preview.symbols).toEqual([
+      { symbol: "1/FX:USDJPY*TVC:DXY", key: null, group: null, expression: true, total: 1, ready: 0, already: 0, skipped: { "表达式标的，没有对应的图表": 1 } },
+    ]);
+    const result = await importTvDrawings({ drawings, add: { "1/FX:USDJPY*TVC:DXY": "宏观" } });
+    expect(result).toEqual({ ok: true, symbols: [], failed: [] });
+    expect(synced.one).toEqual([]);
+    expect(read()).toBe(YAML);
+  });
+
   it("adds equivalent unwatched symbols once, with the first choice, and previews them as one", async () => {
     const { importTvDrawings, previewTvDrawings } = await import("@/app/tv-actions");
     const { readChartState } = await import("@/lib/vault");

@@ -126,6 +126,9 @@ export function keyIdentity(key: string): string | null {
   return symbol ? tvIdentity(symbol) : null;
 }
 
+/** One listing `EXCH:SYM`, not an expression of several (`1/FX:USDJPY*TVC:DXY`, which TradingView charts too). */
+export const isTvSymbol = (symbol: string) => /^[A-Z0-9_]+:[A-Z0-9_.!&-]+$/i.test(symbol);
+
 /** The key a TradingView symbol is added with: always the `tv` source, which has every listing. */
 export const tvKey = (symbol: string) => `tv:${symbol.toUpperCase()}`;
 

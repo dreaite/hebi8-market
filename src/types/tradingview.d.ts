@@ -70,8 +70,8 @@ declare module "@mathieuc/tradingview" {
   const TradingView: {
     Client: new (options?: { token?: string; signature?: string }) => Client;
     searchMarketV3(search: string, filter?: string, offset?: number): Promise<SearchMarketResult[]>;
-    /** Every drawing of the layout's chart, the stored source with its `state` spread over it */
-    getDrawings(layout: string, symbol?: string, credentials?: UserCredentials, chartID?: string): Promise<Record<string, unknown>[]>;
+    /** The token charts-storage requests carry for a layout (`/chart-token`) */
+    getChartToken(layout: string, credentials?: UserCredentials): Promise<string>;
   };
   export default TradingView;
 }

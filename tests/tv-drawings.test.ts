@@ -26,7 +26,9 @@ for (let t = day("2026-08-03"); t <= day("2026-09-30"); t += DAY) {
   const wd = new Date(t * 1000).getUTCDay();
   if (wd !== 0 && wd !== 6 && t !== day("2026-09-07")) DAYS.push(t);
 }
-const US: DrawingContext = { days: DAYS, timeZone: "America/New_York" };
+const US: DrawingContext = { days: DAYS, timeZone: "America/New_York", sessionMinutes: 390, tick: 0.01 };
+/** No bars cached */
+const BARE: DrawingContext = { days: [], timeZone: "UTC", sessionMinutes: 1440, tick: null };
 
 const pt = (iso: string, price: number, extra: Partial<TvPoint> = {}): TvPoint => ({ time_t: open(iso), price, ...extra });
 const drawing = (type: string, points: TvPoint[], state: Record<string, unknown> = {}, id = "d1"): TvDrawing => ({ id, symbol: "NASDAQ:NVDA", type, points, state });
@@ -155,8 +157,8 @@ describe("convertDrawing: tools", () => {
     expect(r.ok && r.overlay).toMatchObject({ name: "curve", points: [{ value: 100 }, { value: 100 }, { timestamp: ms("2026-09-11"), value: 120 }] });
   });
 
-  it("takes a position's target and stop prices, and skips one without them", () => {
-    const long = convertDrawing(drawing("LineToolRiskRewardLong", [pt("2026-09-01", 100), pt("2026-09-15", 100)], { targetPrice: 120, stopPrice: 90 }), US);
+  it("puts a position's target and stop, kept in ticks, at prices; without bars there is no tick", () => {
+    const long = convertDrawing(drawing("LineToolRiskRewardLong", [pt("2026-09-01", 100), pt("2026-09-15", 100)], { profitLevel: 2000, stopLevel: 1000 }), US);
     expect(long.ok && long.overlay).toEqual({
       name: "longPosition",
       points: [
@@ -165,9 +167,14 @@ describe("convertDrawing: tools", () => {
         { timestamp: ms("2026-09-15"), value: 90 },
       ],
     });
-    const short = convertDrawing(drawing("LineToolRiskRewardShort", [pt("2026-09-01", 100)], { targetPrice: 80, stopPrice: 110 }), US);
-    expect(short.ok && short.overlay.points.map((p) => p.timestamp)).toEqual([ms("2026-09-01"), ms("2026-09-21"), ms("2026-09-21")]);
-    expect(convertDrawing(drawing("LineToolRiskRewardLong", [pt("2026-09-01", 100)], { stopLevel: 100, profitLevel: 200 }), US)).toEqual({ ok: false, reason: "多空持仓没有目标价和止损价" });
+    const short = convertDrawing(drawing("LineToolRiskRewardShort", [pt("2026-09-01", 100)], { profitLevel: 2000, stopLevel: 1000 }), US);
+    expect(short.ok && short.overlay.points).toEqual([
+      { timestamp: ms("2026-09-01"), value: 100 },
+      { timestamp: ms("2026-09-21"), value: 80 },
+      { timestamp: ms("2026-09-21"), value: 110 },
+    ]);
+    expect(convertDrawing(drawing("LineToolRiskRewardLong", [pt("2026-09-01", 100)], {}), US)).toEqual({ ok: false, reason: "多空持仓缺少止盈 / 止损" });
+    expect(convertDrawing(drawing("LineToolRiskRewardLong", [pt("2026-09-01", 100)], { stopLevel: 100, profitLevel: 200 }), BARE)).toEqual({ ok: false, reason: "没有 K 线，算不出最小变动价位" });
   });
 
   it("keeps a path's points, minus repeats, and needs two", () => {
@@ -209,21 +216,29 @@ describe("convertDrawing: points", () => {
   });
 
   it("counts calendar days from an anchor past the cached bars (the cache can be behind TradingView)", () => {
-    const utc: DrawingContext = { days: DAYS, timeZone: "UTC" };
+    const utc: DrawingContext = { ...US, timeZone: "UTC" };
     const r = convertDrawing(drawing("LineToolTrendLine", [{ time_t: day("2026-09-01"), price: 1 }, { time_t: day("2026-10-08"), price: 2, offset: 2, interval: "1D" }]), utc);
     expect(r.ok && r.overlay.points[1].timestamp).toBe(ms("2026-10-10"));
   });
 
   it("ends a month offset on the target month's last day, as KLineChart does", () => {
-    const r = convertDrawing(drawing("LineToolTrendLine", [{ time_t: day("2026-01-02"), price: 1 }, { time_t: day("2026-01-31"), price: 2, offset: 1, interval: "1M" }]), { days: [], timeZone: "UTC" });
+    const r = convertDrawing(drawing("LineToolTrendLine", [{ time_t: day("2026-01-02"), price: 1 }, { time_t: day("2026-01-31"), price: 2, offset: 1, interval: "1M" }]), BARE);
     expect(r.ok && r.overlay.points[1].timestamp).toBe(ms("2026-02-28"));
   });
 
-  it("counts weekly and monthly offsets in weeks and months, and gives up on intraday ones", () => {
+  it("counts weekly, monthly and yearly offsets in weeks and months", () => {
     expect(line([pt("2026-09-01", 1), pt("2026-08-31", 2, { offset: 2, interval: "1W" })])).toEqual(["2026-09-01", "2026-09-14"]);
     expect(line([pt("2026-09-01", 1), pt("2026-09-01", 2, { offset: 2, interval: "M" })])).toEqual(["2026-09-01", "2026-11-01"]);
-    expect(line([pt("2026-09-01", 1), pt("2026-09-01", 2, { offset: 4, interval: "60" })])).toBe("点在最后一根 K 线右边，换算不了");
-    expect(line([pt("2026-09-01", 1), pt("2026-09-01", 2, { offset: 4 })], { days: [], timeZone: "UTC" })).toBe("点在最后一根 K 线右边，换算不了");
+    expect(line([pt("2026-09-01", 1), pt("2026-09-01", 2, { offset: 1, interval: "12M" })])).toEqual(["2026-09-01", "2027-09-01"]);
+  });
+
+  it("turns intraday offsets into trading days, a started day counting, and gives up on what it cannot count", () => {
+    // 4 × 60 min on a 390-minute day → 1 day; 7 × 60 → 2 days (Sep 3 → Sep 4, Sep 8 past Labor Day)
+    expect(line([pt("2026-09-01", 1), pt("2026-09-03", 2, { offset: 4, interval: "60" })])).toEqual(["2026-09-01", "2026-09-04"]);
+    expect(line([pt("2026-09-01", 1), pt("2026-09-03", 2, { offset: 7, interval: "60" })])).toEqual(["2026-09-01", "2026-09-08"]);
+    expect(line([pt("2026-09-01", 1), pt("2026-09-03", 2, { offset: 7, interval: "60" })], { ...US, sessionMinutes: 1440 })).toEqual(["2026-09-01", "2026-09-04"]);
+    expect(line([pt("2026-09-01", 1), pt("2026-09-01", 2, { offset: 4, interval: "1S" })])).toBe("点在最后一根 K 线右边，换算不了");
+    expect(line([pt("2026-09-01", 1), pt("2026-09-01", 2, { offset: 4 })], BARE)).toBe("点在最后一根 K 线右边，换算不了");
   });
 });
 

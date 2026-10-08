@@ -629,10 +629,16 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 **导入画线**：TradingView 没有画线导出，两种来源：
 
-1. **从布局取**：布局链接或 ID（`https://www.tradingview.com/chart/<ID>/`）+ 两个 cookie `sessionid`、`sessionid_sign`。服务端（`src/lib/tv-layout.ts`）先取用户 id：不用库的 `getUser`——它读首页，页面上没有登录用户时（cookie 不对，或者首页对这台服务器回 403：devNuc 上就是这样，CloudFront 挡了 `/`）会无止境地递归请求自己；改成自己按顺序请求 `https://www.tradingview.com/` 和 `/markets/` 各一次（带 cookie 和浏览器 UA，15 秒超时），页面里有 `auth_token` 或 `"is_authenticated":true` 才算登录，从里面读 `"id"`。然后对每个 chart id 调 `getDrawings(layout, "", { id, session, signature }, chartId)`（库里每次先 `getChartToken`，再请求 `charts-storage.tradingview.com/charts-storage/get/layout/<ID>/sources?chart_id=&jwt=&symbol=`）。chart id：`_shared` 是开了「同步画线」的那部分；多图布局里每个图表自己的画线在各自的 chart id 下，库没有列出它们的办法，所以按 `1`…`8` 依次试，取不到的跳过（`_shared` 取不到就报错：布局不对或这个账号打不开）。页面列出每个 chart id 取到几条，同一条画线在几个 chart id 下出现只算一次。**cookie 只在这一次请求里用**：不存、不写日志、不进错误信息（错误只说「cookie 不对或已过期」「布局不存在或打不开」「连不上」），请求发出后浏览器里的输入框也清空；页面上写明 cookie 只从服务器发给 tradingview.com。
+1. **从布局取**：布局链接或 ID（`https://www.tradingview.com/chart/<ID>/`）+ 两个 cookie `sessionid`、`sessionid_sign`。服务端（`src/lib/tv-layout.ts`）照 TradingView 自己图表页的做法取（`loadLineToolsAndGroups` / `getStorageTarget`），库的 `getDrawings` 已经不能用：
+   - **账号 id**：只请求一次 `https://www.tradingview.com/markets/`（带 cookie 和浏览器 UA，`redirect: "manual"`，15 秒超时；不是 200 就报「连不上」）。不用首页：登录后它 302 到账号语言的站点（`cn.tradingview.com`），跨域跳转时 fetch 丢掉 cookie，跳过去就是未登录；也不用库的 `getUser`，它读首页，页面没有登录用户时无止境地递归请求自己。页面里有 `var is_authenticated = true` 才算登录，id 取 `var user = {"id":<数字>`（页面里别处还有经纪商的 `"user":{"username":…}`，不能拿宽的正则去找）。
+   - **token**：库的 `getChartToken(layout, { id, session, signature })`（`/chart-token` 301 到 `/chart-token/`，同域，axios 跟随时 cookie 不丢）。
+   - **有哪些画线**：charts-storage 的每个请求都要带 cookie（没有就 403 `Header validation failed`）和 `layout_id=<ID>`、`jwt=<token>`。先取两份尺寸清单：布局的 `GET charts-storage/layout/<ID>/sizes` 和全局同步的 `GET charts-storage/user/sizes`，`payload.charts` 按 chart id（`_shared` 是开了「同步画线」的那部分，多图布局里每个图表另有自己的 id；全局同步的是 `UserSync`）列出有画线的标的和条数，不用猜 chart id。
+   - **取画线**：`sources` 不带 `symbol` 时 `payload` 是空的，所以按清单逐个标的取（同时最多 4 个请求）：布局的 `GET charts-storage/get/layout/<ID>/sources?chart_id=&layout_id=&jwt=&symbol=`，全局同步的 `GET charts-storage/get/user/sources?layout_id=&jwt=&symbol=`（不带 chart_id）。清单里的表达式标的（`1/FX:USDJPY*TVC:DXY`）照样取，预览里跳过（计入报告）。同一条画线在几处出现只算一次。
+   - 页面按来源列出取到几条：「布局（同步画线 _shared）215 条，布局图表 2 …，全局同步 54 条」，和清单里的 `countSourcesChart` 对不上时注明 TradingView 记的条数。
+   - **cookie 只在这一次请求里用**：不存、不写日志、不进错误信息（错误只说「cookie 不对或已过期」「布局不存在或打不开」「连不上 / HTTP 状态码」），请求发出后浏览器里的输入框也清空；页面上写明 cookie 只从服务器发给 tradingview.com。
 2. **粘贴 JSON**：开发者工具 Network 面板里 `sources` 请求的响应（`{ payload: { sources: {…} } }`），或者其中的 `sources` 对象、画线数组、单条画线。在浏览器里解析成精简的画线（`normalizeDrawing`：只留 id、symbol、type、points 和用得到的样式字段），原文不上传。Server Action 请求体上限在 `next.config.ts` 调到 10mb（`experimental.serverActions.bodySizeLimit`，默认 1MB：一条 3 万个点的画笔就超了），确认导入时画线要整批发回服务端；请求被拒绝（超限、服务不在）时面板上显示错误，不抛给 React。
 
-存储格式两种都认：`{ id, symbol, state: { type, points, state: {样式} } }`（接口原样）和库 `getDrawings` 返回的「外层 `state` 摊平」的样子。`symbol` 是 `EXCH:SYM`，也可能是 `={"symbol":"NASDAQ:NVDA","adjustment":"splits"}`。点是 `{ time_t（秒）, price, offset, interval? }`。
+存储格式（接口原样，粘贴的也是它）：`payload.sources[id] = { id, symbol, ownerSource, serverUpdateTime, state: { type, id, points, zorder, linkKey, state: {样式…, interval} } }`，类型和点在外层 `state`，样式在 `state.state`；「外层 `state` 摊平」的样子（旧库 `getDrawings` 返回的）也认。`symbol` 是 `EXCH:SYM`、表达式，或者 `={"symbol":"NASDAQ:NVDA","adjustment":"splits"}`。点是 `{ time_t（秒）, offset, price, interval }`，点上没写 `interval` 的取画线的 `state.state.interval`。真实数据（一个布局 215 条 + 全局同步 54 条）的周期：1W、240、1D、1M、60、15、12M。
 
 **预览**（`previewTvDrawings`）按 `drawing.symbol` 分组，用上面的 identity 对到自选里的标的；每个标的列出可导入几条、以前导入过几条、跳过几条及原因（按原因计数，没有对应工具的按 TradingView 类型名计数）。对不上的标的可以选「加入「某组」」（写成 `tv:EXCH:SYM`，组可以是现有的或新建「TradingView」）或跳过；同一批里等价的几个代码（`NASDAQ:NVDA` 和 `BATS:NVDA`）只有第一个能选，后面的标「同 NASDAQ:NVDA」，跟着它走，加入时也只加一次、画线都进第一个的 key。**确认**（`importTvDrawings`）：要加入的标的先 `syncOne(key, true)`（顺便校验，失败的列出来、不写），写进 yaml，再逐个标的转换，**追加**到 `charts/<fileKey>.json` 的 `overlays` 末尾，`compare` 和已有画线不动，每条带上 `tvId`（§1.3）。
 
@@ -650,7 +656,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 | `LineToolGannComplex`、`LineToolGannSquare` / `LineToolGannFan` | `gannBox` / `gannFan` |
 | `LineTool5PointsPattern` / `ABCD` / `TrianglePattern` / `HeadAndShoulders` | `xabcd` / `abcd` / `trianglePattern` / `headShoulders` |
 | `LineToolElliottImpulse` / `Correction` / `Triangle` / `DoubleCombo` | `elliottImpulse` / `elliottCorrection` / `elliottTriangle` / `elliottDoubleCombo` |
-| `LineToolRiskRewardLong` / `Short` | `longPosition` / `shortPosition`：入场点 + 右边缘（第二个点，没有就 20 天），目标 / 止损取 `state.targetPrice / stopPrice`；只有跳数（`profitLevel / stopLevel`）的跳过，换算要最小变动价位 |
+| `LineToolRiskRewardLong` / `Short` | `longPosition` / `shortPosition`：入场点 + 右边缘（第二个点，没有就 20 天）。TradingView 只存跳数：止盈 `state.profitLevel`、止损 `state.stopLevel`（没有价格字段；`amountTarget / amountStop` 是金额），价格 = 入场价 ± 跳数 × 最小变动价位。最小变动价位用这个标的缓存里最近 50 根收盘价算（能写下全部收盘价的最少小数位，容差千分之一步，Yahoo 的 float32 价格也行），没有 K 线就跳过 |
 | `LineToolPriceRange` / `DateRange` / `DateAndPriceRange` | `priceRange` / `dateRange` / `datePriceRange` |
 | `LineToolBrush`、`LineToolHighlighter` / `Path` / `Polyline` | `brush` / `path` / `polyline`（全部点，去掉相邻重复，至少两个） |
 | `LineToolRectangle` / `Circle` / `Triangle` / `Arc` | `rect` / `circle` / `triangle` / `arc` |
@@ -661,11 +667,11 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 | `LineToolPriceLabel` / `PriceNote` | `priceLabel`（第一个点） |
 | `LineToolFlagMark` / `Arrow`、`ArrowMarker` / `ArrowMarkUp` / `ArrowMarkDown` | `flag` / `arrow` / `arrowMarkUp` / `arrowMarkDown` |
 
-其余（成交量分布、锚定 VWAP、正弦线、图标、表格、`TextAbsolute` 这类钉在屏幕上的、`ElliottTripleCombo`、`Cypher`、`ThreeDrivers`、Schiff / Inside 音叉、`GannFixed`……）跳过，按类型计数报告。应用里只有「价格通道」`priceChannelLine` 在 TradingView 没有对应。点数不够的、文字为空的文字类跳过，各有原因。
+其余（成交量分布、锚定 VWAP、正弦线、图标、表格、`TextAbsolute` 这类钉在屏幕上的、`ElliottTripleCombo`、`Cypher`、`ThreeDrivers`、Schiff / Inside 音叉、`GannFixed`……）跳过，按类型计数报告。应用里只有「价格通道」`priceChannelLine` 在 TradingView 没有对应。画在表达式标的（`1/FX:USDJPY*TVC:DXY`，`isTvSymbol` 为假）上的画线没有对应的图表，预览里标「表达式，跳过」，也不能选加入自选。点数不够的、文字为空的文字类跳过，各有原因。
 
 **点**：`time_t` 是这个点所在 K 线的时间（画线时的周期），日线是开盘时刻：美股纽约 09:30，亚洲按当地开盘，外汇 / 期货 / TVC 是前一晚 17:00 / 18:00 纽约，加密是 UTC 0 点；日内周期上画的点是那根日内 K 线的时间。换成本应用的点（`pointDay`）：取交易所时区的当地日期，时区不是 UTC 且当地时间 ≥ 17:00 时算下一个交易日（晚上开盘的那一节）。不能直接用 `tradingDay`：它的 +12h 只适合开盘时刻，会把美股下午的点推到第二天。时区取缓存里这个标的的 `timezone`（数据源报的），没有就当 UTC。然后对齐到库里的交易日（`bars.t`）：落在节假日、周末的点归到前一根，和 KLineChart 的定位一致（`timestampToDataIndex` 在数据范围内二分取不大于它的那根，范围外按周期推算），范围外的日期原样保留。最后存成毫秒时间戳，所以导入的线和手画的一样跨周期。
 
-**`offset`**（点在当时最后一根 K 线右边多少根）：`interval` 是日线或没写（当日线）时，从 `time_t` 那根起按库里的交易日数 `offset` 根，超出最后一根的部分每根算一个日历日（图表在右边空白处就是这样排的）；`time_t` 本身就在缓存最后一根之后时（缓存比 TradingView 旧），从它起直接按日历日加；周线、月线按周、月加，月份加完日子超过目标月末的落在月末（2026-01-31 + 1 个月 = 02-28，和 KLineChart 推算月线的规则一样）；日内周期换算不了，整条跳过并计入报告。
+**`offset`**（点在当时最后一根 K 线右边多少根）：`interval` 是日线或没写（当日线）时，从 `time_t` 那根起按库里的交易日数 `offset` 根，超出最后一根的部分每根算一个日历日（图表在右边空白处就是这样排的）；`time_t` 本身就在缓存最后一根之后时（缓存比 TradingView 旧），从它起直接按日历日加；周线、月线按周、月加（`12M` 是 12 个月），月份加完日子超过目标月末的落在月末（2026-01-31 + 1 个月 = 02-28，和 KLineChart 推算月线的规则一样）。日内周期（`interval` 是分钟数：`15`、`60`、`240`）**近似**换算成交易日：`ceil(offset × 分钟 / 每天交易分钟)`，再按日线的规则数；每天交易分钟按 TradingView 交易所前缀给（`sessionMinutes`）：美股和美股指数 390，沪深 240，港股 330，东京 300，伦敦 / 法兰克福等欧洲 510，其余（加密、外汇、期货、CFD、TVC）按 24 小时 1440。不计午休、盘前盘后和节假日，所以离最后一根越远误差越大，点可能差一两天。秒、tick 周期换算不了，整条跳过并计入报告。真实数据里 269 条有 49 条是日内周期带 offset 的。
 
 **样式**：颜色取 `linecolor`（文字取 `color`，注释和标签取 `backgroundColor` 等，斐波那契取 `trendline.color`），`#RRGGBB`、`#RGB`、`#RRGGBBAA`、`rgba()` 都转成 `#rrggbb`（透明度丢掉，应用只有一个颜色）；`linewidth` 取整到 1–4；`linestyle` 0 实线、1 / 4 点线、2 / 3 虚线；文字类加 `styles.text.size = fontsize`。用 `drawingStyles()` 生成，和浮动工具条改出来的完全一样。没有颜色就不写 `styles`（默认样式）。`state.visible === false` → `hidden`，`state.frozen` → `lock`。
 
@@ -793,7 +799,7 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 - `GET /api/help` → 反馈页签和通知设置抽屉要的登录状态与反馈设置（§5.8，只读本地）。
 - `/api/github/device`（POST 开始 device flow / DELETE 取消）、`/api/github/device/poll`（POST）、`/api/github/logout`（POST）、`/api/github/issues`（GET 最近反馈 / POST 提交）：§5.8，唯一会碰 GitHub 网络的接口，都是打开反馈页签或用户动作触发。
 
-**Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench?, alias? })`、`loadSymbol(key)`（只拉缓存，§2.3）、`removeSymbol(key)`、`moveSymbol(key, group, index?)`（index 不算被移动的那个，省略 = 末尾）、`moveGroup(name, index)`、`addGroup(name)`、`renameGroup(name, next)`、`deleteGroup(name)`（标的并入相邻组）、`renameSymbol(key, name)`、`setBench(key, bench | null)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveAlert({ id?, key | null, cond, value? | when + tf?, trigger, label?, notify? })` / `deleteAlert(id)` / `setAlertEnabled(id, enabled)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`、`setUsageLimits({ visitors, limited })`（owner，§1.7）；`src/app/tv-actions.ts` 里的 `importTvList({ text, fallback, mode })`、`previewTvDrawings(来源)`、`importTvDrawings({ drawings, add })`（§5.5，`previewTvDrawings` 是唯一带用户 TradingView cookie 访问外网的地方）。Server Action 在客户端是**串行派发**的，自动保存靠去抖合并，不并行发。
+**Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench?, alias? })`、`loadSymbol(key)`（只拉缓存，§2.3）、`removeSymbol(key)`、`moveSymbol(key, group, index?)`（index 不算被移动的那个，省略 = 末尾）、`moveGroup(name, index)`、`addGroup(name)`、`renameGroup(name, next)`、`deleteGroup(name)`（标的并入相邻组）、`renameSymbol(key, name)`、`setBench(key, bench | null)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveAlert({ id?, key | null, cond, value? | when + tf?, trigger, label?, notify? })` / `deleteAlert(id)` / `setAlertEnabled(id, enabled)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`、`setUsageLimits({ visitors, limited })`（owner，§1.7）；`src/app/tv-actions.ts` 里的 `importTvList({ text, fallback, mode })`、`previewTvDrawings(来源)`、`importTvDrawings({ drawings, add })`（§5.5，`previewTvDrawings` 是唯一带用户 TradingView cookie 访问外网的地方：`/markets/`、`/chart-token`、charts-storage）。Server Action 在客户端是**串行派发**的，自动保存靠去抖合并，不并行发。
 
 所有写入校验输入；文件路径只能落在 vault 内（fileKey 已保证无 `/`、`..`）；写入原子。
 
