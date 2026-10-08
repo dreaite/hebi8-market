@@ -1,0 +1,283 @@
+import { describe, expect, it } from "vitest";
+import { DAY } from "@/lib/time";
+import {
+  TV_TOOLS,
+  convertDrawing,
+  convertDrawings,
+  hexColor,
+  layoutId,
+  normalizeDrawing,
+  parseTvSources,
+  pointDay,
+  type DrawingContext,
+  type TvDrawing,
+  type TvPoint,
+} from "@/lib/tv-drawings";
+
+const day = (iso: string) => Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 1000;
+/** US stocks: TradingView stamps the daily bar at the open, 09:30 New York (13:30 UTC in summer) */
+const open = (iso: string) => day(iso) + 13.5 * 3600;
+const ms = (iso: string) => day(iso) * 1000;
+
+/** Weekdays of Aug–Sep 2026 without Labor Day (Sep 7), as the bars table has them. */
+const DAYS: number[] = [];
+for (let t = day("2026-08-03"); t <= day("2026-09-30"); t += DAY) {
+  const wd = new Date(t * 1000).getUTCDay();
+  if (wd !== 0 && wd !== 6 && t !== day("2026-09-07")) DAYS.push(t);
+}
+const US: DrawingContext = { days: DAYS, timeZone: "America/New_York" };
+
+const pt = (iso: string, price: number, extra: Partial<TvPoint> = {}): TvPoint => ({ time_t: open(iso), price, ...extra });
+const drawing = (type: string, points: TvPoint[], state: Record<string, unknown> = {}, id = "d1"): TvDrawing => ({ id, symbol: "NASDAQ:NVDA", type, points, state });
+
+describe("pointDay", () => {
+  it("puts a daily bar's stamp on its trading day, like the sources store bars", () => {
+    expect(pointDay(open("2026-09-01"), "America/New_York")).toBe(day("2026-09-01"));
+    // Tokyo opens 09:00 JST = 00:00 UTC
+    expect(pointDay(day("2026-09-01"), "Asia/Tokyo")).toBe(day("2026-09-01"));
+    // FX: Monday's session starts Sunday 17:00 New York
+    expect(pointDay(day("2026-08-30") + 21 * 3600, "America/New_York")).toBe(day("2026-08-31"));
+    // crypto: UTC days
+    expect(pointDay(day("2026-09-01"), "Etc/UTC")).toBe(day("2026-09-01"));
+  });
+
+  it("keeps an intraday point on its own day", () => {
+    // 15:59 New York; the bars' +12h rule would make it the next day
+    expect(pointDay(day("2026-09-01") + 19.98 * 3600, "America/New_York")).toBe(day("2026-09-01"));
+    expect(pointDay(day("2026-09-01") + 23.5 * 3600, "UTC")).toBe(day("2026-09-01"));
+    expect(pointDay(day("2026-09-01") + 6 * 3600, "Asia/Hong_Kong")).toBe(day("2026-09-01"));
+  });
+});
+
+describe("normalizeDrawing / parseTvSources", () => {
+  const stored = {
+    id: "abc123",
+    symbol: "NASDAQ:NVDA",
+    ownerSource: "_seriesId",
+    serverUpdateTime: 1767000000,
+    state: {
+      type: "LineToolHorzLine",
+      id: "abc123",
+      points: [{ time_t: open("2026-09-01"), offset: 0, price: 120.5 }],
+      zorder: -5000,
+      state: { linecolor: "rgba(242, 54, 69, 1)", linewidth: 2, linestyle: 2, intervalsVisibilities: { days: true }, showPrice: true },
+    },
+  };
+  const expected: TvDrawing = {
+    id: "abc123",
+    symbol: "NASDAQ:NVDA",
+    type: "LineToolHorzLine",
+    points: [{ time_t: open("2026-09-01"), price: 120.5 }],
+    state: { linecolor: "rgba(242, 54, 69, 1)", linewidth: 2, linestyle: 2 },
+  };
+
+  it("reads a drawing as stored and as the library returns it", () => {
+    expect(normalizeDrawing(stored)).toEqual(expected);
+    // getDrawings spreads the stored `state` over the drawing
+    expect(normalizeDrawing({ ...stored, ...stored.state })).toEqual(expected);
+  });
+
+  it("reads a symbol written with options, and gives up on what is not a drawing", () => {
+    expect(normalizeDrawing({ ...stored, symbol: '={"adjustment":"splits","symbol":"NASDAQ:NVDA"}' })?.symbol).toBe("NASDAQ:NVDA");
+    expect(normalizeDrawing({ id: "x", symbol: "A:B", state: { type: "study_RSI", points: [] } })).toBeNull();
+    expect(normalizeDrawing({ id: "x", state: { type: "LineToolHorzLine", points: [] } })).toBeNull();
+    expect(normalizeDrawing("text")).toBeNull();
+  });
+
+  it("takes the response, its sources, a list or one drawing", () => {
+    const second = { ...stored, id: "def456", state: { ...stored.state, id: "def456" } };
+    const sources = { abc123: stored, def456: second };
+    const ids = (text: string) => parseTvSources(text).map((d) => d.id);
+    expect(ids(JSON.stringify({ success: true, payload: { sources } }))).toEqual(["abc123", "def456"]);
+    expect(ids(JSON.stringify({ sources }))).toEqual(["abc123", "def456"]);
+    expect(ids(JSON.stringify(sources))).toEqual(["abc123", "def456"]);
+    expect(ids(JSON.stringify([stored, second, stored]))).toEqual(["abc123", "def456"]);
+    expect(ids(JSON.stringify(stored))).toEqual(["abc123"]);
+    expect(() => parseTvSources("{ sources")).toThrow("不是 JSON");
+  });
+});
+
+describe("convertDrawing: tools", () => {
+  const three = [pt("2026-09-01", 100), pt("2026-09-08", 110), pt("2026-09-15", 105)];
+  const many = (n: number) => Array.from({ length: n }, (_, i) => pt(new Date((DAYS[i * 2] ?? DAYS[0]) * 1000).toISOString().slice(0, 10), 100 + i));
+
+  it("maps every TradingView tool in the table to the app's tool with its points", () => {
+    for (const [type, map] of Object.entries(TV_TOOLS)) {
+      const n = map.points === "many" ? 4 : map.points;
+      const state = map.kind === "text" ? { text: "备注", color: "#2962FF" } : { linecolor: "#2962FF" };
+      const r = convertDrawing(drawing(type, many(n), state), US);
+      expect(r.ok, type).toBe(true);
+      if (!r.ok) continue;
+      expect(r.overlay.name, type).toBe(map.name);
+      expect(r.overlay.points.length, type).toBe(n);
+    }
+  });
+
+  it("covers the app's tools: everything in the toolbar but the price channel has a TradingView counterpart", async () => {
+    const { DRAW_TOOLS } = await import("@/components/chart-types");
+    const mapped = new Set([...Object.values(TV_TOOLS).map((m) => m.name), "segment", "straightLine", "rayLine", "horizontalRayLine", "ellipse", "curve", "longPosition", "shortPosition"]);
+    expect(DRAW_TOOLS.map((t) => t.name).filter((n) => !mapped.has(n))).toEqual(["priceChannelLine"]);
+  });
+
+  it("turns a trend line into a segment, ray or extended line by its extend flags", () => {
+    const two = three.slice(0, 2);
+    const at = (state: Record<string, unknown>) => {
+      const r = convertDrawing(drawing("LineToolTrendLine", two, state), US);
+      return r.ok ? [r.overlay.name, r.overlay.points.map((p) => p.value)] : r.reason;
+    };
+    expect(at({})).toEqual(["segment", [100, 110]]);
+    expect(at({ extendRight: true })).toEqual(["rayLine", [100, 110]]);
+    expect(at({ extendLeft: true })).toEqual(["rayLine", [110, 100]]);
+    expect(at({ extendLeft: true, extendRight: true })).toEqual(["straightLine", [100, 110]]);
+  });
+
+  it("gives a horizontal ray a second point to the right", () => {
+    const r = convertDrawing(drawing("LineToolHorzRay", [pt("2026-09-01", 100)]), US);
+    expect(r.ok && r.overlay).toMatchObject({ name: "horizontalRayLine", points: [{ timestamp: ms("2026-09-01"), value: 100 }, { timestamp: ms("2026-12-10"), value: 100 }] });
+  });
+
+  it("draws an ellipse from two corners, or from one axis and a point on the other", () => {
+    const corners = convertDrawing(drawing("LineToolEllipse", three.slice(0, 2)), US);
+    expect(corners.ok && corners.overlay.points).toEqual([
+      { timestamp: ms("2026-09-01"), value: 100 },
+      { timestamp: ms("2026-09-08"), value: 110 },
+    ]);
+    const axis = convertDrawing(drawing("LineToolEllipse", [pt("2026-09-01", 100), pt("2026-09-15", 100), pt("2026-09-08", 120)]), US);
+    expect(axis.ok && axis.overlay.points).toEqual([
+      { timestamp: ms("2026-09-01"), value: 120 },
+      { timestamp: ms("2026-09-15"), value: 80 },
+    ]);
+  });
+
+  it("puts a curve's third point halfway between its control point and the chord", () => {
+    const r = convertDrawing(drawing("LineToolBezierQuadro", [pt("2026-09-01", 100), pt("2026-09-21", 100), pt("2026-09-11", 140)]), US);
+    expect(r.ok && r.overlay).toMatchObject({ name: "curve", points: [{ value: 100 }, { value: 100 }, { timestamp: ms("2026-09-11"), value: 120 }] });
+  });
+
+  it("takes a position's target and stop prices, and skips one without them", () => {
+    const long = convertDrawing(drawing("LineToolRiskRewardLong", [pt("2026-09-01", 100), pt("2026-09-15", 100)], { targetPrice: 120, stopPrice: 90 }), US);
+    expect(long.ok && long.overlay).toEqual({
+      name: "longPosition",
+      points: [
+        { timestamp: ms("2026-09-01"), value: 100 },
+        { timestamp: ms("2026-09-15"), value: 120 },
+        { timestamp: ms("2026-09-15"), value: 90 },
+      ],
+    });
+    const short = convertDrawing(drawing("LineToolRiskRewardShort", [pt("2026-09-01", 100)], { targetPrice: 80, stopPrice: 110 }), US);
+    expect(short.ok && short.overlay.points.map((p) => p.timestamp)).toEqual([ms("2026-09-01"), ms("2026-09-21"), ms("2026-09-21")]);
+    expect(convertDrawing(drawing("LineToolRiskRewardLong", [pt("2026-09-01", 100)], { stopLevel: 100, profitLevel: 200 }), US)).toEqual({ ok: false, reason: "多空持仓没有目标价和止损价" });
+  });
+
+  it("keeps a path's points, minus repeats, and needs two", () => {
+    const r = convertDrawing(drawing("LineToolPath", [pt("2026-09-01", 1), pt("2026-09-01", 1), pt("2026-09-02", 2)]), US);
+    expect(r.ok && r.overlay.points).toEqual([
+      { timestamp: ms("2026-09-01"), value: 1 },
+      { timestamp: ms("2026-09-02"), value: 2 },
+    ]);
+    expect(convertDrawing(drawing("LineToolPolyline", [pt("2026-09-01", 1)]), US)).toEqual({ ok: false, reason: "点不够" });
+  });
+
+  it("skips tools the app does not have, too few points and empty text", () => {
+    expect(convertDrawing(drawing("LineToolFixedRangeVolumeProfile", three.slice(0, 2)), US)).toEqual({ ok: false, reason: "没有对应的工具：LineToolFixedRangeVolumeProfile" });
+    expect(convertDrawing(drawing("LineToolParallelChannel", three.slice(0, 2)), US)).toEqual({ ok: false, reason: "点不够（LineToolParallelChannel 要 3 个）" });
+    expect(convertDrawing(drawing("LineToolText", [pt("2026-09-01", 1)], { text: "  " }), US)).toEqual({ ok: false, reason: "文字为空" });
+    expect(convertDrawing(drawing("LineToolHorzLine", [{ time_t: Number.NaN, price: 1 }]), US)).toEqual({ ok: false, reason: "点的数据不全" });
+  });
+});
+
+describe("convertDrawing: points", () => {
+  const line = (points: TvPoint[], ctx = US) => {
+    const r = convertDrawing(drawing("LineToolTrendLine", points), ctx);
+    return r.ok ? r.overlay.points.map((p) => new Date(p.timestamp).toISOString().slice(0, 10)) : r.reason;
+  };
+
+  it("lands every point on its bar's UTC midnight, a holiday on the bar before", () => {
+    expect(line([pt("2026-09-01", 1), { time_t: day("2026-09-03") + 19 * 3600, price: 2 }])).toEqual(["2026-09-01", "2026-09-03"]);
+    expect(line([pt("2026-09-07", 1), pt("2026-09-05", 2)])).toEqual(["2026-09-04", "2026-09-04"]);
+    // outside the history the day stays as it is
+    expect(line([pt("2026-07-01", 1), pt("2026-10-05", 2)])).toEqual(["2026-07-01", "2026-10-05"]);
+  });
+
+  it("counts an offset in trading bars, then calendar days past the last bar", () => {
+    // 2026-09-03 + 3 bars: Fri 4, (Labor Day) Tue 8, Wed 9
+    expect(line([pt("2026-09-01", 1), pt("2026-09-03", 2, { offset: 3 })])).toEqual(["2026-09-01", "2026-09-09"]);
+    // the last bar is Sep 30; 5 bars after Sep 28 are 2 bars, then 3 days
+    expect(line([pt("2026-09-01", 1), pt("2026-09-28", 2, { offset: 5 })])).toEqual(["2026-09-01", "2026-10-03"]);
+    expect(line([pt("2026-09-01", 1), pt("2026-09-28", 2, { offset: 2, interval: "1D" })])).toEqual(["2026-09-01", "2026-09-30"]);
+  });
+
+  it("counts weekly and monthly offsets in weeks and months, and gives up on intraday ones", () => {
+    expect(line([pt("2026-09-01", 1), pt("2026-08-31", 2, { offset: 2, interval: "1W" })])).toEqual(["2026-09-01", "2026-09-14"]);
+    expect(line([pt("2026-09-01", 1), pt("2026-09-01", 2, { offset: 2, interval: "M" })])).toEqual(["2026-09-01", "2026-11-01"]);
+    expect(line([pt("2026-09-01", 1), pt("2026-09-01", 2, { offset: 4, interval: "60" })])).toBe("点在最后一根 K 线右边，换算不了");
+    expect(line([pt("2026-09-01", 1), pt("2026-09-01", 2, { offset: 4 })], { days: [], timeZone: "UTC" })).toBe("点在最后一根 K 线右边，换算不了");
+  });
+});
+
+describe("convertDrawing: styles", () => {
+  it("reads colours in TradingView's formats", () => {
+    expect(hexColor("#2962FF")).toBe("#2962ff");
+    expect(hexColor("#29f")).toBe("#2299ff");
+    expect(hexColor("#2962FFCC")).toBe("#2962ff");
+    expect(hexColor("rgba(41, 98, 255, 0.5)")).toBe("#2962ff");
+    expect(hexColor("rgb(8,153,129)")).toBe("#089981");
+    expect(hexColor("blue")).toBeNull();
+  });
+
+  it("turns colour, width and line style into the app's style model", () => {
+    const r = convertDrawing(drawing("LineToolTrendLine", [pt("2026-09-01", 1), pt("2026-09-02", 2)], { linecolor: "rgba(242, 54, 69, 1)", linewidth: 3, linestyle: 1 }), US);
+    expect(r.ok && r.overlay.styles).toMatchObject({ line: { color: "#f23645", size: 3, style: "dashed", dashedValue: [1.5, 3] }, polygon: { borderColor: "#f23645" } });
+    const dashed = convertDrawing(drawing("LineToolHorzLine", [pt("2026-09-01", 1)], { linecolor: "#089981", linewidth: 9, linestyle: 2 }), US);
+    expect(dashed.ok && dashed.overlay.styles).toMatchObject({ line: { color: "#089981", size: 4, style: "dashed", dashedValue: [6, 4] } });
+    const solid = convertDrawing(drawing("LineToolHorzLine", [pt("2026-09-01", 1)], { linecolor: "#089981" }), US);
+    expect(solid.ok && solid.overlay.styles).toMatchObject({ line: { size: 1, style: "solid" } });
+    // a fib retracement keeps its colour on the trend line
+    const fib = convertDrawing(drawing("LineToolFibRetracement", [pt("2026-09-01", 1), pt("2026-09-02", 2)], { trendline: { color: "#787B86", linewidth: 2, linestyle: 2 } }), US);
+    expect(fib.ok && fib.overlay.styles).toMatchObject({ line: { color: "#787b86", size: 2, style: "dashed" } });
+  });
+
+  it("leaves the default look when there is no colour", () => {
+    const r = convertDrawing(drawing("LineToolHorzLine", [pt("2026-09-01", 1)], { linewidth: 2 }), US);
+    expect(r).toEqual({ ok: true, overlay: { name: "horizontalStraightLine", points: [{ timestamp: ms("2026-09-01"), value: 1 }] } });
+  });
+
+  it("keeps a text's words, colour and size, a note's background colour", () => {
+    const text = convertDrawing(drawing("LineToolText", [pt("2026-09-01", 1)], { text: "突破\n回踩", color: "#FF9800", fontsize: 20 }), US);
+    expect(text.ok && text.overlay).toMatchObject({ name: "text", extendData: "突破\n回踩", styles: { line: { color: "#ff9800" }, text: { size: 20 } } });
+    const note = convertDrawing(drawing("LineToolNote", [pt("2026-09-01", 1)], { text: "财报", backgroundColor: "rgba(103, 58, 183, 0.8)", textColor: "#ffffff", fontsize: 14 }), US);
+    expect(note.ok && note.overlay).toMatchObject({ name: "simpleAnnotation", extendData: "财报", styles: { line: { color: "#673ab7" }, text: { size: 14 } } });
+  });
+
+  it("carries hidden and locked", () => {
+    const r = convertDrawing(drawing("LineToolHorzLine", [pt("2026-09-01", 1)], { visible: false, frozen: true }), US);
+    expect(r.ok && r.overlay).toMatchObject({ hidden: true, lock: true });
+  });
+});
+
+describe("convertDrawings", () => {
+  const list = [
+    drawing("LineToolHorzLine", [pt("2026-09-01", 1)], {}, "a"),
+    drawing("LineToolVertLine", [pt("2026-09-02", 1)], {}, "b"),
+    drawing("LineToolSineLine", [pt("2026-09-01", 1), pt("2026-09-02", 2)], {}, "c"),
+    drawing("LineToolSineLine", [pt("2026-09-01", 1), pt("2026-09-02", 2)], {}, "d"),
+  ];
+
+  it("converts, counts the skipped by reason and leaves out what was imported before", () => {
+    const first = convertDrawings(list, US, new Set());
+    expect(first.ids).toEqual(["a", "b"]);
+    expect(first.overlays.map((o) => o.name)).toEqual(["horizontalStraightLine", "verticalStraightLine"]);
+    expect(first.skipped).toEqual({ "没有对应的工具：LineToolSineLine": 2 });
+    const again = convertDrawings(list, US, new Set(first.ids));
+    expect(again).toMatchObject({ overlays: [], ids: [], already: 2 });
+  });
+});
+
+describe("layoutId", () => {
+  it("takes a link or the id", () => {
+    expect(layoutId("https://www.tradingview.com/chart/AbCd1234/")).toBe("AbCd1234");
+    expect(layoutId("https://cn.tradingview.com/chart/AbCd1234/?symbol=NASDAQ%3ANVDA")).toBe("AbCd1234");
+    expect(layoutId(" AbCd1234 ")).toBe("AbCd1234");
+    expect(layoutId("https://example.com/x")).toBeNull();
+  });
+});

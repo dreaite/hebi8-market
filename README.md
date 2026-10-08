@@ -15,6 +15,7 @@
 - **图表**：基于 [KLineChart](https://github.com/klinecharts/KLineChart)，布局和快捷键照搬 TradingView：顶栏是商品搜索、`+` 比较商品、`日 周 月 季`、图表类型、`fx 指标`、刷新、全屏；左边画线工具栏；图内左上角图例（OHLC、各指标和对比的数值，悬停出现隐藏 / 设置 / 移除）；右边自选列表和笔记；底栏是 `1年 3年 5年 10年 全部` 范围按钮和 `ADJ`（含分红）、`%`、`log`、`自动`。内置指标、代码指标和公式指标都在「指标」弹窗里开关，参数在图例的设置里改，按周期保存。
 - **对比**：把别的标的叠在主图上，用同百分比坐标——滚动、缩放时所有线从可见区间左边缘重新归零，和 TradingView 一致；单位不同的（比如美债收益率）放独立副图。
 - **画线**：左边画线栏照 TradingView 分六组（趋势线、江恩和斐波那契、形态、预测和测量、几何形状、标注），每组一个按钮，点开选具体工具，记住上次用的；共 50 多种，只画在主图上。选中一条绘图出现浮动工具条：颜色、线宽、线型（文字类还有字号和内容）、设置、锁定、隐藏、删除，水平线还有添加警报；文字可以选中、拖动、双击改。磁铁模式、锁定 / 隐藏 / 删除所有绘图。按时间戳保存，周线上画的线切到日线还在。`Delete` 删除选中，`Esc` 退出绘制。
+- **从 TradingView 搬家**：页头「设置」。自选列表：把 TradingView「导出列表…」得到的 .txt 传上来或贴进来，预览后合并进现有分组或整个替换（已经在自选里的标的不会重复）；也能把自选导出成 TradingView「导入列表…」认的 .txt。画线：填布局链接和 `sessionid` / `sessionid_sign` 两个 cookie 由服务器去取（cookie 只用这一次，不保存），或者从浏览器开发者工具里复制 `sources` 接口的响应贴进来；按标的追加到各自图表，重复导入不会多出来。映射规则和支持的画线类型见 [`docs/design.md`](docs/design.md) §5.5。
 - **笔记与复盘**：每个标的一篇 markdown 笔记（thesis）；每周一篇复盘日志。都是自动保存：停止输入 1 秒后写盘，`Ctrl/Cmd+S` 立即保存，浏览器里留一份草稿兜底。复盘页列出本周触发的警报和有笔记的标的。
 - **帮助与反馈**：页头最右的「?」（或按 `?`）打开帮助抽屉。「使用」页签有三步引导的入口、快捷键表、项目文档（本仓库）和隐私说明的链接；「反馈」页签把问题直接提交成 GitHub issue，自动附带当前页面、图表状态和最近的前端错误。界面上只放用的时候要看的东西，项目介绍、配置和运维都写在这份 README 和 [`docs/design.md`](docs/design.md) 里。
 - **合成标的**：`=BTC/GOLD` 这样的表达式当作标的看图、算统计、设警报，逐字段计算，和 TradingView 的 spread 一样。
@@ -274,7 +275,9 @@ src/
 │   ├── page.tsx              总览（RSC，直接读 vault 和 SQLite）
 │   ├── chart/[key]/page.tsx  图表页 /chart/yahoo%3ASPY
 │   ├── review/page.tsx       复盘
+│   ├── settings/page.tsx     设置：从 TradingView 导入自选和画线、导出自选
 │   ├── actions.ts            Server Actions：写 yaml / 笔记 / 日志 / 图表状态，刷新
+│   ├── tv-actions.ts         Server Actions：TradingView 导入（tv-import.ts / tv-drawings.ts / tv-layout.ts 在 lib）
 │   └── api/
 │       ├── bars/             日/周/月/季 K 线 + 对齐好的引用标的
 │       ├── search/           外部搜索（Yahoo / TradingView / Binance），本地匹配在浏览器里
@@ -282,7 +285,7 @@ src/
 │       ├── notify/           当前登录者的通知通道：摘要、Telegram 绑定、webhook、测试消息
 │       └── github/           device flow 登录、退出、提交 / 列出反馈 issue
 ├── instrumentation.ts        启动应用内调度器
-├── components/               UiProvider（搜索浮层、帮助与登录抽屉、toast、快捷键）/ HelpPanel（使用、反馈）/ AccountPanel（登录、通知设置）/ Guide / SymbolSearch / Overview / RowMenu / ChartView / KChart / ChartLegend / IndicatorDialog / CompareDialog / WatchlistPanel / FormulaEditor / NotesPanel …
+├── components/               TvImport（设置页的导入导出）/ UiProvider（搜索浮层、帮助与登录抽屉、toast、快捷键）/ HelpPanel（使用、反馈）/ AccountPanel（登录、通知设置）/ Guide / SymbolSearch / Overview / RowMenu / ChartView / KChart / ChartLegend / IndicatorDialog / CompareDialog / WatchlistPanel / FormulaEditor / NotesPanel …
 ├── indicators/               指标目录、代码指标、公式引擎（formula.ts）、纯计算函数
 └── lib/
     ├── search.ts wellknown.ts 搜索的纯函数（匹配、过滤、去重、排序、分组推断）与内置字典

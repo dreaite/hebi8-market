@@ -66,6 +66,7 @@ export const ROUTES = new Set([
   "/review",
   "/privacy",
   "/usage",
+  "/settings",
   "/api/bars",
   "/api/search",
   "/api/help",

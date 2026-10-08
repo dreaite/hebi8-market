@@ -1,0 +1,44 @@
+/**
+ * A TradingView layout's drawings, fetched with the user's `sessionid` / `sessionid_sign` cookies
+ * through the (reverse-engineered) library (design §5.5). The cookies only live for this call: they
+ * are passed straight to tradingview.com, never stored, logged or put into an error message.
+ */
+import TradingView from "@mathieuc/tradingview";
+import { dedupeDrawings, normalizeDrawing, type TvDrawing } from "./tv-drawings";
+
+/**
+ * Chart ids asked for. `_shared` holds the drawings synced across the layout's charts; each chart
+ * of a multi-chart layout keeps its own under another id. The library has no way to list them,
+ * and the ids seen in layouts are 1, 2, …, so the first eight are tried.
+ */
+export const CHART_IDS = ["_shared", "1", "2", "3", "4", "5", "6", "7", "8"];
+
+export interface LayoutDrawings {
+  drawings: TvDrawing[];
+  /** Drawings found under each chart id that answered */
+  perChart: { chartId: string; count: number }[];
+}
+
+export async function fetchLayoutDrawings(layout: string, session: string, signature: string): Promise<LayoutDrawings> {
+  let id: string | undefined;
+  try {
+    id = (await TradingView.getUser(session, signature)).id;
+  } catch {
+    throw new Error("TradingView 不认这组 sessionid / sessionid_sign（不对或已过期）");
+  }
+  if (!id) throw new Error("TradingView 不认这组 sessionid / sessionid_sign（不对或已过期）");
+  const credentials = { id, session, signature };
+  const drawings: TvDrawing[] = [];
+  const perChart: LayoutDrawings["perChart"] = [];
+  for (const chartId of CHART_IDS) {
+    try {
+      const list = (await TradingView.getDrawings(layout, "", credentials, chartId)).map(normalizeDrawing).filter((d): d is TvDrawing => d !== null);
+      drawings.push(...list);
+      perChart.push({ chartId, count: list.length });
+    } catch (err) {
+      // the shared drawings are always there; failing on them means the layout or the access is wrong
+      if (chartId === "_shared") throw new Error(`取不到布局 ${layout} 的画线：${/Wrong layout/.test(String((err as Error)?.message)) ? "布局不存在，或这个账号打不开它" : "连不上 TradingView"}`);
+    }
+  }
+  return { drawings: dedupeDrawings(drawings), perChart };
+}

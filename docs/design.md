@@ -141,6 +141,7 @@ key: yahoo:NVDA
 
 - `overlays` 是 KLineChart overlay 的可序列化字段：`name`、`points`、`styles?`（颜色 / 线宽 / 线型 / 字号，绘图工具栏改过才有）、`lock?`、`hidden?`（单条隐藏）、`extendData?`（文字类绘图的文字）。点是 `{timestamp, value}`，所以周线上画的线在日线/月线上也在。
 - `compare[].mode`：`percent`（主图叠加，同百分比坐标）或 `pane`（独立副图）。
+- `tvIds?`：从 TradingView 导入进 `overlays` 的画线的 TradingView id（§5.5），再导入同一批时跳过它们。图表页保存画线时只发 `compare` 和 `overlays`，`saveChartState` 原样保留文件里的 `tvIds`；导入后在图上删掉的画线，id 还在，所以不会被再次导入。没有这个字段的旧文件照常读写。
 
 ### 1.4 SQLite 缓存
 
@@ -598,7 +599,73 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 ### 5.5 设置
 
-不做单独页面。周期选择、涨跌色、图表偏好由各处 UI 写回 yaml；分组、名称、基准由总览行菜单写回；警报由图表和总览的警报对话框写回；其余（同步时间、别名、数据集）直接改 yaml，写法在 README，页面上不提示路径（owner 在 `/usage` 能看到）。通知通道写在 `~/.config/hebi8/market/notify.json`（§2.5）。反馈用的 GitHub App 只有一个 client id，写在源码里（§5.8），不需要设置页。
+周期选择、涨跌色、图表偏好由各处 UI 写回 yaml；分组、名称、基准由总览行菜单写回；警报由图表和总览的警报对话框写回；其余（同步时间、别名、数据集）直接改 yaml，写法在 README，页面上不提示路径（owner 在 `/usage` 能看到）。通知通道写在 `~/.config/hebi8/market/notify.json`（§2.5）。反馈用的 GitHub App 只有一个 client id，写在源码里（§5.8）。
+
+**设置页 `/settings`**（页头「设置」）只放一次性的搬家操作：从 TradingView 导入自选列表和画线、把自选导出成 TradingView 能导入的列表。访客能看、能导出（示例列表），导入的按钮是灰的，提示登录。纯函数在 `src/lib/tv-import.ts`（列表、代码映射）和 `src/lib/tv-drawings.ts`（画线），Server Actions 在 `src/app/tv-actions.ts`，都先过 viewer 写权限、只写 `viewer.dir`。
+
+**代码映射**（`tvSymbolOf(key, exchange)` / `keyIdentity(key)` / `tvIdentity(symbol)`）：
+
+| key | TradingView |
+|---|---|
+| `tv:EXCH:SYM` | `EXCH:SYM` |
+| `binance:X` | `BINANCE:X` |
+| `yahoo:NVDA`（无后缀） | `NASDAQ / NYSE / AMEX / BATS:NVDA`，交易所按缓存里数据源报的 `exchange`（NasdaqGS → NASDAQ、NYSEArca → AMEX…）；`BRK-B ↔ BRK.B` |
+| `yahoo:0700.HK` | `HKEX:700`（去前导零） |
+| `yahoo:X.SS` / `.SZ` / `.T` | `SSE:X` / `SZSE:X` / `TSE:X` |
+| `yahoo:^GSPC` 等常见指数 | 小表：`SP:SPX`、`NASDAQ:NDX`、`NASDAQ:IXIC`、`DJ:DJI`、`TVC:RUT`、`CBOE:VIX`、`HSI:HSI`、`TVC:NI225`、`TVC:UKX`、`XETR:DAX` |
+
+判断「是不是同一个标的」用 identity：美股的几个交易所（NASDAQ、NYSE、AMEX、NYSEARCA、ARCA、BATS、CBOE、OTC）算一个，港股代码去前导零，其余就是 `EXCH:SYM`。自选里的 key 先按别名解析（读出来的 `Config` 已经解析过）。合成标的、`data:`、表里没有的（其他市场的后缀、`=X` / `=F`、`-USD`）没有 TradingView 代码。
+
+**导入自选列表**：TradingView 自选列表菜单「导出列表…」得到 `.txt`：逗号分隔的 `EXCH:SYM`，`###节名` 分节，可能有换行、BOM、第一节之前的标的。上传文件或粘贴文本，浏览器里 `parseTvList` + `planTvImport` 即时预览（每组：TradingView 代码、写入的 key、状态）：
+
+- 新标的写成 `tv:EXCH:SYM`（tv 源什么都有；字典里有中文名的照 `addSymbol` 写成 `{ key, name }`）。
+- 自选里已经有等价标的（任何 key）的标「已在「组名」」，不再加；文件里重复的（同一 identity）只保留第一次，其余标「重复」。
+- 第一个 `###` 之前的标的进一个默认组，组名默认是文件名（去扩展名），可改。同名的节在文件里出现两次合成一节。
+- **合并**（默认）：新标的加到同名分组末尾，没有就在 `groups` 最后新建；已在自选的不动。全都已在自选时报错，什么也不写。
+- **替换**（按钮要点两次确认）：`groups` 整个换成文件里的节；已在自选的标的沿用原来那条 yaml 条目（别名写法、名字、基准、行尾注释都在），只是挪到新位置，文件里没有的从自选里去掉。其他顶层字段和注释不动。
+- `importTvList` 在服务端按当前 yaml 重新算一遍计划再写（`parseDocument` 改写，原子写入），不信任浏览器算的状态。写完不等拉数据：后台跑一次 `syncAll()`（新标的从没同步过，会被拉；一小时内拉过的跳过），之后照常算 stats 和警报，拉不到的在总览那一行显示同步错误。
+
+**导出自选列表**：页面渲染时算好（`exportTvList`），按钮在浏览器里下载 `hebi8-watchlist.txt`，格式和 TradingView 导出的一样是一行：`###组名,EXCH:SYM,…`。空分组不写；组名里的逗号换成空格。合成标的、`data:` 标的、映射不出来的跳过，页面上逐个列出（key、组、原因；美股 Yahoo 标的还没同步过、不知道交易所的写明「同步一次后再导出」）。
+
+**导入画线**：TradingView 没有画线导出，两种来源：
+
+1. **从布局取**：布局链接或 ID（`https://www.tradingview.com/chart/<ID>/`）+ 两个 cookie `sessionid`、`sessionid_sign`。服务端（`src/lib/tv-layout.ts`）用库的 `getUser(session, signature)` 取用户 id，再对每个 chart id 调 `getDrawings(layout, "", { id, session, signature }, chartId)`（库里每次先 `getChartToken`，再请求 `charts-storage.tradingview.com/charts-storage/get/layout/<ID>/sources?chart_id=&jwt=&symbol=`）。chart id：`_shared` 是开了「同步画线」的那部分；多图布局里每个图表自己的画线在各自的 chart id 下，库没有列出它们的办法，所以按 `1`…`8` 依次试，取不到的跳过（`_shared` 取不到就报错：布局不对或这个账号打不开）。页面列出每个 chart id 取到几条，同一条画线在几个 chart id 下出现只算一次。**cookie 只在这一次请求里用**：不存、不写日志、不进错误信息（错误只说「cookie 不对或已过期」「布局不存在或打不开」「连不上」），请求发出后浏览器里的输入框也清空；页面上写明 cookie 只从服务器发给 tradingview.com。
+2. **粘贴 JSON**：开发者工具 Network 面板里 `sources` 请求的响应（`{ payload: { sources: {…} } }`），或者其中的 `sources` 对象、画线数组、单条画线。在浏览器里解析成精简的画线（`normalizeDrawing`：只留 id、symbol、type、points 和用得到的样式字段），原文不上传。
+
+存储格式两种都认：`{ id, symbol, state: { type, points, state: {样式} } }`（接口原样）和库 `getDrawings` 返回的「外层 `state` 摊平」的样子。`symbol` 是 `EXCH:SYM`，也可能是 `={"symbol":"NASDAQ:NVDA","adjustment":"splits"}`。点是 `{ time_t（秒）, price, offset, interval? }`。
+
+**预览**（`previewTvDrawings`）按 `drawing.symbol` 分组，用上面的 identity 对到自选里的标的；每个标的列出可导入几条、以前导入过几条、跳过几条及原因（按原因计数，没有对应工具的按 TradingView 类型名计数）。对不上的标的可以选「加入「某组」」（写成 `tv:EXCH:SYM`，组可以是现有的或新建「TradingView」）或跳过。**确认**（`importTvDrawings`）：要加入的标的先 `syncOne(key, true)`（顺便校验，失败的列出来、不写），写进 yaml，再逐个标的转换，**追加**到 `charts/<fileKey>.json` 的 `overlays` 末尾，`compare` 和已有画线不动，转换成功的 TradingView id 追加进 `tvIds`（§1.3）。
+
+**类型映射**（`TV_TOOLS` + 几个特殊处理，对应 `DRAW_GROUPS`）：
+
+| TradingView | 应用 |
+|---|---|
+| `LineToolTrendLine` | 不延伸 `segment`；只向右 `rayLine`；只向左 `rayLine`（两点对调）；两边 `straightLine`（按 `state.extendLeft/extendRight`） |
+| `LineToolRay` / `LineToolExtended` / `LineToolInfoLine` / `LineToolTrendAngle` | `rayLine` / `straightLine` / `infoLine` / `trendAngle` |
+| `LineToolHorzLine` / `LineToolHorzRay` / `LineToolVertLine` / `LineToolCrossLine` | `horizontalStraightLine` / `horizontalRayLine`（补一个 100 天后的第二点定方向）/ `verticalStraightLine` / `crossLine` |
+| `LineToolParallelChannel` / `LineToolRegressionTrend` / `LineToolPitchfork` | `parallelChannel` / `regressionTrend` / `pitchfork` |
+| `LineToolFibRetracement` / `TrendBasedFibExtension` / `FibChannel` / `FibTimeZone` / `FibSpeedResistanceFan` / `FibCircles` / `FibSpiral` / `FibSpeedResistanceArcs` | `fibonacciLine` / `fibExtension` / `fibChannel` / `fibTimeZone` / `fibFan` / `fibCircles` / `fibSpiral` / `fibArcs` |
+| `LineToolGannComplex`、`LineToolGannSquare` / `LineToolGannFan` | `gannBox` / `gannFan` |
+| `LineTool5PointsPattern` / `ABCD` / `TrianglePattern` / `HeadAndShoulders` | `xabcd` / `abcd` / `trianglePattern` / `headShoulders` |
+| `LineToolElliottImpulse` / `Correction` / `Triangle` / `DoubleCombo` | `elliottImpulse` / `elliottCorrection` / `elliottTriangle` / `elliottDoubleCombo` |
+| `LineToolRiskRewardLong` / `Short` | `longPosition` / `shortPosition`：入场点 + 右边缘（第二个点，没有就 20 天），目标 / 止损取 `state.targetPrice / stopPrice`；只有跳数（`profitLevel / stopLevel`）的跳过，换算要最小变动价位 |
+| `LineToolPriceRange` / `DateRange` / `DateAndPriceRange` | `priceRange` / `dateRange` / `datePriceRange` |
+| `LineToolBrush`、`LineToolHighlighter` / `Path` / `Polyline` | `brush` / `path` / `polyline`（全部点，去掉相邻重复，至少两个） |
+| `LineToolRectangle` / `Circle` / `Triangle` / `Arc` | `rect` / `circle` / `triangle` / `arc` |
+| `LineToolEllipse` | `ellipse`：两个点当对角；三个点（一条轴的两端 + 另一条轴上的点）换算成正放的外接框 |
+| `LineToolBezierQuadro` | `curve`：第三点（控制点）换成曲线中点 =（控制点 + 两端中点）/ 2 |
+| `LineToolText` | `text`（文字、`color`、`fontsize`） |
+| `LineToolNote` / `Comment` / `Callout` / `Balloon` / `Signpost` | `simpleAnnotation`（第一个点、文字、底色取 `backgroundColor / markerColor / …`、字号） |
+| `LineToolPriceLabel` / `PriceNote` | `priceLabel`（第一个点） |
+| `LineToolFlagMark` / `Arrow`、`ArrowMarker` / `ArrowMarkUp` / `ArrowMarkDown` | `flag` / `arrow` / `arrowMarkUp` / `arrowMarkDown` |
+
+其余（成交量分布、锚定 VWAP、正弦线、图标、表格、`TextAbsolute` 这类钉在屏幕上的、`ElliottTripleCombo`、`Cypher`、`ThreeDrivers`、Schiff / Inside 音叉、`GannFixed`……）跳过，按类型计数报告。应用里只有「价格通道」`priceChannelLine` 在 TradingView 没有对应。点数不够的、文字为空的文字类跳过，各有原因。
+
+**点**：`time_t` 是这个点所在 K 线的时间（画线时的周期），日线是开盘时刻：美股纽约 09:30，亚洲按当地开盘，外汇 / 期货 / TVC 是前一晚 17:00 / 18:00 纽约，加密是 UTC 0 点；日内周期上画的点是那根日内 K 线的时间。换成本应用的点（`pointDay`）：取交易所时区的当地日期，时区不是 UTC 且当地时间 ≥ 17:00 时算下一个交易日（晚上开盘的那一节）。不能直接用 `tradingDay`：它的 +12h 只适合开盘时刻，会把美股下午的点推到第二天。时区取缓存里这个标的的 `timezone`（数据源报的），没有就当 UTC。然后对齐到库里的交易日（`bars.t`）：落在节假日、周末的点归到前一根，和 KLineChart 的定位一致（`timestampToDataIndex` 在数据范围内二分取不大于它的那根，范围外按周期推算），范围外的日期原样保留。最后存成毫秒时间戳，所以导入的线和手画的一样跨周期。
+
+**`offset`**（点在当时最后一根 K 线右边多少根）：`interval` 是日线或没写（当日线）时，从 `time_t` 那根起按库里的交易日数 `offset` 根，超出最后一根的部分每根算一个日历日（图表在右边空白处就是这样排的）；周线、月线按周、月加；日内周期换算不了，整条跳过并计入报告。
+
+**样式**：颜色取 `linecolor`（文字取 `color`，注释和标签取 `backgroundColor` 等，斐波那契取 `trendline.color`），`#RRGGBB`、`#RGB`、`#RRGGBBAA`、`rgba()` 都转成 `#rrggbb`（透明度丢掉，应用只有一个颜色）；`linewidth` 取整到 1–4；`linestyle` 0 实线、1 / 4 点线、2 / 3 虚线；文字类加 `styles.text.size = fontsize`。用 `drawingStyles()` 生成，和浮动工具条改出来的完全一样。没有颜色就不写 `styles`（默认样式）。`state.visible === false` → `hidden`，`state.frozen` → `lock`。
 
 ### 5.6 自动保存（笔记与复盘日志）
 
@@ -724,7 +791,7 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 - `GET /api/help` → 反馈页签和通知设置抽屉要的登录状态与反馈设置（§5.8，只读本地）。
 - `/api/github/device`（POST 开始 device flow / DELETE 取消）、`/api/github/device/poll`（POST）、`/api/github/logout`（POST）、`/api/github/issues`（GET 最近反馈 / POST 提交）：§5.8，唯一会碰 GitHub 网络的接口，都是打开反馈页签或用户动作触发。
 
-**Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench?, alias? })`、`loadSymbol(key)`（只拉缓存，§2.3）、`removeSymbol(key)`、`moveSymbol(key, group, index?)`（index 不算被移动的那个，省略 = 末尾）、`moveGroup(name, index)`、`addGroup(name)`、`renameGroup(name, next)`、`deleteGroup(name)`（标的并入相邻组）、`renameSymbol(key, name)`、`setBench(key, bench | null)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveAlert({ id?, key | null, cond, value? | when + tf?, trigger, label?, notify? })` / `deleteAlert(id)` / `setAlertEnabled(id, enabled)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`、`setUsageLimits({ visitors, limited })`（owner，§1.7）。Server Action 在客户端是**串行派发**的，自动保存靠去抖合并，不并行发。
+**Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench?, alias? })`、`loadSymbol(key)`（只拉缓存，§2.3）、`removeSymbol(key)`、`moveSymbol(key, group, index?)`（index 不算被移动的那个，省略 = 末尾）、`moveGroup(name, index)`、`addGroup(name)`、`renameGroup(name, next)`、`deleteGroup(name)`（标的并入相邻组）、`renameSymbol(key, name)`、`setBench(key, bench | null)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveAlert({ id?, key | null, cond, value? | when + tf?, trigger, label?, notify? })` / `deleteAlert(id)` / `setAlertEnabled(id, enabled)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`、`setUsageLimits({ visitors, limited })`（owner，§1.7）；`src/app/tv-actions.ts` 里的 `importTvList({ text, fallback, mode })`、`previewTvDrawings(来源)`、`importTvDrawings({ drawings, add })`（§5.5，`previewTvDrawings` 是唯一带用户 TradingView cookie 访问外网的地方）。Server Action 在客户端是**串行派发**的，自动保存靠去抖合并，不并行发。
 
 所有写入校验输入；文件路径只能落在 vault 内（fileKey 已保证无 `/`、`..`）；写入原子。
 

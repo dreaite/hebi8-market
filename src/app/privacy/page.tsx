@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "隐私说明 · hebi8/market" };
 
 /** Updated whenever what the instance collects changes (design §1.7). */
-const UPDATED = "2026-10-07";
+const UPDATED = "2026-10-09";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -79,6 +79,12 @@ export default function PrivacyPage() {
           登录后，你的自选、画线、笔记、日志和告警会保存在服务器上属于你的目录里。其他用户看不到它们，但这些是服务器上的普通文件，运营者在技术上可以读取。请不要在里面写敏感信息。
         </p>
         <p>如果你设置了通知，服务器会保存你的 Telegram 会话 ID 或 webhook 地址，只用来发送你设置的告警。</p>
+      </Section>
+
+      <Section title="从 TradingView 导入">
+        <p>
+          在「设置」里从 TradingView 布局导入画线时，你填的 sessionid 和 sessionid_sign 两个 Cookie 只随这一次请求发到服务器，由服务器转发给 tradingview.com 取画线，不保存、不写日志，也不出现在错误信息里。导入的自选和画线和你自己加的一样，存在你的目录里。
+        </p>
       </Section>
 
       <Section title="反馈">

@@ -16,9 +16,14 @@ import { isSynthetic, isTimeframe, isValidKey, type Timeframe } from "@/lib/symb
 import { parseSynth } from "@/lib/synth";
 import { recomputeStats, syncAll, syncOne } from "@/lib/sync";
 import {
+  entryKey,
   flowNode,
+  groupName,
+  groupNode,
+  readChartState,
   readConfig,
   setList,
+  seqOf,
   setScalar,
   updateConfig,
   writeChartState,
@@ -44,19 +49,6 @@ async function attempt(fn: (viewer: Viewer) => Promise<void> | void): Promise<Ac
 
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 
-function seqOf(parent: YAMLMap, name: string, doc: Document): YAMLSeq {
-  const existing = parent.get(name);
-  if (isSeq(existing)) return existing;
-  const seq = doc.createNode([]) as YAMLSeq;
-  parent.set(name, seq);
-  return seq;
-}
-
-function entryKey(item: unknown, aliases: Record<string, string>): string | null {
-  const value = isMap(item) ? item.get("key") : isScalar(item) ? item.value : item;
-  return typeof value === "string" ? resolveKey(value, aliases) : null;
-}
-
 /** Where a watched key lives in the document: its group's `symbols` list and the index in it. */
 function locateEntry(doc: Document, key: string, aliases: Record<string, string>): { symbols: YAMLSeq; index: number } | null {
   const groups = doc.get("groups");
@@ -81,9 +73,6 @@ function entryAsMap(doc: Document, symbols: YAMLSeq, index: number): YAMLMap {
   return node;
 }
 
-/** A group's name as the page shows it: an unnamed one is「组 N」, like the config reader says. */
-const groupName = (group: unknown, index: number) => (isMap(group) && String(group.get("name") ?? "").trim()) || `组 ${index + 1}`;
-
 /**
  * The `groups` list and where the group shown as `name` sits in it. Unnamed groups then get the
  * name they are shown with written down (a number added if another group has it), because moving
@@ -103,16 +92,6 @@ function findGroup(doc: Document, name: string): { groups: YAMLSeq; index: numbe
     g.items.unshift(doc.createPair("name", pinned));
   });
   return { groups: seq, index };
-}
-
-function groupNode(doc: Document, name: string): YAMLMap {
-  const groups = seqOf(doc.contents as YAMLMap, "groups", doc);
-  let node = groups.items.find((g, i) => isMap(g) && groupName(g, i) === name) as YAMLMap | undefined;
-  if (!node) {
-    node = doc.createNode({ name, symbols: [] }) as YAMLMap;
-    groups.add(node);
-  }
-  return node;
 }
 
 /** A drop position from the page, inside 0..length. */
@@ -403,7 +382,9 @@ export async function saveChartState(key: string, state: ChartState): Promise<Ac
         if (!outcome.ok) throw new Error(`拉取 ${c.key} 失败：${outcome.error}`);
       }
     }
-    writeChartState(dir, key, { compare, overlays });
+    // the chart only knows its drawings; which of them came from TradingView stays
+    const { tvIds } = readChartState(dir, key);
+    writeChartState(dir, key, { compare, overlays, ...(tvIds ? { tvIds } : {}) });
   });
 }
 

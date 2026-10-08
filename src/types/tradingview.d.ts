@@ -61,9 +61,24 @@ declare module "@mathieuc/tradingview" {
     type: string;
   }
 
+  interface User {
+    /** Digits as a string, as the library scrapes it off the page */
+    id?: string;
+    username?: string;
+  }
+
+  interface UserCredentials {
+    id: string;
+    session: string;
+    signature?: string;
+  }
+
   const TradingView: {
     Client: new (options?: { token?: string; signature?: string }) => Client;
     searchMarketV3(search: string, filter?: string, offset?: number): Promise<SearchMarketResult[]>;
+    getUser(session: string, signature?: string): Promise<User>;
+    /** Every drawing of the layout's chart, the stored source with its `state` spread over it */
+    getDrawings(layout: string, symbol?: string, credentials?: UserCredentials, chartID?: string): Promise<Record<string, unknown>[]>;
   };
   export default TradingView;
 }

@@ -50,6 +50,9 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
                 <Link href="/review" className="hover:text-fg">
                   复盘
                 </Link>
+                <Link href="/settings" className="hover:text-fg">
+                  设置
+                </Link>
                 {viewer?.shared && (
                   <Account user={viewer.login ? { login: viewer.login, avatarUrl: viewer.avatarUrl ?? "" } : null} enabled={Boolean(githubClientId())} owner={viewer.isOwner} />
                 )}

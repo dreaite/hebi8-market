@@ -9,8 +9,8 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { isMap, isScalar, isSeq, parse, parseDocument, type Document } from "yaml";
-import { ConfigError, INSTANCE_KEYS, isLogin, normalizeConfig, normalizeUserConfig, type Config } from "./config";
+import { isMap, isScalar, isSeq, parse, parseDocument, type Document, type YAMLMap, type YAMLSeq } from "yaml";
+import { ConfigError, INSTANCE_KEYS, isLogin, normalizeConfig, normalizeUserConfig, resolveKey, type Config } from "./config";
 import { fileKey, hash6, isValidKey } from "./symbols";
 import { isWeekId } from "./week";
 
@@ -177,6 +177,35 @@ export function flowNode(doc: Document, value: unknown) {
   return doc.createNode(value, { flow: true });
 }
 
+/** The list under `name` in a map, created empty when missing. */
+export function seqOf(parent: YAMLMap, name: string, doc: Document): YAMLSeq {
+  const existing = parent.get(name);
+  if (isSeq(existing)) return existing;
+  const seq = doc.createNode([]) as YAMLSeq;
+  parent.set(name, seq);
+  return seq;
+}
+
+/** The key a `groups[].symbols` entry stands for (`SPY`, `{ key: QQQ }`), aliases resolved. */
+export function entryKey(item: unknown, aliases: Record<string, string>): string | null {
+  const value = isMap(item) ? item.get("key") : isScalar(item) ? item.value : item;
+  return typeof value === "string" ? resolveKey(value, aliases) : null;
+}
+
+/** A group's name as the page shows it: an unnamed one is「组 N」, like the config reader says. */
+export const groupName = (group: unknown, index: number) => (isMap(group) && String(group.get("name") ?? "").trim()) || `组 ${index + 1}`;
+
+/** The group shown as `name`, added at the end when there is none. */
+export function groupNode(doc: Document, name: string): YAMLMap {
+  const groups = seqOf(doc.contents as YAMLMap, "groups", doc);
+  let node = groups.items.find((g, i) => isMap(g) && groupName(g, i) === name) as YAMLMap | undefined;
+  if (!node) {
+    node = doc.createNode({ name, symbols: [] }) as YAMLMap;
+    groups.add(node);
+  }
+  return node;
+}
+
 // ---------------------------------------------------------------------------- per-key files
 
 /**
@@ -307,6 +336,8 @@ export interface OverlaySpec {
 export interface ChartState {
   compare: CompareEntry[];
   overlays: OverlaySpec[];
+  /** TradingView drawings imported into `overlays` (§5.5), so importing them again adds nothing */
+  tvIds?: string[];
 }
 
 export const EMPTY_CHART_STATE: ChartState = { compare: [], overlays: [] };
@@ -319,6 +350,7 @@ function parseChartState(text: string): ChartState {
     return {
       compare: Array.isArray(raw.compare) ? raw.compare.filter((c) => isValidKey(c?.key)) : [],
       overlays: Array.isArray(raw.overlays) ? raw.overlays.filter((o) => typeof o?.name === "string") : [],
+      ...(Array.isArray(raw.tvIds) ? { tvIds: raw.tvIds.filter((id) => typeof id === "string") } : {}),
     };
   } catch {
     return EMPTY_CHART_STATE;
