@@ -215,6 +215,13 @@ describe("convertDrawing: points", () => {
     expect(line([pt("2026-09-01", 1), pt("2026-09-28", 2, { offset: 2, interval: "1D" })])).toEqual(["2026-09-01", "2026-09-30"]);
   });
 
+  it("counts a negative offset left of the first bar in calendar days", () => {
+    // 2026-08-04 - 3 bars: Aug 3 is the first bar, then 2 days before it
+    expect(line([pt("2026-08-04", 1, { offset: -3 }), pt("2026-09-28", 2)])).toEqual(["2026-08-01", "2026-09-28"]);
+    // an anchor before the cache (TradingView's history can start earlier)
+    expect(line([pt("2026-07-20", 1, { offset: -2 }), pt("2026-09-28", 2)])).toEqual(["2026-07-18", "2026-09-28"]);
+  });
+
   it("counts calendar days from an anchor past the cached bars (the cache can be behind TradingView)", () => {
     const utc: DrawingContext = { ...US, timeZone: "UTC" };
     const r = convertDrawing(drawing("LineToolTrendLine", [{ time_t: day("2026-09-01"), price: 1 }, { time_t: day("2026-10-08"), price: 2, offset: 2, interval: "1D" }]), utc);

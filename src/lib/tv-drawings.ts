@@ -221,10 +221,11 @@ function offsetDay(days: number[], day: number, offset: number, interval: string
     return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + bars, Math.min(d.getUTCDate(), lastOfMonth)) / 1000;
   }
   const last = days.length - 1;
-  if (last >= 0 && day > days[last]) return day + bars * DAY;
-  const i = floorIndex(days, day);
-  if (i < 0) return null;
-  const target = i + bars;
+  if (last < 0) return null;
+  // outside the cache on either side (left of its first bar TradingView anchors on that bar with a negative offset)
+  if (day > days[last] || day < days[0]) return day + bars * DAY;
+  const target = floorIndex(days, day) + bars;
+  if (target < 0) return days[0] + target * DAY;
   return target <= last ? days[target] : days[last] + (target - last) * DAY;
 }
 
