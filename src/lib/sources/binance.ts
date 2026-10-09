@@ -67,7 +67,7 @@ export const binance: SourceAdapter = {
     const q = query.trim().toUpperCase().replace(/USDT$/, "");
     if (!/^[A-Z0-9]{1,12}$/.test(q)) return [];
     const bases = await usdtBases();
-    const hit = (base: string) => ({ key: `binance:${base}USDT`, name: `${base}USDT`, exchange: "Binance", kind: "crypto" });
+    const hit = (base: string) => ({ key: `binance:${base}USDT`, name: `${base}USDT`, exchange: "Binance", kind: "crypto", logo: `crypto/XTVC${base}`, sourceLogo: "source/BINANCE" });
     if (bases === null) return /^[A-Z0-9]{2,12}$/.test(q) ? [hit(q)] : [];
     return bases
       .filter((b) => b.startsWith(q))

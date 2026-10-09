@@ -273,7 +273,7 @@ interface SourceAdapter {
 | 源 | 价格 | adj | 增量 | 搜索 | 备注 |
 |---|---|---|---|---|---|
 | `yahoo` | `chart()` 的 open/high/low/close 本身是拆股复权，**原样存** | `adjclose / close` | 全量 replace | `new YahooFinance().search(q)` | 直接请求 Yahoo 会 429，必须走 yahoo-finance2 |
-| `tv` | `setMarket(ticker, { timeframe: "D", range: 100_000, adjustment: "splits" })` | 1 | 全量 replace | `TradingView.searchMarketV3(q)` | 一次同步共用一个 `Client`，顺序开 chart；30s 超时；逆向接口可能失效，错误只记在该标的上 |
+| `tv` | `setMarket(ticker, { timeframe: "D", range: 100_000, adjustment: "splits" })` | 1 | 全量 replace | `symbol-search.tradingview.com/symbol_search/v3`（库的 `searchMarketV3` 丢了 logo 和 typespecs，自己请求） | 一次同步共用一个 `Client`，顺序开 chart；30s 超时；逆向接口可能失效，错误只记在该标的上 |
 | `binance` | `/api/v3/klines` 1d | 1 | 增量 merge（回拉 3 天覆盖未收盘的那根） | 静态：`/^[A-Z0-9]{2,12}USDT$/` 命中即给候选 | 00:00 UTC 开盘，无需时区换算 |
 | `data` | 数据集仓库里的 CSV（§2.4） | 1 | 全量 replace | 列出 yaml 里各数据集清单中的序列 | 日期直接是 UTC 零点，不经 `tradingDay` |
 
@@ -604,6 +604,8 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 3. 「常用」：yaml `aliases` 与内置字典里尚未在自选的条目。
 4. 「搜索」：外部结果，300ms 防抖（ASCII ≥2 字符，CJK ≥1）；状态「搜索中…」/「无结果，可直接输入 source:ticker 或 AAPL/MSFT 这样的表达式」；已在自选的行尾标「已在自选 · 分组」。
 
+**每一行（照 TV 的搜索框）**：左边是标的的圆形 logo，右边是类型、交易所名和交易所小 logo，中间名称 · 代码。logo 是 TradingView 搜索结果里的 `logoid` / `source_logoid`，浏览器直接从 `s3-symbol-logo.tradingview.com` 加载（隐私说明里写明）；没有或加载失败时左边是代码首字母的圆点，右边只剩名字。Binance 交易对用 TV 的 `crypto/XTVC<币>`；同一标的合并成一行时（TV 的 `NYSE:SCCO` 并进 `yahoo:SCCO`），胜出的那条缺的 logo 从同组其他条补（交易所 logo 连同它的交易所名一起）；本地行（自选、常用）没有 logo，外部结果里有同 key 的就借它的交易所、类型和 logo。类型（`typeLabel`）是防选错的关键（COPPER 会搜出一排名字都叫 Copper 的 CFD 和期货）：TV 的 typespecs 优先（`cfd` → CFD，指数 CFD 写「指数 CFD」，`crypto` → 加密，`etf` → ETF），其次 kind（股票 / ETF / 基金 / 指数 / 期货 / 加密 / 外汇 / 债券 / 商品 / 数据），都没有时看 key（`=` 比价、`data:` 数据、`binance:` 加密、Yahoo 的 `^` 指数 / `=F` 期货 / `=X` 外汇），推不出就不显示。
+
 **运算符按钮与引导**：输入框右侧一组按钮 `÷ × + − ^ ( )`（照 TV 的 spread 按钮，三种模式都有；窄屏换到输入框下一行，提示文字先换行，不挤输入框），点了在光标处插入 ASCII 运算符（有选区就替换），焦点和光标留在输入框；`−` 插入成 ` - `，保证按减号识别。输入为空时列表区显示一行「比价试试：BTC/GOLD · SPY/QQQ · 2*(SPY - QQQ)」，点了填入、光标到末尾。
 
 **合成表达式（照 TV 的 spread 输入）**：输入以 `=` 开头，或含运算符（`AAPL/MSFT`、`2*(SPY-QQQ)`、`^GSPC/^DJI`、`SPY^2`）时按表达式处理（`isExpression`）。例外：只有不带空格的 `-`、没有别的运算符和数字时仍是一个代码（`BRK-B`、`BTC-USD`），想做减法就加空格（`SPY - QQQ`）或写 `=`；`data:` 开头不带空格的是数据集 key。词法同 §3.3，只是不认识的词不报错。
@@ -621,7 +623,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 - Binance：`/api/v3/ticker/price` 内存缓存 24h，取 `*USDT`，按币名前缀匹配，`<base>USDT` 完全匹配排最前。
 - Yahoo：仅 ASCII 查询（含 CJK 直接抛 `Invalid Search Query`）；过滤 FUTURE / OPTION / MUTUALFUND；外地挂牌（`.TO/.DU/.F/.DE/.L/.MX…`，`.HK/.SS/.SZ` 除外）只在查询本身含 `.` 时保留；同一公司只留主上市。
-- TradingView：查询含 CJK、或含 `:`、或 Yahoo 命中 < 3 时调用；含 `:` 时直接按交易所查，否则并行 `index`、`cfd`、`stock`（像收益率的查询再加 `bond`）各取前几条合并；丢 bond（除非查询像 `US10Y` / 收益率 / 国债）、structured、swap、dr、warrant、futures（除非查询含 `!` / 期货）、FINRA 等数据商序列；`<em>` 高亮去掉；大交易所的股票 / ETF 改写成 Yahoo key（`HKEX:700 → yahoo:0700.HK`、`SSE:600519 → yahoo:600519.SS`、`NASDAQ:AAPL → yahoo:AAPL`），`BINANCE:XXXUSDT → binance:XXXUSDT`。
+- TradingView：查询含 CJK、或含 `:`、或 Yahoo 过滤后的命中 < 3 时调用（COPPER 在 Yahoo 只搜到期货，全被丢掉）；含 `:` 时直接按交易所查，否则并行 `index`、`cfd`、`stock`（像收益率的查询再加 `bond`）各取前几条合并；丢 bond（除非查询像 `US10Y` / 收益率 / 国债）、structured、swap、dr、warrant、futures（除非查询含 `!` / 期货）、FINRA 等数据商序列；`<em>` 高亮去掉；大交易所的股票 / ETF 改写成 Yahoo key（`HKEX:700 → yahoo:0700.HK`、`SSE:600519 → yahoo:600519.SS`、`NASDAQ:AAPL → yahoo:AAPL`），`BINANCE:XXXUSDT → binance:XXXUSDT`。
 
 排序：精确代码匹配 > 自选 > 字典 > 来源偏好（股票 yahoo > tv；币 binance > yahoo；宏观 / 指数 / 汇率 tv:TVC/HSI/FX_IDC/OANDA > yahoo）> 名称前缀 > 交易所白名单（TVC、HSI、SSE、SZSE、HKEX、NASDAQ、NYSE、BINANCE、FX_IDC、OANDA）> 其余按到达顺序。同一标的多源去重（`yahoo:BTC-USD` 与 `binance:BTCUSDT` 算同一个，币优先 binance）。返回 `{ key, name, exchange?, kind?, source, inWatchlist?, suggestedGroup }`，最多 12 条。
 

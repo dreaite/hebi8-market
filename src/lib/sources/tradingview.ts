@@ -1,7 +1,7 @@
 import TradingView from "@mathieuc/tradingview";
 import { dedupeBars } from "../series";
 import { tradingDay } from "../time";
-import { weekdaySession, type FetchResult, type Quote, type QuoteSession, type SourceAdapter } from "./types";
+import { weekdaySession, type FetchResult, type Quote, type QuoteSession, type SearchHit, type SourceAdapter } from "./types";
 
 /** More bars than any symbol has (DJI since 1896 is ~33k): the server returns its whole history, no login needed. */
 const RANGE = 100_000;
@@ -133,6 +133,51 @@ function fetchQuotes(tickers: string[]): Promise<Record<string, Quote>> {
   });
 }
 
+/** One result of TradingView's symbol search, as far as it is used here. */
+export interface TvSymbol {
+  symbol: string;
+  description: string;
+  type: string;
+  exchange: string;
+  prefix?: string;
+  typespecs?: string[] | null;
+  logoid?: string | null;
+  /** Coins have their logo only here, under `logo.logoid`; FX pairs have a second one in `logoid2` */
+  logo?: { logoid?: string } | null;
+  source_logoid?: string | null;
+}
+
+/** A TradingView search result as a hit; the id is built the way `@mathieuc/tradingview` builds it. */
+export function tvSearchHit(s: TvSymbol): SearchHit {
+  const id = s.prefix ? `${s.prefix}:${s.symbol}` : `${s.exchange.split(" ")[0].toUpperCase()}:${s.symbol}`;
+  return {
+    key: `tv:${id}`,
+    name: s.description,
+    exchange: s.exchange,
+    kind: s.type,
+    typespecs: s.typespecs ?? undefined,
+    logo: s.logo?.logoid ?? s.logoid ?? undefined,
+    sourceLogo: s.source_logoid ?? undefined,
+  };
+}
+
+/**
+ * The symbol search the library's `searchMarketV3` calls, asked directly: the library drops the
+ * logos and typespecs the search box shows. `EXCHANGE:SYMBOL` searches that exchange only.
+ */
+async function searchSymbols(query: string, filter: string): Promise<TvSymbol[]> {
+  const parts = query.toUpperCase().split(":");
+  const params = new URLSearchParams({ text: parts.pop()!, search_type: filter, hl: "0", lang: "en", domain: "production" });
+  if (parts.length === 1) params.set("exchange", parts[0]);
+  const res = await fetch(`https://symbol-search.tradingview.com/symbol_search/v3/?${params}`, {
+    headers: { origin: "https://www.tradingview.com" },
+    cache: "no-store",
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`TradingView search ${res.status}`);
+  return ((await res.json()) as { symbols: TvSymbol[] }).symbols;
+}
+
 /**
  * Unofficial TradingView websocket client, no login. Covers what Yahoo lacks:
  * indices (HSI:HSTECH), yields (TVC:US10Y), FX (FX_IDC:USDCNH), dollar index (TVC:DXY).
@@ -147,7 +192,6 @@ export const tradingview: SourceAdapter = {
   quotes: fetchQuotes,
 
   async search(query, filter = "") {
-    const hits = await TradingView.searchMarketV3(query, filter);
-    return hits.slice(0, 6).map((h) => ({ key: `tv:${h.id}`, name: h.description, exchange: h.exchange, kind: h.type }));
+    return (await searchSymbols(query, filter)).slice(0, 6).map(tvSearchHit);
   },
 };

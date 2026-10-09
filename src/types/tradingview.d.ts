@@ -52,15 +52,6 @@ declare module "@mathieuc/tradingview" {
     onConnected(callback: () => void): void;
   }
 
-  interface SearchMarketResult {
-    id: string;
-    exchange: string;
-    fullExchange: string;
-    symbol: string;
-    description: string;
-    type: string;
-  }
-
   interface UserCredentials {
     id: string;
     session: string;
@@ -69,7 +60,6 @@ declare module "@mathieuc/tradingview" {
 
   const TradingView: {
     Client: new (options?: { token?: string; signature?: string }) => Client;
-    searchMarketV3(search: string, filter?: string, offset?: number): Promise<SearchMarketResult[]>;
     /** The token charts-storage requests carry for a layout (`/chart-token`) */
     getChartToken(layout: string, credentials?: UserCredentials): Promise<string>;
   };

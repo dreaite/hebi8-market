@@ -99,6 +99,9 @@ export default function PrivacyPage() {
 
       <Section title="行情数据">
         <p>行情由服务器向 Yahoo、TradingView、Binance 等数据源请求，你的浏览器不会直接连接它们，它们也拿不到你的 IP。</p>
+        <p>
+          例外是搜索框里的图标：标的和交易所的小图标由你的浏览器直接从 TradingView 的 CDN（s3-symbol-logo.tradingview.com）加载，和 GitHub 头像一样，TradingView 会看到这些图片请求和你的 IP。
+        </p>
       </Section>
 
       <Section title="删除和联系">

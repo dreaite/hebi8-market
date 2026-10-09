@@ -26,6 +26,11 @@ export interface SearchHit {
   name: string;
   exchange?: string;
   kind?: string;
+  /** TradingView's finer kinds, e.g. `cfd`, `etf`, `crypto` */
+  typespecs?: string[];
+  /** TradingView logo ids (`metal/copper`, `source/NYSE`), loaded by the browser from TV's logo CDN */
+  logo?: string;
+  sourceLogo?: string;
 }
 
 export type QuoteSession = "open" | "closed" | "pre" | "post" | "always";

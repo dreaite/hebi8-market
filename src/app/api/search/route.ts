@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE } from "@/lib/github";
-import { isCJK, looksLikeYield, needsTv, normalizeQuery, rankExternal, type SearchResult } from "@/lib/search";
+import { filterYahoo, isCJK, looksLikeYield, needsTv, normalizeQuery, rankExternal, type SearchResult } from "@/lib/search";
 import { searchContextFor } from "@/lib/search-context";
 import { adapters } from "@/lib/sources";
 import type { SearchHit } from "@/lib/sources/types";
@@ -33,7 +33,8 @@ export async function GET(request: NextRequest) {
     ascii ? safe(adapters.binance.search?.(q)) : [],
     safe(adapters.data.search?.(q)),
   ]);
-  const tv = needsTv(q, yahoo.length) && !/^data:/i.test(q) ? await searchTv(q) : [];
+  // counted after filtering: COPPER finds only futures on Yahoo, which are all dropped
+  const tv = needsTv(q, filterYahoo(q, yahoo).length) && !/^data:/i.test(q) ? await searchTv(q) : [];
   const results: SearchResult[] = rankExternal(q, { yahoo, binance, tv, data }, ctx);
   return NextResponse.json(results);
 }

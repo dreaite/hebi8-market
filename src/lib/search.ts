@@ -15,6 +15,10 @@ export interface SearchResult {
   name: string;
   exchange?: string;
   kind?: string;
+  typespecs?: string[];
+  /** TradingView logo ids of the instrument and its exchange, see `logoUrl` */
+  logo?: string;
+  sourceLogo?: string;
   source: SearchSource;
   /** Group name when the key is already watched */
   inWatchlist?: string;
@@ -206,6 +210,52 @@ export function suggestGroup(key: string, kind: string | undefined, groups: stri
   const words = GROUP_SYNONYMS[label];
   const fuzzy = groups.find((g) => words.some((w) => compact(g).includes(w)));
   return fuzzy ?? groups[0] ?? label;
+}
+
+// ---------------------------------------------------------------------------- row labels
+
+/** A logo id from TradingView's search, as the URL of its icon on TV's CDN. */
+export const logoUrl = (logo: string) => `https://s3-symbol-logo.tradingview.com/${logo}.svg`;
+
+const KIND_LABELS: Record<string, string> = {
+  stock: "股票",
+  equity: "股票",
+  etf: "ETF",
+  fund: "基金",
+  index: "指数",
+  futures: "期货",
+  future: "期货",
+  crypto: "加密",
+  cryptocurrency: "加密",
+  forex: "外汇",
+  currency: "外汇",
+  bond: "债券",
+  commodity: "商品",
+  cfd: "CFD",
+  dataset: "数据",
+};
+
+/**
+ * The short type on a search row, as TradingView shows it: its typespecs first (`commodity` +
+ * `cfd` is a CFD, an index CFD says so), then the kind, then what the key itself says.
+ */
+export function typeLabel(r: Pick<SearchResult, "key" | "kind" | "typespecs">): string | undefined {
+  const kind = r.kind ? KIND_LABELS[r.kind.toLowerCase()] : undefined;
+  if (r.typespecs?.includes("cfd")) return kind && kind !== "商品" && kind !== "CFD" ? `${kind} CFD` : "CFD";
+  if (r.typespecs?.includes("crypto")) return "加密";
+  if (r.typespecs?.includes("etf")) return "ETF";
+  if (kind) return kind;
+  if (isSynthetic(r.key)) return "比价";
+  const { source, ticker } = parseKey(r.key);
+  if (source === "data") return "数据";
+  if (source === "binance") return "加密";
+  if (source === "yahoo") {
+    // Yahoo's own spelling: ^ indices, =F futures, =X currencies
+    if (ticker.startsWith("^")) return "指数";
+    if (ticker.endsWith("=F")) return "期货";
+    if (ticker.endsWith("=X")) return "外汇";
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------- matching
@@ -441,7 +491,9 @@ export function rankExternal(query: string, raw: RawExternal, ctx: SearchContext
   const watched = new Map(ctx.watchlist.map((w) => [w.key, w]));
   const merged = [...(raw.data ?? []), ...raw.binance, ...filterYahoo(q, raw.yahoo), ...filterTv(q, raw.tv)].filter((h) => isValidKey(h.key));
 
-  // one row per instrument: the preferred key wins, otherwise the first seen
+  // one row per instrument: the preferred key wins, otherwise the first seen; logos it lacks come
+  // from the others (Yahoo has none, TradingView's listing of the same stock does), the exchange
+  // logo with the exchange name it belongs to
   const groups = new Map<string, SearchHit[]>();
   for (const h of merged) {
     const canon = canonicalKey(h.key, h.kind);
@@ -449,7 +501,12 @@ export function rankExternal(query: string, raw: RawExternal, ctx: SearchContext
     if (list) list.push(h);
     else groups.set(canon, [h]);
   }
-  const unique = [...groups.entries()].map(([canon, list]) => list.find((h) => h.key === canon) ?? list[0]);
+  const unique = [...groups.entries()].map(([canon, list]) => {
+    const h = list.find((x) => x.key === canon) ?? list[0];
+    const logo = h.logo ?? list.find((x) => x.logo)?.logo;
+    const source = h.sourceLogo ? h : list.find((x) => x.sourceLogo);
+    return { ...h, logo, sourceLogo: source?.sourceLogo, exchange: source?.exchange ?? h.exchange };
+  });
 
   return unique
     .map((h, i) => {
@@ -471,6 +528,9 @@ export function rankExternal(query: string, raw: RawExternal, ctx: SearchContext
         name: w?.name ?? dict?.zh ?? h.name,
         exchange: h.exchange,
         kind: h.kind,
+        typespecs: h.typespecs,
+        logo: h.logo,
+        sourceLogo: h.sourceLogo,
         source: parseKey(h.key).source,
         inWatchlist: w?.group,
         suggestedGroup: w?.group ?? suggestGroup(h.key, h.kind, ctx.groups),
@@ -482,10 +542,19 @@ export function rankExternal(query: string, raw: RawExternal, ctx: SearchContext
     .map((x) => x.result);
 }
 
-/** Local rows first; external rows that repeat a local key are dropped. */
+/**
+ * Local rows first; external rows that repeat a local key are dropped, after lending it what the
+ * source says about the instrument (exchange, type, logos).
+ */
 export function mergeResults(local: SearchResult[], external: SearchResult[]): SearchResult[] {
+  const byKey = new Map(external.map((r) => [r.key, r]));
   const seen = new Set(local.map((r) => r.key));
-  const out = [...local];
+  const out = local.map((r) => {
+    const e = byKey.get(r.key);
+    if (!e) return r;
+    const { exchange, kind, typespecs, logo, sourceLogo } = e;
+    return { exchange, kind, typespecs, logo, sourceLogo, ...r };
+  });
   for (const r of external) {
     if (seen.has(r.key)) continue;
     seen.add(r.key);

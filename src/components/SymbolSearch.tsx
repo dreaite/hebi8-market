@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { analyzeExpression, directKey, insertText, isCJK, isExpression, localSearch, mergeResults, sameSpread, suggestGroup, type SearchContext, type SearchResult } from "@/lib/search";
+import { analyzeExpression, directKey, insertText, isCJK, isExpression, localSearch, logoUrl, mergeResults, sameSpread, suggestGroup, typeLabel, type SearchContext, type SearchResult } from "@/lib/search";
 import { isSynthetic, tickerOf } from "@/lib/symbols";
 import { synthOperand } from "@/lib/synth";
 import { displayName } from "@/lib/wellknown";
@@ -53,6 +53,29 @@ const OPERATORS = [
   { text: ")", label: ")", title: "右括号" },
 ];
 const EXAMPLES = ["BTC/GOLD", "SPY/QQQ", "2*(SPY - QQQ)"];
+
+/** The instrument's round logo, or its first letter when there is none or it does not load. Remount it (`key`) for another logo. */
+function SymbolLogo({ logo, ticker }: { logo?: string; ticker: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!logo || failed) {
+    const letter = ticker.replace(/^[=^]/, "").replace(/^[A-Z_]+:/, "").charAt(0).toUpperCase();
+    return (
+      <span aria-hidden className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-line text-[10px] text-muted">
+        {letter}
+      </span>
+    );
+  }
+  // eslint-disable-next-line @next/next/no-img-element -- TradingView's SVG logos, nothing to optimise
+  return <img src={logoUrl(logo)} alt="" width={18} height={18} loading="lazy" onError={() => setFailed(true)} className="h-[18px] w-[18px] shrink-0 rounded-full" />;
+}
+
+/** The exchange's small logo before its name; just the name when it does not load. */
+function SourceLogo({ logo }: { logo: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  // eslint-disable-next-line @next/next/no-img-element -- TradingView's SVG logos, nothing to optimise
+  return <img src={logoUrl(logo)} alt="" width={14} height={14} loading="lazy" onError={() => setFailed(true)} className="h-[14px] w-[14px] shrink-0 rounded-full" />;
+}
 
 type Section = "key" | "watchlist" | "common" | "external";
 const sectionOf = (r: SearchResult): Section =>
@@ -323,6 +346,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
         {items.map(({ r, section, header }, i) => {
           const isActive = i === active;
           const ticker = tickerOf(r.key);
+          const type = typeLabel(r);
           return (
             <li key={r.key} role="presentation">
               {header && <div className="px-3 pt-2 pb-1 text-[11px] text-muted">{header}</div>}
@@ -335,14 +359,22 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
                 onClick={() => pick(r)}
                 className={`flex cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1.5 ${isActive ? "bg-bg" : ""}`}
               >
+                <SymbolLogo key={r.logo} logo={r.logo} ticker={ticker} />
                 <span className="min-w-0 flex-1 truncate">
                   {r.source === "key" && !replaces(r) && <span className="mr-1 text-muted">使用</span>}
                   <span className="text-sm" title={r.name}>
                     {r.name}
                   </span>
                   {r.name !== ticker && <span className="ml-2 font-mono text-[11px] text-muted">{ticker}</span>}
-                  {r.exchange && <span className="ml-2 text-[11px] text-muted">{r.exchange}</span>}
                 </span>
+                {/* like TradingView's search: type, then exchange name and logo, on the right */}
+                {(type || r.exchange) && (
+                  <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted">
+                    {type && <span>{type}</span>}
+                    {r.exchange && <span className="max-w-[9rem] truncate max-sm:hidden">{r.exchange}</span>}
+                    {r.sourceLogo && <SourceLogo key={r.sourceLogo} logo={r.sourceLogo} />}
+                  </span>
+                )}
                 {replaces(r) ? (
                   isActive && <span className="shrink-0 text-[11px] text-muted">替换</span>
                 ) : mode === "pick" && pickActions ? (

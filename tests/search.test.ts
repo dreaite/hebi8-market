@@ -16,9 +16,11 @@ import {
   resolveOperand,
   sameSpread,
   suggestGroup,
+  typeLabel,
   type SearchContext,
   type SearchResult,
 } from "@/lib/search";
+import { tvSearchHit } from "@/lib/sources/tradingview";
 import { displayName } from "@/lib/wellknown";
 
 const ctx: SearchContext = {
@@ -244,6 +246,86 @@ describe("rankExternal", () => {
     const merged = mergeResults(local, external);
     expect(merged.filter((r) => r.key === "binance:BTCUSDT")).toHaveLength(1);
     expect(merged[0].source).toBe("key");
+  });
+
+  it("keeps a TradingView listing's logos on the Yahoo row it merges into", () => {
+    const rows = rankExternal(
+      "scco",
+      {
+        binance: [],
+        yahoo: [{ key: "yahoo:SCCO", name: "Southern Copper Corporation", exchange: "NYSE", kind: "equity" }],
+        tv: [{ key: "tv:NYSE:SCCO", name: "Southern Copper Corporation", exchange: "NYSE", kind: "stock", typespecs: ["common"], logo: "southern-copper", sourceLogo: "source/NYSE" }],
+      },
+      ctx,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ key: "yahoo:SCCO", kind: "equity", exchange: "NYSE", logo: "southern-copper", sourceLogo: "source/NYSE" });
+  });
+
+  it("tells look-alike CFDs apart by their exchange logo, not the instrument's", () => {
+    const cfd = (prefix: string, exchange: string) => ({ key: `tv:${prefix}:COPPER`, name: "Copper", exchange, kind: "commodity", typespecs: ["cfd"], logo: "metal/copper", sourceLogo: `source/${prefix}` });
+    const rows = rankExternal("copper", { binance: [], yahoo: [], tv: [cfd("PEPPERSTONE", "Pepperstone"), cfd("CMCMARKETS", "CMC Markets")] }, ctx);
+    expect(rows.map((r) => [r.key, r.logo, r.sourceLogo, r.exchange, typeLabel(r)])).toEqual([
+      ["tv:PEPPERSTONE:COPPER", "metal/copper", "source/PEPPERSTONE", "Pepperstone", "CFD"],
+      ["tv:CMCMARKETS:COPPER", "metal/copper", "source/CMCMARKETS", "CMC Markets", "CFD"],
+    ]);
+  });
+
+  it("lends local rows the exchange, type and logos of the external row with their key", () => {
+    const local = localSearch("黄金", ctx);
+    const external: SearchResult[] = [
+      { key: "tv:TVC:GOLD", name: "CFDs on Gold", exchange: "TVC", kind: "commodity", typespecs: ["cfd"], logo: "metal/gold", sourceLogo: "provider/tvc", source: "tv", suggestedGroup: "宏观" },
+    ];
+    const gold = mergeResults(local, external).find((r) => r.key === "tv:TVC:GOLD")!;
+    expect(gold).toMatchObject({ name: "黄金", source: "watchlist", inWatchlist: "宏观", exchange: "TVC", logo: "metal/gold", sourceLogo: "provider/tvc" });
+    expect(typeLabel(gold)).toBe("CFD");
+    // nothing to lend: no logo, the row falls back to its initial
+    expect(mergeResults(localSearch("qqq", ctx), [])[0].logo).toBeUndefined();
+  });
+});
+
+describe("typeLabel", () => {
+  it("prefers TradingView's typespecs, then the kind", () => {
+    expect(typeLabel({ key: "tv:FX:COPPER", kind: "commodity", typespecs: ["cfd"] })).toBe("CFD");
+    expect(typeLabel({ key: "tv:TVC:SPX", kind: "index", typespecs: ["main", "cfd"] })).toBe("指数 CFD");
+    expect(typeLabel({ key: "tv:SP:SPX", kind: "index", typespecs: ["main"] })).toBe("指数");
+    expect(typeLabel({ key: "tv:PYTH:SPY", kind: "stock", typespecs: ["crypto", "oracle"] })).toBe("加密");
+    expect(typeLabel({ key: "tv:AMEX:SPY", kind: "fund", typespecs: ["etf"] })).toBe("ETF");
+    expect(typeLabel({ key: "tv:COMEX:HG1!", kind: "futures" })).toBe("期货");
+    expect(typeLabel({ key: "tv:TVC:US10Y", kind: "bond", typespecs: ["government", "yield"] })).toBe("债券");
+    expect(typeLabel({ key: "tv:OANDA:EURUSD", kind: "forex" })).toBe("外汇");
+    expect(typeLabel({ key: "yahoo:SCCO", kind: "equity" })).toBe("股票");
+    expect(typeLabel({ key: "yahoo:GLD", kind: "etf" })).toBe("ETF");
+    expect(typeLabel({ key: "yahoo:^GSPC", kind: "index" })).toBe("指数");
+    expect(typeLabel({ key: "data:gpu/4090", kind: "dataset" })).toBe("数据");
+  });
+
+  it("reads the key when nothing says", () => {
+    expect(typeLabel({ key: "=BTC/GOLD" })).toBe("比价");
+    expect(typeLabel({ key: "data:gpu/4090" })).toBe("数据");
+    expect(typeLabel({ key: "binance:BTCUSDT" })).toBe("加密");
+    expect(typeLabel({ key: "yahoo:^HSI" })).toBe("指数");
+    expect(typeLabel({ key: "yahoo:GC=F" })).toBe("期货");
+    expect(typeLabel({ key: "yahoo:CNY=X" })).toBe("外汇");
+    expect(typeLabel({ key: "yahoo:0700.HK" })).toBeUndefined();
+    expect(typeLabel({ key: "tv:TVC:GOLD" })).toBeUndefined();
+  });
+});
+
+describe("tvSearchHit", () => {
+  it("keeps the logos and typespecs of TradingView's search result", () => {
+    expect(
+      tvSearchHit({ symbol: "COPPER", description: "Copper Cash Contract", type: "commodity", exchange: "Pepperstone", prefix: "PEPPERSTONE", typespecs: ["cfd"], logoid: "metal/copper", logo: { logoid: "metal/copper" }, source_logoid: "source/PEPPERSTONE" }),
+    ).toEqual({ key: "tv:PEPPERSTONE:COPPER", name: "Copper Cash Contract", exchange: "Pepperstone", kind: "commodity", typespecs: ["cfd"], logo: "metal/copper", sourceLogo: "source/PEPPERSTONE" });
+  });
+
+  it("builds the id from the exchange without a prefix and finds a coin's logo under logo", () => {
+    expect(tvSearchHit({ symbol: "COPPER", description: "Copper CFD", type: "commodity", exchange: "FOREXCOM", typespecs: ["cfd"], logoid: "metal/copper", source_logoid: "source/FOREXCOM" }).key).toBe("tv:FOREXCOM:COPPER");
+    expect(tvSearchHit({ symbol: "BTCUSDT", description: "Bitcoin / TetherUS", type: "spot", exchange: "Binance", prefix: "BINANCE", typespecs: ["crypto"], logoid: null, logo: { logoid: "crypto/XTVCBTC" }, source_logoid: "source/BINANCE" })).toMatchObject({
+      key: "tv:BINANCE:BTCUSDT",
+      logo: "crypto/XTVCBTC",
+    });
+    expect(tvSearchHit({ symbol: "US10YR", description: "US 10Y", type: "bond", exchange: "FP Markets", prefix: "FPMARKETS", typespecs: ["cfd"], logoid: null, logo: null, source_logoid: "source/FPMARKETS" }).logo).toBeUndefined();
   });
 });
 
