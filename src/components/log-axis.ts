@@ -1,4 +1,4 @@
-import type { AxisTick, YAxisTemplate } from "klinecharts";
+import type { AxisTick, Chart, YAxisTemplate } from "klinecharts";
 
 /** KLineChart's own log: 0 stays 0 and a negative value is mirrored. */
 function log(value: number): number {
@@ -11,10 +11,10 @@ const TICK_COUNT = 8;
 /** KChart.tsx's y-axis tick text size; like the library's ticks, labels keep two lines apart and off the edges. */
 const TEXT_HEIGHT = 11;
 
-/** The m × 10^n nearest to `x` (by ratio) for m in `mantissas`, and the decimals it needs. */
-function niceStep(x: number, mantissas: number[]): { step: number; decimals: number } {
+/** The m × 10^n nearest to `x` (by ratio) for m in `mantissas`. */
+function niceStep(x: number, mantissas: number[]): number {
   const exp = Math.floor(Math.log10(x));
-  let best = { step: 0, decimals: 0 };
+  let best = 0;
   let bestDist = Infinity;
   for (const e of [exp, exp + 1]) {
     for (const m of mantissas) {
@@ -22,7 +22,7 @@ function niceStep(x: number, mantissas: number[]): { step: number; decimals: num
       const dist = Math.abs(Math.log(step / x));
       if (dist < bestDist) {
         bestDist = dist;
-        best = { step, decimals: Math.max(0, -e + (m === 2.5 ? 1 : 0)) };
+        best = step;
       }
     }
   }
@@ -30,8 +30,8 @@ function niceStep(x: number, mantissas: number[]): { step: number; decimals: num
 }
 
 /** Library-default formatting: thousands separated by commas, 3+ leading zeros folded into 0.0{n}. */
-function tickText(value: number, decimals: number): string {
-  const [int, frac] = value.toFixed(decimals).split(".");
+function tickText(value: number, precision: number): string {
+  const [int, frac] = value.toFixed(precision).split(".");
   const text = int.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   if (frac === undefined) return text;
   const zeros = /^0*/.exec(frac)![0].length;
@@ -42,38 +42,39 @@ function tickText(value: number, decimals: number): string {
  * TradingView's log-scale ticks between two log10 prices: evenly spaced on screen, each one a
  * round number. Spanning decades per tick, only powers of ten; around a third of a decade, the
  * 1, 2 and 5 of each decade; closer, steps of 1, 2, 2.5 or 5 × 10^n sized to the price where they
- * are, so a narrow range gets the even steps of a linear axis. Decimals follow each tick's step.
+ * are, so a narrow range gets the even steps of a linear axis. Labels use the symbol's price
+ * precision; a tick that precision cannot show exactly (602.5 at 0 decimals) is dropped.
  */
-export function logTicks(realFrom: number, realTo: number, height: number): AxisTick[] {
+export function logTicks(realFrom: number, realTo: number, height: number, precision: number): AxisTick[] {
   const stride = (realTo - realFrom) / TICK_COUNT;
-  const values: { value: number; decimals: number }[] = [];
+  const values: number[] = [];
   if (stride >= 0.65) {
     const k = Math.max(1, Math.round(stride));
-    for (let e = Math.ceil(realFrom / k) * k; e <= realTo; e += k) values.push({ value: 10 ** e, decimals: Math.max(0, -e) });
+    for (let e = Math.ceil(realFrom / k) * k; e <= realTo; e += k) values.push(10 ** e);
   } else if (stride >= Math.log10(2)) {
     for (let e = Math.floor(realFrom); e <= realTo; e++) {
       for (const m of [1, 2, 5]) {
-        const value = +(m * 10 ** e).toFixed(Math.max(0, -e));
-        if (Math.log10(value) >= realFrom && Math.log10(value) <= realTo) values.push({ value, decimals: Math.max(0, -e) });
+        const value = m * 10 ** e;
+        if (Math.log10(value) >= realFrom && Math.log10(value) <= realTo) values.push(value);
       }
     }
   } else {
     // the price distance one stride covers at `value`; the step grows along 1, 2, 5 as that does
-    // (a 2.5 there would add a decimal for a tick or two)
+    // (a 2.5 there would only last a tick or two)
     const span = (value: number) => value * (10 ** stride - 1);
     const from = 10 ** realFrom;
     const to = 10 ** realTo;
-    let { step, decimals } = niceStep(span(from), [1, 2, 2.5, 5]);
+    let step = niceStep(span(from), [1, 2, 2.5, 5]);
     let value = Math.ceil(from / step - 1e-9) * step;
     while (value <= to) {
-      values.push({ value: +value.toFixed(decimals), decimals });
+      values.push(value);
       const bigger = niceStep(span(value), [1, 2, 5]);
-      if (bigger.step <= step) {
+      if (bigger <= step) {
         value = (Math.floor(value / step + 1e-9) + 1) * step;
         continue;
       }
       // on a bigger step, the multiple of it nearest (by ratio) to one stride up: 4000 then 10,000, not 5000
-      ({ step, decimals } = bigger);
+      step = bigger;
       const target = value * 10 ** stride;
       const below = Math.max(Math.floor(value / step + 1e-9) + 1, Math.floor(target / step)) * step;
       value = target / below <= (below + step) / target ? below : below + step;
@@ -81,10 +82,12 @@ export function logTicks(realFrom: number, realTo: number, height: number): Axis
   }
   const ticks: AxisTick[] = [];
   let last = -Infinity;
-  for (const { value, decimals } of values) {
+  for (const value of values) {
     const coord = Math.round((1 - (Math.log10(value) - realFrom) / (realTo - realFrom)) * height);
     if (coord <= TEXT_HEIGHT || coord >= height - TEXT_HEIGHT || Math.abs(coord - last) < TEXT_HEIGHT * 2) continue;
-    ticks.push({ coord, value, text: tickText(value, decimals) });
+    // a tick the precision cannot show as is would be labelled with a neighbour's price, or a twin's
+    if (Math.abs(+value.toFixed(precision) - value) > value * 1e-9) continue;
+    ticks.push({ coord, value, text: tickText(value, precision) });
     last = coord;
   }
   return ticks;
@@ -111,5 +114,9 @@ export const LOG_AXIS: YAxisTemplate = {
     const realTo = log(r.to);
     return { ...r, realFrom, realTo, realRange: realTo - realFrom };
   },
-  createTicks: ({ range, bounding }) => logTicks(range.realFrom, range.realTo, bounding.height),
+  // called on the axis itself; the precision is the one the library's own ticks and price labels use
+  createTicks(this: { getParent: () => { getChart: () => Chart } }, { range, bounding }) {
+    const precision = this.getParent().getChart().getSymbol()?.pricePrecision ?? 2;
+    return logTicks(range.realFrom, range.realTo, bounding.height, precision);
+  },
 };

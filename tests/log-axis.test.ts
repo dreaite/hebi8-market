@@ -26,32 +26,37 @@ describe("log axis", () => {
 });
 
 describe("log axis ticks", () => {
-  const ticks = (lo: number, hi: number) => logTicks(Math.log10(lo), Math.log10(hi), 650);
-  const texts = (lo: number, hi: number) => ticks(lo, hi).map((t) => t.text);
+  const ticks = (lo: number, hi: number, precision: number) => logTicks(Math.log10(lo), Math.log10(hi), 650, precision);
+  const texts = (lo: number, hi: number, precision: number) => ticks(lo, hi, precision).map((t) => t.text);
 
-  it("steps by round numbers sized to where they are", () => {
-    expect(texts(0.4, 0.96)).toEqual(["0.45", "0.50", "0.55", "0.60", "0.65", "0.7", "0.8", "0.9"]);
-    expect(texts(0.08, 0.56)).toEqual(["0.10", "0.12", "0.15", "0.20", "0.25", "0.30", "0.4", "0.5"]);
-    expect(texts(0.000004, 0.000046)).toEqual(["0.0{5}6", "0.0{5}8", "0.0{4}10", "0.0{4}15", "0.0{4}20", "0.0{4}3", "0.0{4}4"]);
+  it("steps by round numbers sized to where they are, labelled at the symbol's precision", () => {
+    expect(texts(0.4, 0.96, 5)).toEqual(["0.45000", "0.50000", "0.55000", "0.60000", "0.65000", "0.70000", "0.80000", "0.90000"]);
+    expect(texts(0.08, 0.56, 5)).toEqual(["0.10000", "0.12000", "0.15000", "0.20000", "0.25000", "0.30000", "0.40000", "0.50000"]);
+    expect(texts(0.000004, 0.000046, 8)).toEqual(["0.0{5}600", "0.0{5}800", "0.0{4}1000", "0.0{4}1500", "0.0{4}2000", "0.0{4}3000", "0.0{4}4000"]);
   });
 
   it("keeps the 1, 2 and 5 of each decade across a few decades, and powers of ten across many", () => {
-    expect(texts(100, 64000)).toEqual(["200", "500", "1,000", "2,000", "5,000", "10,000", "20,000", "50,000"]);
-    expect(texts(0.0012, 64000)).toEqual(["0.01", "0.1", "1", "10", "100", "1,000", "10,000"]);
+    expect(texts(100, 64000, 2)).toEqual(["200.00", "500.00", "1,000.00", "2,000.00", "5,000.00", "10,000.00", "20,000.00", "50,000.00"]);
+    expect(texts(0.0012, 64000, 2)).toEqual(["0.01", "0.10", "1.00", "10.00", "100.00", "1,000.00", "10,000.00"]);
   });
 
   it("falls back to even steps on a narrow range", () => {
-    expect(texts(600, 620)).toEqual(["602.5", "605.0", "607.5", "610.0", "612.5", "615.0", "617.5"]);
+    expect(texts(600, 620, 2)).toEqual(["602.50", "605.00", "607.50", "610.00", "612.50", "615.00", "617.50"]);
   });
 
   it("moves to a bigger step at the multiple of it nearest one stride up", () => {
-    expect(texts(1892, 207970)).toEqual(["4,000", "10,000", "20,000", "40,000", "100,000"]);
-    expect(texts(0.35, 1.2)).toEqual(["0.40", "0.45", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]);
+    expect(texts(1892, 207970, 2)).toEqual(["4,000.00", "10,000.00", "20,000.00", "40,000.00", "100,000.00"]);
+    expect(texts(0.35, 1.2, 5)).toEqual(["0.40000", "0.45000", "0.50000", "0.60000", "0.70000", "0.80000", "0.90000", "1.00000"]);
+  });
+
+  it("drops ticks the precision cannot show exactly", () => {
+    expect(texts(600, 620, 0)).toEqual(["605", "610", "615"]);
+    expect(texts(0.000004, 0.000046, 5)).toEqual(["0.0{4}1", "0.0{4}2", "0.0{4}3", "0.0{4}4"]);
   });
 
   it("places each tick on the log scale, apart and clear of the edges", () => {
     for (const [lo, hi] of [[0.4, 0.96], [0.08, 0.56], [0.000004, 0.000046], [100, 64000], [3, 126000], [600, 620], [1892, 207970], [1, 5]]) {
-      const t = ticks(lo, hi);
+      const t = ticks(lo, hi, 8);
       const realFrom = Math.log10(lo);
       const realRange = Math.log10(hi) - realFrom;
       t.forEach(({ coord, value }, i) => {
