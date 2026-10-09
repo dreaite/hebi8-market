@@ -273,7 +273,7 @@ interface SourceAdapter {
 | 源 | 价格 | adj | 增量 | 搜索 | 备注 |
 |---|---|---|---|---|---|
 | `yahoo` | `chart()` 的 open/high/low/close 本身是拆股复权，**原样存** | `adjclose / close` | 全量 replace | `new YahooFinance().search(q)` | 直接请求 Yahoo 会 429，必须走 yahoo-finance2 |
-| `tv` | `setMarket(ticker, { timeframe: "D", range: 6000, adjustment: "splits" })` | 1 | 全量 replace | `TradingView.searchMarketV3(q)` | 一次同步共用一个 `Client`，顺序开 chart；30s 超时；逆向接口可能失效，错误只记在该标的上 |
+| `tv` | `setMarket(ticker, { timeframe: "D", range: 100_000, adjustment: "splits" })` | 1 | 全量 replace | `TradingView.searchMarketV3(q)` | 一次同步共用一个 `Client`，顺序开 chart；30s 超时；逆向接口可能失效，错误只记在该标的上 |
 | `binance` | `/api/v3/klines` 1d | 1 | 增量 merge（回拉 3 天覆盖未收盘的那根） | 静态：`/^[A-Z0-9]{2,12}USDT$/` 命中即给候选 | 00:00 UTC 开盘，无需时区换算 |
 | `data` | 数据集仓库里的 CSV（§2.4） | 1 | 全量 replace | 列出 yaml 里各数据集清单中的序列 | 日期直接是 UTC 零点，不经 `tradingDay` |
 

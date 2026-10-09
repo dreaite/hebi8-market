@@ -14,7 +14,7 @@ const yf = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
  */
 export const yahoo: SourceAdapter = {
   async fetchDaily(ticker) {
-    const result = await yf.chart(ticker, { period1: new Date("1970-01-02"), interval: "1d" });
+    const result = await yf.chart(ticker, { period1: new Date("1800-01-01"), interval: "1d" });
     const timeZone = result.meta.exchangeTimezoneName ?? "UTC";
     const bars: Bar[] = [];
     for (const q of result.quotes) {

@@ -3,8 +3,8 @@ import { dedupeBars } from "../series";
 import { tradingDay } from "../time";
 import { weekdaySession, type FetchResult, type Quote, type QuoteSession, type SourceAdapter } from "./types";
 
-/** ~24 years of trading days; enough for a long-term view. */
-const RANGE = 6000;
+/** More bars than any symbol has (DJI since 1896 is ~33k): the server returns its whole history, no login needed. */
+const RANGE = 100_000;
 const TIMEOUT_MS = 30_000;
 
 /** One websocket per sync run: charts open one after another and the client closes with the last. */

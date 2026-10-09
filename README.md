@@ -40,7 +40,7 @@
 |---|---|---|
 | `yahoo` | 美股、港股、A 股、指数、ETF | 经 [yahoo-finance2](https://github.com/gadicc/yahoo-finance2) 拉取完整日线历史。价格是拆股复权价，分红因子另存，`prices: total` 时折进价格。直接请求 Yahoo 接口会返回 429，所以必须走这个库。 |
 | `binance` | 加密货币现货 | 公开 K 线接口，无需 key，增量拉取。 |
-| `tv` | 指数、国债收益率、外汇、商品等 Yahoo 缺的品种 | 非官方的 [TradingView-API](https://github.com/Mathieu2301/TradingView-API)，无需登录，最多约 6000 根日线。属于逆向接口，TradingView 改动协议后可能失效。 |
+| `tv` | 指数、国债收益率、外汇、商品等 Yahoo 缺的品种 | 非官方的 [TradingView-API](https://github.com/Mathieu2301/TradingView-API)，无需登录，取该品种的全部日线（如 TVC:DJI 从 1896 年起）。属于逆向接口，TradingView 改动协议后可能失效。 |
 | `data` | 自己的日线数据集，比如爬虫每天推送的显卡二手价 | 一个 git 仓库或本机目录，按下文的约定放 CSV。hebi8 只读不爬。 |
 
 代码示例：`yahoo:AAPL`、`yahoo:0700.HK`、`yahoo:600519.SS`、`yahoo:^GSPC`、`binance:BTCUSDT`、`tv:TVC:US10Y`、`tv:HSI:HSTECH`、`tv:FX_IDC:USDCNH`、`data:gpu/4090-xianyu`、`=BTC/GOLD`。
