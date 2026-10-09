@@ -778,6 +778,12 @@ export function KChart({
   /** Each sub pane's height as created or last dragged, before `paneScaleRef` shrinks it to fit a short chart. */
   const paneHeightsRef = useRef(new Map<string, number>());
   const paneScaleRef = useRef(1);
+  /** The symbol in each compare slot: a removed compare moves the next one into its slot, so heights go by symbol. */
+  const compareKeysRef = useRef<string[]>([]);
+  const heightKey = (paneId: string) => {
+    const slot = compareKeysRef.current.findIndex((_, i) => comparePane(i) === paneId);
+    return slot < 0 ? paneId : `cmp:${compareKeysRef.current[slot]}`;
+  };
   const subPanes = (chart: Chart) => (chart.getPaneOptions() as PaneOptions[]).filter((p) => p.id !== CANDLE_PANE && p.id !== X_AXIS_PANE);
   const sizePanes = () => {
     const chart = chartRef.current;
@@ -787,19 +793,21 @@ export function KChart({
     chart.setPaneOptions({ id: CANDLE_PANE, minHeight: main });
     // like TradingView on a short window: the sub panes shrink in proportion instead of squeezing the main pane
     const panes = subPanes(chart);
-    const wanted = panes.map((p) => paneHeightsRef.current.get(p.id) ?? SUB_PANE_HEIGHT);
+    const wanted = panes.map((p) => paneHeightsRef.current.get(heightKey(p.id)) ?? SUB_PANE_HEIGHT);
     const room = el.clientHeight - main - (chart.getSize(X_AXIS_PANE)?.height ?? 0) - panes.length * chart.getStyles().separator.size;
     paneScaleRef.current = Math.min(1, room / wanted.reduce((a, b) => a + b, 0));
+    // the drag floor shrinks too, or a separator between two shrunk panes could not move
+    const minHeight = Math.round(SUB_PANE_MIN_HEIGHT * paneScaleRef.current);
     panes.forEach((p, i) => {
       const height = Math.floor(wanted[i] * paneScaleRef.current);
-      if (height !== p.height) chart.setPaneOptions({ id: p.id, height, minHeight: Math.min(SUB_PANE_MIN_HEIGHT, height) });
+      if (height !== p.height || minHeight !== p.minHeight) chart.setPaneOptions({ id: p.id, height, minHeight });
     });
   };
   /** A dragged separator sets the heights the panes go back to on a taller chart. */
   const keepPaneHeights = () => {
     const chart = chartRef.current;
     if (!chart) return;
-    for (const p of subPanes(chart)) paneHeightsRef.current.set(p.id, p.height / paneScaleRef.current);
+    for (const p of subPanes(chart)) paneHeightsRef.current.set(heightKey(p.id), p.height / paneScaleRef.current);
   };
 
   const candleAxis = () => chartRef.current?.getYAxes({ paneId: CANDLE_PANE })[0] as unknown as AxisImpl | undefined;
@@ -1147,6 +1155,7 @@ export function KChart({
     for (let slot = 0; slot < MAX_COMPARE; slot++) chart.removeIndicator({ name: compareName(slot) });
     basesRef.current = [];
     const entries = JSON.parse(compareKey) as KChartProps["compare"];
+    compareKeysRef.current = entries.slice(0, MAX_COMPARE).map((c) => c.key);
     entries.slice(0, MAX_COMPARE).forEach((c, slot) => {
       compareSeries[slot] = refs[c.key]?.c;
       if (!compareSeries[slot]) return;
