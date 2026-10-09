@@ -5,6 +5,7 @@
  * unfinished daily bar is built from it in memory when alerts are judged, never written to `bars`.
  */
 import { compile } from "@/indicators/formula";
+import type { SymbolStatus } from "./api-types";
 import { runAlerts } from "./alerts";
 import { findItem, type Config } from "./config";
 import type { Bar } from "./series";
@@ -203,4 +204,12 @@ export function resetQuotes(): void {
   state.seen.clear();
   state.failures.clear();
   state.intraday.clear();
+}
+
+/** The chart's status strip: sync time and error, the last quote, and its session until the round after next is overdue. */
+export function symbolStatus(key: string): SymbolStatus {
+  const row = getSymbol(key);
+  const quote = readQuotes()[key];
+  const current = quote && Date.now() - quote.fetchedAt < (FAST.includes(quote.session) ? 3 * ROUND_MS : SLOW_MS + 2 * ROUND_MS);
+  return { syncedAt: row?.syncedAt ?? null, syncError: row?.syncError ?? null, quotedAt: quote?.fetchedAt ?? null, session: current ? quote.session : null };
 }

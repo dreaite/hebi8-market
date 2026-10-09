@@ -16,7 +16,16 @@ export interface ChartBar {
   bench?: number;
 }
 
-export interface BarsSymbol {
+/** How fresh a symbol's data is: the daily sync and the quote polling (alert symbols only) */
+export interface SymbolStatus {
+  syncedAt: number | null;
+  syncError: string | null;
+  quotedAt: number | null;
+  /** The last quote's session while polling still keeps it current */
+  session: QuoteSession | null;
+}
+
+export interface BarsSymbol extends SymbolStatus {
   key: string;
   name: string;
   source: Source | "expr";
@@ -24,10 +33,6 @@ export interface BarsSymbol {
   currency: string | null;
   exchange: string | null;
   bench: string | null;
-  syncedAt: number | null;
-  syncError: string | null;
-  /** The 5-minute quote (alert symbols only) when it is newer than the last sync */
-  quote: { session: QuoteSession; fetchedAt: number } | null;
   /** The last daily bar's day (ms, UTC midnight); weekly and longer bars carry their bucket's start */
   lastDay: number;
 }

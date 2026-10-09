@@ -70,6 +70,7 @@ export const ROUTES = new Set([
   "/api/bars",
   "/api/search",
   "/api/help",
+  "/api/status",
   "/api/github/device",
   "/api/github/device/poll",
   "/api/github/issues",

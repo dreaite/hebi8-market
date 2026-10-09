@@ -8,7 +8,7 @@ import { addSymbol, deleteIndicator, loadSymbol, removeSymbol, saveChartState, s
 import type { AlertView } from "@/lib/alert-view";
 import { INDICATORS } from "@/indicators/catalog";
 import { compileFormula, formulaIndicatorName, formulaTemplate, isFormulaIndicator } from "@/indicators/formula-indicators";
-import type { BarsResponse, BarsSymbol } from "@/lib/api-types";
+import type { BarsResponse, BarsSymbol, SymbolStatus } from "@/lib/api-types";
 import { BRAND } from "@/lib/brand";
 import { CHART_STYLES, type ChartPrefs, type ChartStyle, type FormulaDef, type ParamOverrides } from "@/lib/config";
 import { copyText } from "@/lib/copy-text";
@@ -76,8 +76,10 @@ type DialogState =
   | { kind: "alert"; alert: AlertView | null; price: number | null }
   | null;
 
-/** The quote's session in the status strip; round-the-clock markets say nothing */
-const SESSION_LABELS: Record<QuoteSession, string | null> = { open: "盘中", pre: "盘前", post: "盘后", closed: "休市", always: null };
+/** The quote's session in the status strip */
+const SESSION_LABELS: Record<QuoteSession, string> = { open: "盘中", pre: "盘前", post: "盘后", closed: "休市", always: "24h" };
+/** src/lib/quotes.ts polls alert symbols every 5 minutes; the strip reads again just after a round */
+const QUOTE_ROUND_MS = 5 * 60_000;
 
 /** The status strip's line: the exchange (or 按需合成), the quote's session, the last day, how fresh. */
 function statusLine(meta: BarsSymbol): string {
@@ -85,9 +87,9 @@ function statusLine(meta: BarsSymbol): string {
   const day = new Date(meta.lastDay);
   return [
     synth ? "按需合成" : meta.exchange,
-    meta.quote && SESSION_LABELS[meta.quote.session],
+    meta.session && SESSION_LABELS[meta.session],
     `最新 ${day.getUTCMonth() + 1}/${day.getUTCDate()}`,
-    synth ? null : meta.syncError ? "同步失败" : meta.quote ? fmtAgo(meta.quote.fetchedAt, "报价") : fmtAgo(meta.syncedAt),
+    synth ? null : meta.syncError ? "同步失败" : (meta.quotedAt ?? 0) > (meta.syncedAt ?? 0) ? fmtAgo(meta.quotedAt, "报价") : fmtAgo(meta.syncedAt),
   ]
     .filter(Boolean)
     .join(" · ");
@@ -186,6 +188,8 @@ export function ChartView({
   const neighbour = (step: 1 | -1) => (order.length < 2 ? null : order[(Math.max(position, step > 0 ? -1 : 0) + step + order.length) % order.length]);
 
   const [data, setData] = useState<BarsResponse | null>(null);
+  // the status strip's sync and quote, read again between bar loads (which reset the chart's view)
+  const [live, setLive] = useState<SymbolStatus | null>(null);
   const [dataTf, setDataTf] = useState<Timeframe>(tf);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -260,6 +264,7 @@ export function ChartView({
         const json = await res.json();
         if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
         setData(json as BarsResponse);
+        setLive(null);
         setDataTf(tf);
         setError(null);
       })
@@ -269,6 +274,39 @@ export function ChartView({
       .finally(() => setLoading(false));
     return () => controller.abort();
   }, [symbolKey, tf, prices, withParam, reloadTick]);
+
+  // The status strip follows the quote rounds while the page is in view, and catches up when it comes back.
+  const symbol = data?.symbol;
+  useEffect(() => {
+    if (!symbol || symbol.source === "expr") return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+    const schedule = (s: SymbolStatus) => {
+      const due = (s.quotedAt ?? 0) + QUOTE_ROUND_MS + 20_000 - Date.now();
+      timer = setTimeout(poll, due > 0 ? due : QUOTE_ROUND_MS);
+    };
+    const poll = () => {
+      clearTimeout(timer);
+      if (document.visibilityState !== "visible") return;
+      fetch(`/api/status?key=${encodeURIComponent(symbol.key)}`, { signal: controller.signal })
+        .then(async (res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const s = (await res.json()) as SymbolStatus;
+          setLive(s);
+          schedule(s);
+        })
+        .catch((err: Error) => {
+          if (err.name !== "AbortError") timer = setTimeout(poll, QUOTE_ROUND_MS);
+        });
+    };
+    schedule(symbol);
+    document.addEventListener("visibilitychange", poll);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+      document.removeEventListener("visibilitychange", poll);
+    };
+  }, [symbol]);
 
   // Space opens the next symbol, so warm its bars up
   const nextKey = neighbour(1)?.key ?? null;
@@ -460,7 +498,8 @@ export function ChartView({
   const ticker = meta?.ticker ?? (isSynthetic(symbolKey) ? synthName(symbolKey) : tickerOf(symbolKey));
   const sourceLabel = meta ? (meta.source === "expr" ? "合成" : SOURCE_LABELS[meta.source]) : null;
   const syncText = meta ? (meta.source === "expr" ? "按需合成" : fmtAgo(meta.syncedAt)) : "";
-  const status = meta ? statusLine(meta) : "";
+  const shown = meta && { ...meta, ...live };
+  const status = shown ? statusLine(shown) : "";
   const subtitle = [
     TF_LABELS[dataTf],
     ...(sourceLabel ? [sourceLabel] : []),
@@ -1034,7 +1073,7 @@ export function ChartView({
       </div>
 
       {/* status strip: as high as the iPhone's home bar inset, so 0 (hidden) elsewhere; clear of the rounded corners */}
-      <div className={`h-[var(--safe-bottom)] shrink-0 overflow-hidden px-8 text-center text-[11px] leading-5 ${meta?.syncError ? "text-down" : "text-muted"}`} title={meta?.syncError ?? undefined}>
+      <div className={`h-[var(--safe-bottom)] shrink-0 overflow-hidden px-8 text-center text-[11px] leading-5 ${shown?.syncError ? "text-down" : "text-muted"}`} title={shown?.syncError ?? undefined}>
         <span className="block truncate">{status}</span>
       </div>
 

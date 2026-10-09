@@ -4,7 +4,8 @@ import { loadDaily, loadRefs, synthNoData } from "@/lib/bars";
 import { findItem } from "@/lib/config";
 import { aggregate } from "@/lib/series";
 import { pricePrecision } from "@/lib/stats";
-import { getSymbol, readQuotes } from "@/lib/store";
+import { symbolStatus } from "@/lib/quotes";
+import { getSymbol } from "@/lib/store";
 import { isSynthetic, isTimeframe, isValidKey, parseKey } from "@/lib/symbols";
 import { synthName } from "@/lib/synth";
 import { SESSION_COOKIE } from "@/lib/github";
@@ -36,7 +37,6 @@ export async function GET(request: NextRequest) {
   const item = findItem(config, key);
   const bench = item?.bench ?? null;
   const row = isSynthetic(key) ? null : getSymbol(key);
-  const quote = row ? readQuotes()[key] : undefined;
 
   let daily;
   try {
@@ -64,9 +64,7 @@ export async function GET(request: NextRequest) {
       currency: row?.currency ?? null,
       exchange: row?.exchange ?? null,
       bench,
-      syncedAt: row?.syncedAt ?? null,
-      syncError: row?.syncError ?? null,
-      quote: quote && quote.fetchedAt > (row?.syncedAt ?? 0) ? { session: quote.session, fetchedAt: quote.fetchedAt } : null,
+      ...symbolStatus(key),
       lastDay: daily[daily.length - 1].t * 1000,
     },
     pricePrecision: pricePrecision(daily[daily.length - 1].c),
