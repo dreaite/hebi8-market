@@ -23,10 +23,6 @@ export function synthNoData(key: string, cfg: Config, syncError: (key: string) =
   return missing.map((k) => `${k}：${syncError(k) ?? "暂无数据，等待同步"}`).join("；");
 }
 
-export function loadSeries(key: string, tf: Timeframe, prices: Prices, cfg: Config, read: DailyReader = readDaily): Bar[] {
-  return aggregate(loadDaily(key, prices, cfg, read), tf);
-}
-
 /**
  * Other symbols aligned to `bars`, as the columns the formula engine and the chart consume. Their
  * days after `until` (the main symbol's last daily bar) are cut before aggregating, so a weekly or

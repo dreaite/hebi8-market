@@ -509,5 +509,17 @@ describe("quote polling", () => {
         expect(body.bars.at(-1)).toMatchObject({ close: 410, bench: 101 });
       }
     });
+
+    it("a weekly formula alert reads its bench up to the main symbol's last day, like the chart", async () => {
+      const { evalRule } = await import("@/lib/conditions");
+      const { liveReader } = await import("@/lib/quotes");
+      const { writeBars, writeQuotes } = await import("@/lib/store");
+      // SPY stops on Tuesday Jan 6; BTC closes 101 on Tuesday and has a quote of 150 on Wednesday
+      writeBars(SPY, closes(400, 410), "replace");
+      writeBars(BTC, closes(100, 101), "replace");
+      writeQuotes([{ key: BTC, price: 150, time: T0 + 2 * DAY + 3600, session: "always", fetchedAt: Date.now() }]);
+      const cfg = normalizeConfig({ groups: [{ name: "美股", symbols: [{ key: SPY, bench: BTC }] }] });
+      for (const tf of ["D", "W"] as const) expect(evalRule(SPY, "bench > 130", tf, cfg, new Map(), liveReader())).toMatchObject({ now: false });
+    });
   });
 });
