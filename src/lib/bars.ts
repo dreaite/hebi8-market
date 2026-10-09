@@ -16,6 +16,13 @@ export function loadDaily(key: string, prices: Prices, cfg: Config, read: DailyR
   return evalSynth(synth, series);
 }
 
+/** Why a synthetic key has no bars: each operand without any, with its sync error. */
+export function synthNoData(key: string, cfg: Config, syncError: (key: string) => string | null, read: DailyReader = readDaily): string {
+  const missing = parseSynth(key.slice(1), cfg.aliases).keys.filter((k) => read(k).length === 0);
+  if (missing.length === 0) return "各操作数的日期没有重叠";
+  return missing.map((k) => `${k}：${syncError(k) ?? "暂无数据，等待同步"}`).join("；");
+}
+
 export function loadSeries(key: string, tf: Timeframe, prices: Prices, cfg: Config, read: DailyReader = readDaily): Bar[] {
   return aggregate(loadDaily(key, prices, cfg, read), tf);
 }

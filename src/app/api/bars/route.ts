@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type { BarsResponse } from "@/lib/api-types";
-import { loadDaily, loadRefs } from "@/lib/bars";
+import { loadDaily, loadRefs, synthNoData } from "@/lib/bars";
 import { findItem } from "@/lib/config";
 import { aggregate } from "@/lib/series";
 import { pricePrecision } from "@/lib/stats";
@@ -44,7 +44,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 400 });
   }
   if (daily.length === 0) {
-    return NextResponse.json({ error: row?.syncError ?? "暂无数据，等待同步" }, { status: 404 });
+    const why = isSynthetic(key) ? synthNoData(key, config, (k) => getSymbol(k)?.syncError ?? null) : (row?.syncError ?? "暂无数据，等待同步");
+    return NextResponse.json({ error: why }, { status: 404 });
   }
 
   const refKeys = [...withKeys, ...(bench && bench !== key ? [bench] : [])];

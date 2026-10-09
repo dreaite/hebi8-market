@@ -62,25 +62,31 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
   const [caret, setCaret] = useState(initialQuery.length);
   // where the caret goes after an operand is replaced
   const caretTo = useRef<number | null>(null);
-  const [external, setExternal] = useState<{ query: string; rows: SearchResult[] }>({ query: "", rows: [] });
-  const [fetching, setFetching] = useState<string | null>(null);
+  // external results by search text, kept while the box is open: an expression's operands need theirs to resolve
+  const [found, setFound] = useState<Map<string, SearchResult[]>>(new Map());
+  const [fetching, setFetching] = useState<string[]>([]);
   // the highlight resets whenever the list changes (query, or the operand searched), without an effect
   const [activeFor, setActiveFor] = useState<{ query: string; index: number }>({ query: "", index: 0 });
   const [groupChoice, setGroupChoice] = useState<Record<string, string>>({});
   const [newGroup, setNewGroup] = useState<{ key: string; name: string } | null>(null);
 
   const trimmed = query.trim();
-  const expr = useMemo(() => (isExpression(trimmed) ? analyzeExpression(query, caret, ctx.aliases) : null), [trimmed, query, caret, ctx.aliases]);
-  // what the sources are asked: the whole query, or the operand at the caret
+  const expr = useMemo(() => (isExpression(trimmed) ? analyzeExpression(query, caret, ctx.aliases, (t) => found.get(t)) : null), [trimmed, query, caret, ctx.aliases, found]);
+  // what the list is for: the whole query, or the operand at the caret
   const term = expr ? (expr.active?.text ?? "") : trimmed;
-  const searching = fetching === term;
+  const searching = fetching.includes(term);
+  // the sources are asked about the term (2+ ASCII characters or any CJK) and about every operand
+  // that only a search can turn into a key
+  const enough = isCJK(term) ? term.length >= 1 : term.length >= 2;
+  const lookups = [...new Set([...(enough && !directKey(term, ctx.aliases) ? [term] : []), ...(expr?.operands.filter((o) => o.pending).map((o) => o.text) ?? [])])];
+  const lookupKey = lookups.filter((q) => !found.has(q)).join("\n");
   const listFor = `${trimmed}\n${term}`;
   const active = activeFor.query === listFor ? activeFor.index : 0;
   const setActive = (index: number | ((i: number) => number)) =>
     setActiveFor({ query: listFor, index: typeof index === "function" ? index(active) : index });
   const local = useMemo(() => localSearch(term, ctx), [term, ctx]);
   const rows = useMemo(() => {
-    const merged = mergeResults(local, external.query === term ? external.rows : []);
+    const merged = mergeResults(local, found.get(term) ?? []);
     const skip = new Set(exclude);
     if (!expr) return merged.filter((r) => !skip.has(r.key));
     // an operand typed as an alias or key keeps its own row, so it can be chosen again
@@ -92,7 +98,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
     const key = w?.key ?? expr.key;
     const row: SearchResult = { key, name: w?.name ?? displayName(key), source: "key", inWatchlist: w?.group, suggestedGroup: w?.group ?? suggestGroup(key, undefined, ctx.groups) };
     return [row, ...operands];
-  }, [local, external, term, exclude, expr, ctx]);
+  }, [local, found, term, exclude, expr, ctx]);
   const items = useMemo(
     () =>
       rows.map((r, i) => {
@@ -109,25 +115,25 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
     caretTo.current = null;
   }, [query]);
 
-  // external search: 2+ ASCII characters or any CJK, 300ms after the last keystroke
+  // external search, 300ms after the last keystroke
   useEffect(() => {
-    const q = term;
-    const enough = isCJK(q) ? q.length >= 1 : q.length >= 2;
-    if (!enough || directKey(q, ctx.aliases)) return;
+    if (!lookupKey) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      setFetching(q);
-      fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: controller.signal })
-        .then((res) => (res.ok ? (res.json() as Promise<SearchResult[]>) : []))
-        .then((list) => setExternal({ query: q, rows: list }))
-        .catch(() => undefined)
-        .finally(() => setFetching((f) => (f === q ? null : f)));
+      for (const q of lookupKey.split("\n")) {
+        setFetching((f) => [...f, q]);
+        fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: controller.signal })
+          .then((res) => (res.ok ? (res.json() as Promise<SearchResult[]>) : []))
+          .then((list) => setFound((f) => new Map(f).set(q, list)))
+          .catch(() => undefined)
+          .finally(() => setFetching((f) => f.filter((x) => x !== q)));
+      }
     }, 300);
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [term, ctx.aliases]);
+  }, [lookupKey]);
 
   const groupOptions = [...ctx.groups, NEW_GROUP];
   const chosenGroup = (r: SearchResult) => groupChoice[r.key] ?? r.suggestedGroup;

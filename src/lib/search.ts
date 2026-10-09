@@ -84,22 +84,23 @@ export function isExpression(query: string): boolean {
 
 /**
  * The key an operand stands for, without looking at the watchlist: an alias or key as typed, a
- * dictionary code or name (`GOLD`, `BTC`, `黄金`), a TradingView id (`NASDAQ:AAPL`), else a ticker on
- * its default source (`…USDT` on Binance, the rest on Yahoo). Names that need a search (`腾讯` unless in the dictionary) are null.
+ * dictionary code or name (`GOLD`, `BTC`, `SPX`, `黄金`), a TradingView id (`NASDAQ:AAPL`), a
+ * `…USDT` pair on Binance, else the external search hit `hits` whose code is exactly the ticker
+ * (`PLTR`). Null when none of these says (`腾讯` outside the dictionary, `XYZNOTEXIST`).
  */
-export function resolveOperand(text: string, quoted: boolean, aliases: Record<string, string>): string | null {
+export function resolveOperand(text: string, quoted: boolean, aliases: Record<string, string>, hits: SearchResult[] = []): string | null {
   if (quoted) return isValidKey(text) && !isSynthetic(text) ? text : null;
   const direct = directKey(text, aliases);
   if (direct) return isSynthetic(direct) ? null : direct;
   const lower = text.toLowerCase();
   // codes and names only: pinyin initials like `bp` are real tickers too
-  const dict = WELLKNOWN.find((e) => e.zh === text || e.en?.toLowerCase() === lower || bareCodes(e.key).includes(lower));
+  const dict = WELLKNOWN.find((e) => e.zh === text || e.en?.toLowerCase() === lower || [...bareCodes(e.key), ...(e.codes ?? []).map((c) => c.toLowerCase())].includes(lower));
   if (dict) return dict.key;
   // TradingView's own spelling, `NASDAQ:AAPL`, moves to the preferred source like a TV search hit;
   // `data:gpu` is half a key whose rest the lexer split off, not an exchange
   if (/^[A-Za-z0-9_]+:[A-Za-z0-9_.!]+$/.test(text) && !hasSourcePrefix(text)) return canonicalKey(`tv:${text.toUpperCase()}`);
-  if (!/^\^?[A-Za-z0-9][A-Za-z0-9.=!]*$/.test(text)) return null;
-  return /USDT$/i.test(text) ? `binance:${text.toUpperCase()}` : `yahoo:${text.toUpperCase()}`;
+  if (/^[A-Za-z0-9]+USDT$/i.test(text)) return `binance:${text.toUpperCase()}`;
+  return hits.find((h) => !isSynthetic(h.key) && bareCodes(h.key).includes(lower))?.key ?? null;
 }
 
 const hasSourcePrefix = (text: string) => text.includes(":") && isSource(text.slice(0, text.indexOf(":")).toLowerCase());
@@ -116,6 +117,8 @@ export interface ExprOperand {
   start: number;
   end: number;
   key: string | null;
+  /** No key yet because its external search has not answered; the search box asks for it */
+  pending: boolean;
 }
 
 export interface ExprAnalysis {
@@ -127,19 +130,28 @@ export interface ExprAnalysis {
   error: string | null;
 }
 
-/** An expression as typed, at caret position `caret`; positions are the query's own. */
-export function analyzeExpression(query: string, caret: number, aliases: Record<string, string>): ExprAnalysis {
+/**
+ * An expression as typed, at caret position `caret`; positions are the query's own. `hits` gives
+ * the external search results for an operand's text, undefined while they have not arrived.
+ */
+export function analyzeExpression(query: string, caret: number, aliases: Record<string, string>, hits: (text: string) => SearchResult[] | undefined = () => undefined): ExprAnalysis {
   // the leading `=` becomes a space so positions stay put
   const tokens = lexSynth(query.replace(/^(\s*)=/, "$1 "));
-  const operands: ExprOperand[] = tokens.flatMap((t) => (t.type === "ref" ? [{ text: t.text, start: t.start, end: t.end, key: resolveOperand(t.text, t.quoted, aliases) }] : []));
+  const operands: ExprOperand[] = tokens.flatMap((t) => {
+    if (t.type !== "ref") return [];
+    const found = hits(t.text);
+    const key = resolveOperand(t.text, t.quoted, aliases, found);
+    return [{ text: t.text, start: t.start, end: t.end, key, pending: !key && !t.quoted && !hasSourcePrefix(t.text) && found === undefined }];
+  });
   const active = operands.find((o) => o.start <= caret && caret <= o.end) ?? null;
   const keys = new Map<SynthToken, string>();
   let ref = 0;
   for (const t of tokens) {
     if (t.type === "bad") return { operands, active, key: null, error: t.message };
     if (t.type !== "ref") continue;
-    const { text, key } = operands[ref++];
+    const { text, key, pending } = operands[ref++];
     if (key) keys.set(t, key);
+    else if (pending) return { operands, active, key: null, error: `「${text}」搜索中…` };
     else if (hasSourcePrefix(text)) return { operands, active, key: null, error: `「${text}」不是完整的 key；代码里有 - 或 / 时整个 key 要加引号，如 "data:gpu/4090-xianyu"` };
     else return { operands, active, key: null, error: `「${text}」要从搜索结果里选一个标的` };
   }
@@ -259,7 +271,7 @@ export function localSearch(query: string, ctx: SearchContext): SearchResult[] {
   const watchHits = scored(ctx.watchlist, (w) => {
     const dict = wellKnown(w.key);
     return matchScore(lower, {
-      codes: [...codesOf(w.key), ...aliasNames(w.key, ctx.aliases), ...(dict?.aliases ?? [])],
+      codes: [...codesOf(w.key), ...aliasNames(w.key, ctx.aliases), ...(dict?.aliases ?? []), ...(dict?.codes ?? [])],
       names: [w.name, ...(dict ? [dict.zh, dict.en ?? ""] : [])],
       other: [w.group],
     });
@@ -279,7 +291,7 @@ export function localSearch(query: string, ctx: SearchContext): SearchResult[] {
   for (const e of WELLKNOWN) {
     if (watched.has(e.key)) continue;
     const existing = common.find((c) => c.key === e.key);
-    const fields: Fields = { codes: [...codesOf(e.key), ...e.aliases], names: [e.zh, e.en ?? ""], other: [] };
+    const fields: Fields = { codes: [...codesOf(e.key), ...e.aliases, ...(e.codes ?? [])], names: [e.zh, e.en ?? ""], other: [] };
     if (existing) {
       existing.fields.codes.push(...fields.codes);
       existing.fields.names.push(...fields.names);

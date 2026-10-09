@@ -184,7 +184,8 @@ export function ChartView({
       const result = await loadSymbol(symbolKey);
       setFetching(false);
       if (result.ok) setReloadTick((n) => n + 1);
-      else setMessage(result.error);
+      // in the error line, where the bars' own "no data" would otherwise hide why
+      else setError(result.error);
     });
     // once per symbol: adding it to the list later changes nothing here
     // eslint-disable-next-line react-hooks/exhaustive-deps

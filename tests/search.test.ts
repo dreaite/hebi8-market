@@ -16,6 +16,7 @@ import {
   sameSpread,
   suggestGroup,
   type SearchContext,
+  type SearchResult,
 } from "@/lib/search";
 import { displayName } from "@/lib/wellknown";
 
@@ -280,18 +281,36 @@ describe("resolveOperand", () => {
     expect(resolveOperand("BTCUSDT", false, {})).toBe("binance:BTCUSDT");
     expect(resolveOperand("eth", false, {})).toBe("binance:ETHUSDT");
     expect(resolveOperand("gspc", false, {})).toBe("yahoo:^GSPC");
-    // the dictionary's pinyin initials are not codes: BP is BP, not the S&P 500 ETF
-    expect(resolveOperand("BP", false, {})).toBe("yahoo:BP");
+    // TradingView's codes for the dictionary's indices
+    expect(resolveOperand("SPX", false, {})).toBe("yahoo:^GSPC");
+    expect(resolveOperand("NDX", false, {})).toBe("yahoo:^NDX");
+    expect(resolveOperand("dji", false, {})).toBe("yahoo:^DJI");
+    expect(resolveOperand("VIX", false, {})).toBe("yahoo:^VIX");
+    expect(resolveOperand("RUT", false, {})).toBe("yahoo:^RUT");
+    expect(resolveOperand("DXY", false, {})).toBe("tv:TVC:DXY");
+    expect(resolveOperand("HSI", false, {})).toBe("yahoo:^HSI");
+    expect(resolveOperand("NI225", false, {})).toBe("yahoo:^N225");
+    expect(resolveOperand("UKX", false, {})).toBe("yahoo:^FTSE");
     // TradingView ids move to the preferred source
     expect(resolveOperand("NASDAQ:AAPL", false, {})).toBe("yahoo:AAPL");
     expect(resolveOperand("TVC:DXY", false, {})).toBe("tv:TVC:DXY");
     expect(resolveOperand("data:gpu", false, {})).toBeNull();
     expect(resolveOperand("yahoo:", false, {})).toBeNull();
-    // the rest on its default source; NVDA is watched, which changes nothing
+    // NVDA is watched, which changes nothing
     expect(resolveOperand("nvda", false, ctx.aliases)).toBe("yahoo:NVDA");
     expect(resolveOperand("^n225", false, {})).toBe("yahoo:^N225");
     expect(resolveOperand("PEPEUSDT", false, {})).toBe("binance:PEPEUSDT");
     expect(resolveOperand("yahoo:BRK-B", true, {})).toBe("yahoo:BRK-B");
+  });
+  it("takes the external hit whose code is the ticker, and no guess without one", () => {
+    const hit = (key: string): SearchResult => ({ key, name: key, source: "yahoo", suggestedGroup: "美股" });
+    const hits = [hit("yahoo:PLTRX"), hit("tv:NASDAQ:PLTR"), hit("yahoo:PLTR")];
+    expect(resolveOperand("pltr", false, {}, hits)).toBe("tv:NASDAQ:PLTR");
+    expect(resolveOperand("PLTR", false, {}, [hit("yahoo:PLTRX")])).toBeNull();
+    // the dictionary's pinyin initials are not codes: BP is BP, not the S&P 500 ETF
+    expect(resolveOperand("BP", false, {})).toBeNull();
+    expect(resolveOperand("BP", false, {}, [hit("yahoo:BP")])).toBe("yahoo:BP");
+    expect(resolveOperand("XYZNOTEXIST", false, {}, [])).toBeNull();
   });
   it("leaves names that need a search unresolved", () => {
     expect(resolveOperand("某某科技", false, {})).toBeNull();
@@ -314,16 +333,24 @@ describe("analyzeExpression", () => {
 
   it("finds the operand at the caret, with its position in the query", () => {
     const a = analyzeExpression("=AAPL / msf", 11, {});
-    expect(a.active).toEqual({ text: "msf", start: 8, end: 11, key: "yahoo:MSF" });
+    expect(a.active).toEqual({ text: "msf", start: 8, end: 11, key: null, pending: true });
     expect(analyzeExpression("=AAPL / msf", 3, {}).active?.text).toBe("AAPL");
     // right after an operator there is nothing to search
     expect(analyzeExpression("AAPL/", 5, {}).active).toBeNull();
   });
 
+  it("waits for the search of a ticker outside the dictionary, then takes its exact hit", () => {
+    const pltr: SearchResult = { key: "yahoo:PLTR", name: "Palantir", source: "yahoo", suggestedGroup: "美股" };
+    expect(analyzeExpression("BTC/SPX", 7, {})).toMatchObject({ key: "=binance:BTCUSDT/yahoo:^GSPC", error: null });
+    expect(analyzeExpression("BTC/PLTR", 8, {})).toMatchObject({ key: null, error: "「PLTR」搜索中…" });
+    expect(analyzeExpression("BTC/PLTR", 8, {}, () => [pltr])).toMatchObject({ key: "=binance:BTCUSDT/yahoo:PLTR", error: null });
+    expect(analyzeExpression("BTC/XYZNOTEXIST", 15, {}, () => [pltr])).toMatchObject({ key: null, error: "「XYZNOTEXIST」要从搜索结果里选一个标的" });
+  });
+
   it("says what is wrong", () => {
     expect(analyzeExpression("AAPL/", 5, {}).error).toBe("表达式不完整");
     expect(analyzeExpression("(AAPL/MSFT", 0, {}).error).toBe("缺少「)」");
-    expect(analyzeExpression("腾讯/AAPL", 0, {}).error).toBe("「腾讯」要从搜索结果里选一个标的");
+    expect(analyzeExpression("腾讯/AAPL", 0, {}, () => []).error).toBe("「腾讯」要从搜索结果里选一个标的");
     expect(analyzeExpression("AAPL/MSFT %", 0, {}).error).toBe("无法识别的字符「%」");
     expect(analyzeExpression("AAPL/MSFT", 0, {}).error).toBeNull();
     // checked as typed: removing the space must not turn `1 2` into `12`

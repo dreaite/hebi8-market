@@ -11,9 +11,12 @@ export interface WellKnown {
   zh: string;
   en?: string;
   aliases: string[];
+  /** Tickers it goes by elsewhere (TradingView's `SPX` for `^GSPC`), resolved like its own in a spread */
+  codes?: string[];
 }
 
 const w = (key: string, zh: string, en: string | undefined, ...aliases: string[]): WellKnown => ({ key, zh, en, aliases });
+const tv = (entry: WellKnown, ...codes: string[]): WellKnown => ({ ...entry, codes });
 
 export const WELLKNOWN: WellKnown[] = [
   // crypto
@@ -28,11 +31,12 @@ export const WELLKNOWN: WellKnown[] = [
   w("binance:LINKUSDT", "Chainlink", "Chainlink", "link", "chainlink"),
   // US indices and ETFs
   w("yahoo:SPY", "标普 500 ETF", "SPDR S&P 500 ETF", "spy", "biaopu", "bp", "sp500", "s&p"),
-  w("yahoo:^GSPC", "标普 500 指数", "S&P 500", "spx", "gspc", "biaopu500", "bp500", "sp500 index", "biaopuzhishu", "bpzs"),
+  tv(w("yahoo:^GSPC", "标普 500 指数", "S&P 500", "spx", "gspc", "biaopu500", "bp500", "sp500 index", "biaopuzhishu", "bpzs"), "SPX"),
   w("yahoo:QQQ", "纳指 100 ETF", "Invesco QQQ", "qqq", "nazhi", "nz", "nasdaq100", "nasdaq 100"),
   w("yahoo:^NDX", "纳指 100 指数", "Nasdaq 100", "ndx", "nazhi100", "nz100", "nasdaq 100 index"),
   w("yahoo:^IXIC", "纳斯达克综合指数", "Nasdaq Composite", "ixic", "nasdaq", "nasidake", "nsdk", "comp"),
   w("yahoo:^DJI", "道琼斯指数", "Dow Jones Industrial Average", "dji", "dow", "daozhi", "dz", "daoqiongsi", "dqs"),
+  w("yahoo:^RUT", "罗素 2000 指数", "Russell 2000", "rut", "russell 2000 index", "luosu2000zhishu", "ls2000zs"),
   w("yahoo:IWM", "罗素 2000 ETF", "iShares Russell 2000 ETF", "iwm", "russell", "russell2000", "luosu", "ls", "luosu2000"),
   w("yahoo:^VIX", "恐慌指数 VIX", "CBOE Volatility Index", "vix", "konghuang", "kh", "konghuangzhishu", "khzs", "bodong"),
   w("yahoo:TLT", "美债 20 年+ ETF", "iShares 20+ Year Treasury Bond ETF", "tlt", "changzhai", "cz"),
@@ -40,7 +44,7 @@ export const WELLKNOWN: WellKnown[] = [
   w("yahoo:IBIT", "比特币现货 ETF", "iShares Bitcoin Trust", "ibit", "bitebi etf"),
   // HK / A-share indices
   w("yahoo:^HSI", "恒生指数", "Hang Seng Index", "hsi", "hangseng", "hengsheng", "hs", "hengshengzhishu", "hszs"),
-  w("yahoo:^HSCE", "国企指数", "Hang Seng China Enterprises Index", "hsce", "hscei", "guoqi", "gq", "guoqizhishu", "gqzs"),
+  tv(w("yahoo:^HSCE", "国企指数", "Hang Seng China Enterprises Index", "hsce", "hscei", "guoqi", "gq", "guoqizhishu", "gqzs"), "HSCEI"),
   w("tv:HSI:HSTECH", "恒生科技指数", "Hang Seng TECH Index", "hstech", "hengshengkeji", "hskj", "hangseng tech"),
   w("tv:SSE:000300", "沪深 300", "CSI 300", "csi300", "000300", "hushen300", "hushen", "hs300", "hs"),
   w("yahoo:000001.SS", "上证指数", "SSE Composite Index", "000001", "sse", "shangzheng", "sz", "shangzhengzhishu", "szzs", "shanghai"),
@@ -57,12 +61,12 @@ export const WELLKNOWN: WellKnown[] = [
   w("tv:FX_IDC:USDCNH", "离岸人民币", "USD/CNH", "usdcnh", "cnh", "cny", "rmb", "renminbi", "lianrenminbi", "larmb", "huilv", "hl"),
   w("tv:FX_IDC:USDJPY", "美元日元", "USD/JPY", "usdjpy", "jpy", "yen", "riyuan", "ry", "meiyuanriyuan", "myry"),
   w("tv:FX_IDC:EURUSD", "欧元美元", "EUR/USD", "eurusd", "eur", "euro", "ouyuan", "oy"),
-  w("yahoo:^N225", "日经 225", "Nikkei 225", "n225", "nikkei", "rijing", "rj", "rijing225", "riben", "rb"),
-  w("yahoo:^GDAXI", "德国 DAX", "DAX", "dax", "gdaxi", "deguo", "dg"),
-  w("yahoo:^FTSE", "富时 100", "FTSE 100", "ftse", "fushi", "fs", "yingguo", "yg"),
-  w("yahoo:^STOXX50E", "欧洲斯托克 50", "Euro Stoxx 50", "stoxx", "stoxx50", "sx5e", "ouzhou", "oz"),
-  w("yahoo:^KS11", "韩国综合指数", "KOSPI", "kospi", "ks11", "hanguo", "hg"),
-  w("yahoo:^TWII", "台湾加权指数", "TAIEX", "twii", "taiex", "taiwan", "tw", "taiwanjiaquan", "twjq"),
+  tv(w("yahoo:^N225", "日经 225", "Nikkei 225", "n225", "nikkei", "rijing", "rj", "rijing225", "riben", "rb"), "NI225"),
+  tv(w("yahoo:^GDAXI", "德国 DAX", "DAX", "dax", "gdaxi", "deguo", "dg"), "DAX"),
+  tv(w("yahoo:^FTSE", "富时 100", "FTSE 100", "ftse", "fushi", "fs", "yingguo", "yg"), "UKX"),
+  tv(w("yahoo:^STOXX50E", "欧洲斯托克 50", "Euro Stoxx 50", "stoxx", "stoxx50", "sx5e", "ouzhou", "oz"), "SX5E"),
+  tv(w("yahoo:^KS11", "韩国综合指数", "KOSPI", "kospi", "ks11", "hanguo", "hg"), "KOSPI"),
+  tv(w("yahoo:^TWII", "台湾加权指数", "TAIEX", "twii", "taiex", "taiwan", "tw", "taiwanjiaquan", "twjq"), "TAIEX"),
   // US stocks
   w("yahoo:AAPL", "苹果", "Apple", "aapl", "apple", "pingguo", "pg"),
   w("yahoo:MSFT", "微软", "Microsoft", "msft", "microsoft", "weiruan", "wr"),

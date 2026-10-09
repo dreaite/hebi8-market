@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Bar } from "@/lib/series";
+import { synthNoData } from "@/lib/bars";
+import { normalizeConfig } from "@/lib/config";
 import { canonicalSynth, evalSynth, lexSynth, parseSynth, synthName, synthOperand } from "@/lib/synth";
 
 const day = (iso: string) => Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 1000;
@@ -131,5 +133,18 @@ describe("evalSynth", () => {
 
   it("returns nothing when an operand has no data", () => {
     expect(evalSynth(parseSynth("BTC/GOLD", aliases), { "binance:BTCUSDT": btc })).toEqual([]);
+  });
+});
+
+describe("synthNoData", () => {
+  const cfg = normalizeConfig({ aliases });
+  const errors: Record<string, string> = { "yahoo:SPX": "No data found, symbol may be delisted" };
+  const syncError = (k: string) => errors[k] ?? null;
+
+  it("names each operand without bars and its sync error", () => {
+    const read = (k: string) => (k === "binance:BTCUSDT" ? [bar("2026-01-05", 1, 1, 1, 1)] : []);
+    expect(synthNoData("=BTC/yahoo:SPX", cfg, syncError, read)).toBe("yahoo:SPX：No data found, symbol may be delisted");
+    expect(synthNoData("=yahoo:SPX/GOLD", cfg, syncError, read)).toBe("yahoo:SPX：No data found, symbol may be delisted；tv:TVC:GOLD：暂无数据，等待同步");
+    expect(synthNoData("=BTC*2", cfg, syncError, read)).toBe("各操作数的日期没有重叠");
   });
 });
