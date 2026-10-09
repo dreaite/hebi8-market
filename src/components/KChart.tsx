@@ -1007,6 +1007,8 @@ export function KChart({
       dispose(el);
       chartRef.current = null;
       setOverlayChart(null);
+      // the drawings went with the chart: a chart made again (React's StrictMode mounts twice in dev) restores them
+      restoredRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- chart lives for the component's lifetime
   }, []);
