@@ -45,7 +45,6 @@ const SHORTCUTS: { group: string; rows: [string, string][] }[] = [
       ["Alt+A", "新建警报（右键主图：在该价位添加）"],
       ["Alt+R", "重置图表视图"],
       ["Ctrl/Cmd+Alt+S", "下载图表图片"],
-      ["Ctrl/Cmd+Shift+S", "复制图表图片"],
       ["Alt+S", "复制图表链接"],
       ["Esc", "退出画线、关闭弹窗"],
     ],

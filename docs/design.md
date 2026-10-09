@@ -525,7 +525,7 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 | `Enter` | 结束正在画的路径 / 折线（双击也行） |
 | `Delete` / `Backspace` | 删除选中的画线（KLineChart `onSelected` / `onDeselected` 跟踪选中）；右键画线弹出菜单：设置… / 锁定 / 隐藏 / 删除（TV 样式，不再右键直接删） |
 | `Alt+R` | 重置图表：回到最新、默认缩放、价格轴自动 |
-| `Ctrl/Cmd+Alt+S` / `Ctrl/Cmd+Shift+S` / `Alt+S` | 拍快照：下载图片 / 复制图片 / 复制图表链接（见下文「拍快照」） |
+| `Ctrl/Cmd+Alt+S` / `Alt+S` | 拍快照：下载图片 / 复制图表链接（见下文「拍快照」） |
 | `←` / `→` | 向更早 / 更新滚动可见宽度的 10% |
 | `↑` / `↓` | 放大 / 缩小 |
 | `Space` / `Shift+Space` | 自选列表下一只 / 上一只（跨分组循环，客户端路由；下一只的 `/api/bars` 低优先级预取） |
@@ -564,10 +564,10 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 - **警报列表**：右侧边栏在「自选」「笔记」旁边多一个「警报」页签，列出当前 vault 的全部警报：标的名（对全部自选的写「全部自选」，没有当前价）、条件、触发方式、是否推送、状态（活动 / 已触发 / 已停止）、当前价和取价时间；每行有「编辑」「暂停 / 恢复」「删除」，点行打开那个标的的图表。
 - **写回**：Server Actions `saveAlert(def)`、`deleteAlert(id)`、`setAlertEnabled(id, enabled)`，和别的写操作一样先过 viewer 写权限，写当前 viewer 的 yaml，注释保留。只读访客看到入口，点开是登录提示。
 
-**拍快照**（TV 顶栏的相机按钮，在刷新和全屏之间）：菜单是「下载图片 · 复制图片 · 复制链接 · 在 X 上分享」，系统支持带文件分享时（手机）多一项「分享…」（`navigator.share` 带 PNG）。快捷键照 TV：`Ctrl/Cmd+Alt+S` 保存图片，`Ctrl/Cmd+Shift+S` 复制图片，`Alt+S` 复制链接（TV 的 Alt+S 是拍快照并把快照链接放进剪贴板；这里没有托管快照，复制的是图表页的公开地址）。
+**拍快照**（TV 顶栏的相机按钮，在刷新和全屏之间）：菜单是「下载图片 · 复制图片 · 复制链接 · 在 X 上分享」，系统支持带文件分享时（手机）多一项「分享…」（`navigator.share` 带 PNG）。快捷键照 TV 文档里有的两个：`Ctrl/Cmd+Alt+S` 保存图片，`Alt+S` 复制链接（TV 的 Alt+S 是拍快照并把快照链接放进剪贴板；这里没有托管快照，复制的是图表页的公开地址）。复制图片只在菜单里，没有快捷键。
 
 - **图片**（`chart-snapshot.ts`）：KLineChart 的 `getConvertPictureUrl(true, "png", 卡片底色)` 给出全部窗格、坐标轴和画线（overlay 画布里的十字线、警报线也在）；React 图例不在画布上，按图例的快照（`LegendSnapshot`：各窗格顶部、指标值、对比值）在原位置重画指标和对比行，和页面一样按宽度换行（每行最宽为图宽减 5rem，所以不会压到价格轴），主图图例折叠时不画主图那几行。上面一条信息栏代替图例的商品行：名称 · 代码 · 周期 · 源 · 币种 · 基准，右侧最后一根 K 线的日期（周线写「YYYY-MM-DD 当周」、月线 YYYY-MM、季线 YYYY Qn），下一行开高低收和相对上一根收盘的涨跌（金额和百分比连在一起）。什么都不截断：一行放不下就折行（涨跌先折到下一行），信息栏按行数长高（一行名称一行价格时 56px），图表往下挪；下面一条 34px：icon.svg 的蜡烛 logo +「hebi8/market」等宽字 + 标语，右侧这张图的公开地址（key 解码后显示；放不下先去标语，再只留域名）。颜色从页面的 CSS 变量取，所以跟着明暗主题和 `data-updown`。按设备像素比输出 PNG，文件名照 TV：`<代码>_<YYYY-MM-DD_HH-mm-ss>.png`。水印只在导出的图片里，页面上的图表不加。
-- **复制图片**用 `navigator.clipboard.write` + `ClipboardItem`（把生成中的 Promise 直接放进 ClipboardItem，Safari 只允许在点击里写）。异步剪贴板只在安全上下文里有：经隧道的 https 和 localhost 能用，Tailscale 直连是 http，菜单项置灰并说明，快捷键弹 toast 让用下载。复制链接走隐藏 textarea + `execCommand("copy")`（`src/lib/copy-text.ts`，http 下也能用）。
+- **复制图片**用 `navigator.clipboard.write` + `ClipboardItem`（把生成中的 Promise 直接放进 ClipboardItem，Safari 只允许在点击里写）。异步剪贴板只在安全上下文里有：经隧道的 https 和 localhost 能用，Tailscale 直连是 http，菜单项置灰并说明。复制链接走隐藏 textarea + `execCommand("copy")`（`src/lib/copy-text.ts`，http 下也能用）。
 - **链接**一律是公开地址（`HEBI8_PUBLIC_URL`，默认 `https://market-hebi8.dreaife.tokyo`，`app-info.ts` 的 `publicUrl()`）+ `/chart/<编码的 key>`，在 Tailscale 上打开的页面也一样。未登录的人打开看到的是根 vault 的这张图（§1.6），不是分享者自己 vault 里的画线。
 - **系统分享**：生成图片可能耗掉点击带来的用户激活，`navigator.share` 因此抛 `NotAllowedError` 时，留着这次生成的文件，提示「图片已生成，再点一次分享」，下一次点直接分享它。
 - **在 X 上分享**打开 `https://x.com/intent/post?text=<标题 · hebi8/market>&url=<链接>`；intent 带不了图片，和 TV 一样只分享链接，链接展开时的卡片见 §5.9。
@@ -694,7 +694,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 ### 5.6 自动保存（笔记与复盘日志）
 
-`useAutosave`：输入停止 1s 后保存（Server Action）；`Ctrl/Cmd+S` 立即保存（只认不带 Shift、Alt 的，那两种是图表的拍快照键）；保存中又有输入则保存完再发最新的；dirty 时 `beforeunload` 拦截；状态文字用 muted 色：「已保存 12:03」/「保存中…」/「未保存」/「保存失败：…」。localStorage 草稿兜底：key 含文件名（`hebi8:draft:notes/<fileKey>.md`、`hebi8:draft:journal/<week>.md`），每次输入写入，保存成功即清；打开时若有草稿、内容与文件不同且比文件的 mtime 新，横幅提示「有 12:03 的未保存草稿 · 恢复 / 丢弃」。笔记面板保留「编辑 / 完成」切换，没有保存按钮。
+`useAutosave`：输入停止 1s 后保存（Server Action）；`Ctrl/Cmd+S` 立即保存（只认不带 Shift、Alt 的：带 Alt 是图表的下载图片，带 Shift 不归这里）；保存中又有输入则保存完再发最新的；dirty 时 `beforeunload` 拦截；状态文字用 muted 色：「已保存 12:03」/「保存中…」/「未保存」/「保存失败：…」。localStorage 草稿兜底：key 含文件名（`hebi8:draft:notes/<fileKey>.md`、`hebi8:draft:journal/<week>.md`），每次输入写入，保存成功即清；打开时若有草稿、内容与文件不同且比文件的 mtime 新，横幅提示「有 12:03 的未保存草稿 · 恢复 / 丢弃」。笔记面板保留「编辑 / 完成」切换，没有保存按钮。
 
 ### 5.7 视觉规范（客观项）
 

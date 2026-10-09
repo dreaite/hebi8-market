@@ -486,11 +486,8 @@ export function ChartView({
     }, snapshotFailed);
   // the async clipboard (and with it any image copy) exists only on https or localhost, not on the tailnet's http
   const canCopyImage = () => window.isSecureContext && typeof ClipboardItem !== "undefined" && Boolean(navigator.clipboard?.write);
-  const copyImage = () => {
-    if (!canCopyImage()) return toast("浏览器只在 HTTPS 页面允许复制图片，请用「下载图片」");
-    // the pending picture goes into the clipboard item at once: Safari only allows the write during the click
-    void navigator.clipboard.write([new ClipboardItem({ "image/png": snapshot() })]).then(() => toast("已复制图片"), snapshotFailed);
-  };
+  // the pending picture goes into the clipboard item at once: Safari only allows the write during the click
+  const copyImage = () => void navigator.clipboard.write([new ClipboardItem({ "image/png": snapshot() })]).then(() => toast("已复制图片"), snapshotFailed);
   const copyLink = () => (copyText(shareUrl) ? toast("已复制图表链接") : toast("复制失败", { kind: "error" }));
   // like TradingView, X gets the link and a line of text: an intent cannot carry a picture
   const postToX = () => window.open(`https://x.com/intent/post?${new URLSearchParams({ text: `${title} · ${BRAND}`, url: shareUrl })}`, "_blank", "noopener");
@@ -529,11 +526,10 @@ export function ChartView({
         return;
       }
       if (isEditable(e.target) || dialog || control.current?.dialogOpen()) return;
-      // TradingView's snapshot keys: Ctrl/Cmd+Alt+S saves the picture, Ctrl/Cmd+Shift+S copies it, Alt+S copies the link
-      if (e.code === "KeyS" && (e.ctrlKey || e.metaKey) && e.altKey !== e.shiftKey) {
+      // TradingView's snapshot keys: Ctrl/Cmd+Alt+S saves the picture, Alt+S (below) copies the link
+      if (e.code === "KeyS" && (e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey) {
         e.preventDefault();
-        if (e.altKey) downloadImage();
-        else copyImage();
+        downloadImage();
         return;
       }
       if (e.altKey && !e.ctrlKey && !e.metaKey) {
@@ -820,7 +816,7 @@ export function ChartView({
             return (
               <>
                 {item("下载图片", mac ? "⌘⌥S" : "Ctrl+Alt+S", downloadImage, noChart)}
-                {item("复制图片", mac ? "⇧⌘S" : "Ctrl+Shift+S", copyImage, noChart ?? (canCopyImage() ? undefined : "浏览器只在 HTTPS 页面允许复制图片"))}
+                {item("复制图片", "", copyImage, noChart ?? (canCopyImage() ? undefined : "浏览器只在 HTTPS 页面允许复制图片"))}
                 {item("复制链接", mac ? "⌥S" : "Alt+S", copyLink)}
                 {item("在 X 上分享", "", postToX)}
                 {canShareImage() && item("分享…", "", shareImage, noChart)}
