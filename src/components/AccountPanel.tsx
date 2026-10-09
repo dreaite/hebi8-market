@@ -5,6 +5,7 @@ import type { BotSummary, ChannelSummary } from "@/lib/notify";
 import { IconExternal } from "./chart-icons";
 import { Drawer, Row, Section, errorText, request, useHelpInfo } from "./Drawer";
 import { AccountBlock } from "./GitHubLogin";
+import { PushSettings } from "./PushSettings";
 import type { ToastOptions } from "./UiProvider";
 
 /**
@@ -33,7 +34,7 @@ export function AccountPanel({ autoLogin, onClose, toast }: { autoLogin: boolean
             autoLogin={autoLogin}
             reload={reload}
             toast={toast}
-            intro="登录后用你自己的自选、笔记和复盘，并设置你自己的通知：你的警报触发时，推到你绑定的 Telegram 或 webhook。"
+            intro="登录后用你自己的自选、笔记和复盘，并设置你自己的通知：你的警报触发时，推到你绑定的 Telegram、webhook 或开了推送的设备。"
           />
           {user && <NotifySettings key={`${user.login}:${botVersion}`} toast={toast} />}
           {user && info.canSetBot && (
@@ -210,7 +211,7 @@ function NotifySettings({ toast }: { toast: (message: string, opts?: ToastOption
   }, [binding, load, toast]);
 
   if (!summary) return error ? <p className="text-down">{error}</p> : <p className="text-muted">读取中…</p>;
-  const { telegram, webhook } = summary;
+  const { telegram, webhook, push } = summary;
   const fromFile = <span className="text-muted">（notify.json，在这里设置会替代它）</span>;
 
   return (
@@ -236,6 +237,7 @@ function NotifySettings({ toast }: { toast: (message: string, opts?: ToastOption
             <span className="text-muted">未设置</span>
           )}
         </Row>
+        <Row label="推送">{push.devices.length ? `${push.devices.length} 台设备` : <span className="text-muted">未开启</span>}</Row>
         {error && <p className="mt-1 text-down">{error}</p>}
       </Section>
 
@@ -327,10 +329,12 @@ function NotifySettings({ toast }: { toast: (message: string, opts?: ToastOption
         </form>
       </Section>
 
+      <PushSettings push={push} onSummary={setSummary} toast={toast} />
+
       <button
         type="button"
         className="btn btn-secondary"
-        disabled={busy || (!telegram && !webhook)}
+        disabled={busy || (!telegram && !webhook && !push.devices.length)}
         onClick={() =>
           void act(
             () => request<{ sent: string[]; failed: { channel: string; error: string }[] }>("/api/notify/test", "POST", {}),

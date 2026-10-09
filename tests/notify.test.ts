@@ -149,6 +149,7 @@ describe("per-person channels", () => {
       bot: true,
       telegram: { chat: "…4321", fromFile: false },
       webhook: { host: "ntfy.sh", format: "text", fromFile: false },
+      push: { key: expect.any(String), devices: [], publicUrl: "https://market-hebi8.dreaife.tokyo" },
     });
     expect(channelSummary("", "Owner")).toMatchObject({ telegram: { chat: "…0001", fromFile: true }, webhook: { host: "127.0.0.1:" + api.split(":")[2], fromFile: true } });
   });
@@ -315,7 +316,7 @@ describe("/api/notify", () => {
     const test = await import("@/app/api/notify/test/route");
     const { readNotifyUsers } = await import("@/lib/notify");
 
-    expect(await (await GET(req("/api/notify", { session: sessions.alice }))).json()).toEqual({ bot: true, telegram: null, webhook: null });
+    expect(await (await GET(req("/api/notify", { session: sessions.alice }))).json()).toMatchObject({ bot: true, telegram: null, webhook: null, push: { devices: [] } });
     expect((await test.POST(req("/api/notify/test", { method: "POST", session: sessions.alice }))).status).toBe(409);
 
     const bad = await webhook.PUT(req("/api/notify/webhook", { method: "PUT", session: sessions.alice, body: { url: "ftp://x" } }));
@@ -325,7 +326,7 @@ describe("/api/notify", () => {
 
     // a login in the body is not who it is for
     const ok = await webhook.PUT(req("/api/notify/webhook", { method: "PUT", session: sessions.alice, body: { url: `${api}/hook`, login: "bob" } }));
-    expect(await ok.json()).toEqual({ bot: true, telegram: null, webhook: { host: api.slice(7), format: "text", fromFile: false } });
+    expect(await ok.json()).toMatchObject({ bot: true, telegram: null, webhook: { host: api.slice(7), format: "text", fromFile: false } });
     expect(readNotifyUsers()).toEqual({ alice: { webhook: { url: `${api}/hook`, format: "text" } } });
 
     hooks.length = 0;

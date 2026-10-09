@@ -16,6 +16,10 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["better-sqlite3", "yahoo-finance2", "@mathieuc/tradingview"],
   // TradingView drawings go back with the import's confirmation; a layout full of brush strokes passes 1 MB
   experimental: { serverActions: { bodySizeLimit: "10mb" } },
+  // the service worker is checked for updates on every load, never served from the HTTP cache
+  async headers() {
+    return [{ source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache" }] }];
+  },
   // Shown in the help panel and attached to in-app feedback; inlined on both server and client.
   env: {
     HEBI8_VERSION: pkg.version,

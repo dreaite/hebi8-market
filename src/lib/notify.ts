@@ -2,12 +2,16 @@
  * Outbound delivery of post-sync alerts. The instance's settings are written by hand in
  * `notify.json` in the secrets dir (never the vault): the Telegram bot, the chart link, and the
  * root vault's chat and webhook. On a shared instance each person's own channels are in
- * `notify-users.json`, written by the notification settings page. Every request is outbound,
- * nothing listens for webhooks.
+ * `notify-users.json`, written by the notification settings page: a Telegram chat, a webhook and
+ * the devices that turned on push (`push.ts`). Every request is outbound, nothing listens for
+ * webhooks.
  */
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { publicUrl } from "./app-info";
 import { fmtPrice } from "./format";
+import { sendPush, vapidKeys, type PushDevice, type PushPayload } from "./push";
 import { readJson, secretsDir, writeJson } from "./secrets";
 import { TF_LABELS, type Timeframe } from "./symbols";
 
@@ -22,12 +26,16 @@ export interface NotifyConfig {
   webhook?: Webhook;
   /** Base URL of this app, for chart links in messages */
   link?: string;
+  /** Only from notify-users.json; `login` is whose entry an expired device is removed from */
+  push?: { login: string; devices: PushDevice[] };
 }
 
 /** One person's channels in notify-users.json, keyed by lower-case login. */
 export interface UserChannels {
   telegram?: { chat: string };
   webhook?: Webhook;
+  /** One per browser that turned push on */
+  push?: PushDevice[];
 }
 
 export interface AlertEvent {
@@ -171,6 +179,32 @@ export function setUserChannel<C extends keyof UserChannels>(login: string, chan
   writeJson(USERS_FILE, all);
 }
 
+/** A device is named by a hash of its endpoint: the endpoint itself never goes to the page. */
+export const pushDeviceId = (endpoint: string) => crypto.createHash("sha256").update(endpoint).digest("hex").slice(0, 16);
+
+/**
+ * Add a device, or replace the one with the same endpoint (a browser subscribing again). A browser
+ * is one person's: when someone else logs in on it and turns push on, it leaves the last one's list.
+ */
+export function addPushDevice(login: string, device: PushDevice): void {
+  const all = readNotifyUsers();
+  for (const [key, channels] of Object.entries(all)) {
+    const left = channels.push?.filter((d) => d.endpoint !== device.endpoint);
+    if (!left || left.length === channels.push!.length) continue;
+    if (left.length) channels.push = left;
+    else delete channels.push;
+    if (!Object.keys(channels).length) delete all[key];
+  }
+  const key = login.toLowerCase();
+  all[key] = { ...all[key], push: [...(all[key]?.push ?? []), device] };
+  writeJson(USERS_FILE, all);
+}
+
+export function removePushDevices(login: string, ids: string[]): void {
+  const left = (readNotifyUsers()[login.toLowerCase()]?.push ?? []).filter((d) => !ids.includes(pushDeviceId(d.endpoint)));
+  setUserChannel(login, "push", left.length ? left : null);
+}
+
 /**
  * Where one vault's alerts go. The root vault ('', single user or the owner) uses notify.json's
  * chat and webhook, each replaced by the owner's own binding from the page when there is one;
@@ -186,6 +220,7 @@ export function channelsFor(vault: string, owner: string | null): { config: Noti
   if (instance.telegram && chat) config.telegram = { ...instance.telegram, chat };
   if (webhook) config.webhook = webhook;
   if (instance.link) config.link = instance.link;
+  if (login && own?.push?.length) config.push = { login, devices: own.push };
   return { config, error };
 }
 
@@ -196,6 +231,13 @@ export interface ChannelSummary {
   /** `fromFile`: notify.json's, not bound on the page (the owner's fallback) */
   telegram: { chat: string; fromFile: boolean } | null;
   webhook: { host: string; format: Webhook["format"]; fromFile: boolean } | null;
+  push: {
+    /** VAPID public key, for `pushManager.subscribe` */
+    key: string;
+    devices: { id: string; label: string; added: number }[];
+    /** Where push can be turned on when the page was opened over plain http */
+    publicUrl: string;
+  };
 }
 
 export function channelSummary(vault: string, owner: string | null): ChannelSummary {
@@ -206,6 +248,11 @@ export function channelSummary(vault: string, owner: string | null): ChannelSumm
     bot: Boolean(readNotifyConfig().config.telegram),
     telegram: chat ? { chat: `…${chat.slice(-4)}`, fromFile: !own?.telegram } : null,
     webhook: config.webhook ? { host: new URL(config.webhook.url).host, format: config.webhook.format, fromFile: !own?.webhook } : null,
+    push: {
+      key: vapidKeys().publicKey,
+      devices: (own?.push ?? []).map((d) => ({ id: pushDeviceId(d.endpoint), label: d.label, added: d.added })),
+      publicUrl: publicUrl(),
+    },
   };
 }
 
@@ -214,7 +261,7 @@ export const testDigest = (link?: string) =>
   formatDigest([{ rule: "test", key: "binance:BTCUSDT", name: "测试", label: "通知通道可用", tf: "D", close: null }], link);
 
 export const channelNames = (cfg: NotifyConfig): string[] =>
-  [cfg.telegram?.chat ? "telegram" : null, cfg.webhook ? "webhook" : null].filter((c): c is string => c !== null);
+  [cfg.telegram?.chat ? "telegram" : null, cfg.webhook ? "webhook" : null, cfg.push ? "push" : null].filter((c): c is string => c !== null);
 
 export const chartLink = (base: string, key: string) => `${base}/chart/${encodeURIComponent(key)}`;
 
@@ -267,6 +314,31 @@ async function sendWebhook(cfg: NonNullable<NotifyConfig["webhook"]>, title: str
   if (!res.ok) throw new Error(`webhook ${res.status}：${(await res.text().catch(() => "")).slice(0, 200)}`);
 }
 
+/**
+ * The notification for a digest: Telegram's text without its title line and the links, which
+ * the tap replaces: one symbol opens its chart, several open the overview.
+ */
+export function pushPayload(title: string, text: string, events: AlertEvent[]): PushPayload {
+  const body = text
+    .split("\n")
+    .slice(1)
+    .filter((l) => l.trim() && !/^\s*https?:\/\/\S+$/.test(l))
+    .join("\n");
+  const keys = [...new Set(events.map((e) => e.key))];
+  return { title, body, url: keys.length === 1 ? `/chart/${encodeURIComponent(keys[0])}` : "/" };
+}
+
+/** Every device at once; ones the push service no longer knows are removed. Fails only when none got it. */
+async function sendPushes(cfg: NonNullable<NotifyConfig["push"]>, payload: PushPayload): Promise<void> {
+  const results = await Promise.allSettled(cfg.devices.map((d) => sendPush(d, payload)));
+  const gone = cfg.devices.filter((_, i) => results[i].status === "fulfilled" && results[i].value === "gone");
+  if (gone.length) removePushDevices(cfg.login, gone.map((d) => pushDeviceId(d.endpoint)));
+  if (results.some((r) => r.status === "fulfilled" && r.value === "sent")) return;
+  const errors = results.flatMap((r) => (r.status === "rejected" ? [r.reason instanceof Error ? r.reason.message : String(r.reason)] : []));
+  if (gone.length) errors.push(`${gone.length} 台设备的订阅已失效，已移除`);
+  throw new Error(errors.join("；"));
+}
+
 /** Every configured channel in parallel; one failing does not stop the others. */
 export async function deliver(cfg: NotifyConfig, title: string, text: string, events: AlertEvent[] = []): Promise<Delivery> {
   const jobs: [string, () => Promise<void>][] = [];
@@ -274,6 +346,7 @@ export async function deliver(cfg: NotifyConfig, title: string, text: string, ev
   const chat = telegram?.chat;
   if (telegram && chat) jobs.push(["telegram", () => sendTelegram({ ...telegram, chat }, text)]);
   if (cfg.webhook) jobs.push(["webhook", () => sendWebhook(cfg.webhook!, title, text, events)]);
+  if (cfg.push) jobs.push(["push", () => sendPushes(cfg.push!, pushPayload(title, text, events))]);
   const results = await Promise.allSettled(jobs.map(([, job]) => job()));
   const out: Delivery = { sent: [], failed: [] };
   results.forEach((r, i) => {

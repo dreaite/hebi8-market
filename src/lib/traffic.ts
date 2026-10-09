@@ -76,6 +76,7 @@ export const ROUTES = new Set([
   "/api/github/logout",
   "/api/notify",
   "/api/notify/bot",
+  "/api/notify/push",
   "/api/notify/telegram",
   "/api/notify/telegram/cancel",
   "/api/notify/telegram/poll",

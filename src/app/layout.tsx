@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ErrorCapture } from "@/components/ErrorCapture";
+import { ServiceWorker } from "@/components/ServiceWorker";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteHeader } from "@/components/SiteHeader";
 import { Account, HelpButton, SearchTrigger, UiProvider } from "@/components/UiProvider";
@@ -42,6 +43,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
     <html lang="zh-CN" data-updown={updown === "red-up" ? "red-up" : undefined}>
       <body className="flex min-h-screen flex-col font-sans antialiased">
         <ErrorCapture />
+        <ServiceWorker />
         <UiProvider ctx={searchCtx} readOnly={!viewer?.canWrite}>
           <SiteHeader>
             <Link href="/" className="flex shrink-0 items-baseline gap-3" title={TAGLINE}>
