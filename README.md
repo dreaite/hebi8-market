@@ -114,7 +114,7 @@ npm run dev        # http://localhost:3000
 | `HEBI8_VAULT` | `./vault` | 用户内容目录 |
 | `HEBI8_DB` | `./data/hebi8.db` | SQLite 缓存，删了会自动重建 |
 | `BINANCE_API_URL` | `https://api.binance.com` | 换成 `https://data-api.binance.vision` 等镜像 |
-| `HEBI8_SECRETS` | `~/.config/hebi8/market` | GitHub 登录会话 `sessions.json`、实例的通知设置 `notify.json`、每个人的通知通道 `notify-users.json`，权限 700 / 600 |
+| `HEBI8_SECRETS` | `~/.config/hebi8/market` | GitHub 登录会话 `sessions.json`、实例的通知设置 `notify.json`、每个人的通知通道 `notify-users.json`、网页推送的密钥 `vapid.json`（自动生成），权限 700 / 600 |
 | `HEBI8_GITHUB_CLIENT_ID` | `app-info.ts` 的 `GITHUB_APP_CLIENT_ID` | 反馈登录用的 GitHub App client id（fork 用自己的 App 时设）；设为 `off` 关闭应用内登录，反馈只走 GitHub 网页 |
 | `HEBI8_FEEDBACK_REPO` | `dreaite/hebi8-market` | 反馈 issue 开在哪个仓库（`owner/name`） |
 | `HEBI8_PUBLIC_URL` | `https://market-hebi8.dreaife.tokyo` | 实例的公开地址：页面元数据、分享卡片、`robots.txt`、`sitemap.xml`、复制和分享出去的图表链接、导出图片底部的地址都用它 |
@@ -228,6 +228,7 @@ npm run notify:test
 
 - **绑定 Telegram**：点「绑定 Telegram」，打开链接在 Telegram 里点 Start，几秒后自动绑好，bot 会回一句「已绑定 hebi8：<login>」。链接里的一次性码 10 分钟有效。owner 也可以这样绑定，会替代 `notify.json` 里的 `chat`。
 - **webhook**：填地址和格式（text / json）保存，同样替代 `notify.json` 里的 `webhook`。
+- **推送**：勾上「在此设备上接收推送」，这台手机或浏览器就会收到系统通知，点开是对应的图表；每台设备各开一次，下面列着开过的设备，可以移除。只能在 HTTPS 地址上开（局域网、Tailscale 的 http 不行）；iPhone / iPad 要先在 Safari 里「分享 → 添加到主屏幕」，从主屏幕打开再开（iOS 16.4 及以上）。
 - 「发测试消息」往自己的每个通道发一条，「解除绑定」「删除」去掉页面上设置的通道。
 - 绑定时 hebi8 用 `getUpdates` 读 bot 收到的消息（只在有待绑定的码时，只往外连）。所以这个 bot 要给 hebi8 专用：同一个 token 被别的程序 `getUpdates` 时两边会抢消息。
 
@@ -291,7 +292,7 @@ src/
 │       ├── bars/             日/周/月/季 K 线 + 对齐好的引用标的
 │       ├── search/           外部搜索（Yahoo / TradingView / Binance），本地匹配在浏览器里
 │       ├── help/             帮助与登录抽屉的数据：登录状态、反馈设置（只读本地）
-│       ├── notify/           当前登录者的通知通道：摘要、Telegram 绑定、webhook、测试消息
+│       ├── notify/           当前登录者的通知通道：摘要、Telegram 绑定、webhook、推送订阅、测试消息
 │       └── github/           device flow 登录、退出、提交 / 列出反馈 issue
 ├── instrumentation.ts        启动应用内调度器
 ├── components/               TvImport（设置页的导入导出）/ UiProvider（搜索浮层、帮助与登录抽屉、toast、快捷键）/ HelpPanel（使用、反馈）/ AccountPanel（登录、通知设置）/ Guide / SymbolSearch / Overview / RowMenu / ChartView / KChart / ChartLegend / IndicatorDialog / CompareDialog / WatchlistPanel / FormulaEditor / NotesPanel …
@@ -308,11 +309,13 @@ src/
     ├── sync.ts scheduler.ts  同步、同步后算 stats 和通知、每日定时
     ├── series.ts synth.ts    周/月/季线合成、对齐、合成标的
     ├── stats.ts conditions.ts 总览统计与公式警报的求值
-    ├── alerts.ts notify.ts   通知：规则判定与状态（按 vault）、每个人的通道、Telegram / webhook 投递
+    ├── alerts.ts notify.ts   通知：规则判定与状态（按 vault）、每个人的通道、Telegram / webhook / 推送投递
+    ├── push.ts push-client.ts 网页推送：VAPID 密钥、发往推送服务；浏览器端的订阅和不能开的原因
     ├── alert-conds.ts        价格警报的九种条件（纯函数，图表的警报对话框也用）
     ├── quotes.ts             盘中轮询：5 分钟 / 1 小时取最新价，内存里拼今天的日线，判断警报
     ├── telegram.ts           Telegram 绑定：一次性码、getMe、有待绑定码时才长轮询 getUpdates
     └── time.ts tz.ts week.ts 交易日换算、时区、ISO 周
+public/sw.js                  service worker：显示推送、点通知打开图表、连不上时的一页说明；什么都不缓存
 vault.example/hebi8.yaml      首次运行的起点
 tests/                        vitest
 ```

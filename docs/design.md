@@ -12,7 +12,7 @@ hebi8 是一个**周度复盘工具**，不是 TradingView 的替代品。每天
 
 约束：本体只绑定 Tailscale IP，另经 Cloudflare Tunnel 公开（`https://market-hebi8.dreaife.tokyo`，cloudflared 转发到 Tailscale 地址），暂时完全公开、不限流，只做流量监控（§1.7）；只存日线，周/月/季线读时合成；**读取永远不碰网络**。默认单用户、无登录；在 yaml 里设了 `owner` 之后，几个人可以共用一台实例，每人用 GitHub 登录后看到自己的自选、画线、笔记和通知（§1.6）。
 
-第八天之外只有一种打扰：自己建的**警报**触发，推到 Telegram 或 webhook（§2.5、§2.6）。警报可以盯一个标的（盘中每 5 分钟取一次最新价来判断），也可以对全部自选（每次同步后判断）；系统不预置任何警报。只存日线，不存日内 K 线。
+第八天之外只有一种打扰：自己建的**警报**触发，推到 Telegram、webhook 或开了网页推送的设备（§2.5–§2.7）。警报可以盯一个标的（盘中每 5 分钟取一次最新价来判断），也可以对全部自选（每次同步后判断）；系统不预置任何警报。只存日线，不存日内 K 线。
 
 本文是 v2 的实施规范。v1 的代码可以参考（`tradingDay`、公式引擎、指标目录、统计定义都保留），但不需要兼容：目录、schema、接口都按本文重做。
 
@@ -210,7 +210,7 @@ CREATE TABLE usage_alerts (kind TEXT NOT NULL, day INTEGER NOT NULL, PRIMARY KEY
 
 ### 1.5 用户配置目录（`HEBI8_SECRETS`，默认 `~/.config/hebi8/market`，目录 700、文件 600）
 
-不在 vault、不在 data、不进 git：`sessions.json`（GitHub 登录，§5.8）、`notify.json`（实例的通知设置，§2.5）、`notify-users.json`（每个人绑定的通道，§2.5）、`traffic-salt.json`（访客哈希的盐，首次用到时生成，§1.7）。
+不在 vault、不在 data、不进 git：`sessions.json`（GitHub 登录，§5.8）、`notify.json`（实例的通知设置，§2.5）、`notify-users.json`（每个人绑定的通道，§2.5）、`vapid.json`（网页推送的 VAPID 密钥对，首次用到时生成，§2.7）、`traffic-salt.json`（访客哈希的盐，首次用到时生成，§1.7）。
 
 ### 1.6 多人共用一台实例
 
@@ -346,7 +346,7 @@ date,open,high,low,close,volume
 
 **按人**：每个 vault 各自判定、各自投递，状态表按 `vault` 分开。
 
-**投递**：一个 vault 一次同步的所有事件合成一条纯文本摘要，同时发到这个人的每个通道；有一个通道成功就提交状态，全部失败则不提交，下次同步再试。没有配置通道时只打日志、照常提交。
+**投递**：一个 vault 一次同步的所有事件合成一条纯文本摘要，同时发到这个人的每个通道（Telegram、webhook、推送并列，一个失败不影响别的）；有一个通道成功就提交状态，全部失败则不提交，下次同步再试。没有配置通道时只打日志、照常提交。
 
 ```json
 {
@@ -358,7 +358,7 @@ date,open,high,low,close,volume
 
 - `notify.json` 是**实例**的设置，由部署的人手写：bot 的 `token`、`api`，以及 `link`。其中 `telegram.chat` 和 `webhook` 是根 vault（单用户模式或 owner）的通道，和以前兼容。
 - owner 有几个账号时，根 vault 的通道记在第一个 owner 名下，用哪个账号登录绑定都是同一份。
-- 其他人的通道在 `notify-users.json`：`{ "<login>": { "telegram": { "chat": "..." }, "webhook": { "url": "...", "format": "text" } } }`，由页面写入（原子写、600），不手改。owner 也可以在页面上绑定，写进这里时优先于 `notify.json` 里的 chat / webhook。
+- 其他人的通道在 `notify-users.json`：`{ "<login>": { "telegram": { "chat": "..." }, "webhook": { "url": "...", "format": "text" }, "push": [{ "endpoint": "...", "keys": { "p256dh": "...", "auth": "..." }, "label": "Chrome · Android", "added": 1760000000000 }] } }`，由页面写入（原子写、600），不手改。`push` 是开了推送的设备（§2.7），只有页面能加，`notify.json` 里没有对应的段。owner 也可以在页面上绑定，写进这里时优先于 `notify.json` 里的 chat / webhook。
 - `telegram.api` 可省，指向自建 Bot API 服务时改它。
 - `webhook.format`：`text`（默认，正文就是摘要，带 `Title` 头，适合 ntfy）或 `json`（`{ title, text, events }`）。
 - `link` 可省；有的话每条事件后面带图表页链接。
@@ -370,8 +370,9 @@ date,open,high,low,close,volume
 - **绑定 Telegram**：服务端生成一次性码（10 分钟有效，内存里），用 `getMe` 拿 bot 用户名，返回 `https://t.me/<bot>?start=<码>`；面板显示「打开 Telegram 点 Start」和等待状态。有待绑定的码时，服务端用 `getUpdates` 长轮询（timeout 25 秒，只往外连）读 bot 收到的消息；私聊里收到 `/start <码>` 就把这个 chat id 记到对应 login，回一句「已绑定 hebi8：<login>」，确认 update 的 offset。没有待绑定的码时不轮询。
 - 实例的 bot 必须是 hebi8 专用的：同一个 token 被别的程序（比如 Hermes 网关）`getUpdates` 时两边会抢消息。
 - **webhook**：输入地址和格式，保存前校验 http(s)。
+- **推送**：「在此设备上接收推送」开关和已开启的设备列表，见 §2.7。
 - **发测试消息**、**解除绑定**。状态行显示已绑定的通道（chat id 只显示后 4 位，webhook 只显示主机名）。
-- 接口：`GET /api/notify`（当前 viewer 的通道摘要）、`POST /api/notify/telegram`（开始绑定，返回链接）、`POST /api/notify/telegram/poll`（查绑定结果）、`PUT /api/notify/webhook`、`DELETE /api/notify/<channel>`、`POST /api/notify/test`。都要求登录，只作用于 viewer 自己。
+- 接口：`GET /api/notify`（当前 viewer 的通道摘要）、`POST /api/notify/telegram`（开始绑定，返回链接）、`POST /api/notify/telegram/poll`（查绑定结果）、`PUT /api/notify/webhook`、`PUT /api/notify/push`（这个浏览器的订阅）、`DELETE /api/notify/push?id=`、`DELETE /api/notify/<channel>`、`POST /api/notify/test`。都要求登录，只作用于 viewer 自己。
 
 ### 2.6 价格警报与盘中轮询
 
@@ -428,6 +429,32 @@ interface SourceAdapter {
 **每轮之后**：最新价写 `quotes` 表，然后对每个 vault 判断它的警报，事件按 vault 合成一条摘要投递（§2.5 的投递规则：全部通道失败不提交，下一轮再试）。日线同步收尾时也照常判断一遍，用的是真实日线。
 
 **页面读 `quotes`**，不碰网络：图表上的警报线、警报列表里的「当前价 · 3 分钟前」都从这张表来。
+
+### 2.7 安装与网页推送（PWA）
+
+**安装**：`manifest.ts`（standalone、`id`/`scope` 都是 `/`）列出 `icon.svg`、192 和 512 的 PNG、同尺寸的 maskable 版和 `apple-icon`，安卓 Chrome 据此弹安装提示，iOS 用 Safari 的「添加到主屏幕」。PNG 由 `src/app/pwa-icon/[file]/route.tsx` 在 build 时画好：`192.png` / `512.png` 是 icon.svg 原样（自带圆角，角外透明）；`maskable-*.png` 是铺满的深色方块，logo 缩到 80%，落在启动器可能裁成圆形的安全区里。
+
+**service worker**（`public/sw.js`，作用范围 `/`，每个页面在安全上下文里由 `ServiceWorker` 组件注册，`updateViaCache: "none"`，响应头 `Cache-Control: no-cache`）。**它什么都不缓存**：页面是 `force-dynamic`，缓存会显示旧价格。它只做三件事：
+
+- `push`：显示通知，标题、正文来自推送，图标是 `/pwa-icon/192.png`。
+- `notificationclick`：已经开着这个地址的窗口就聚焦它，否则把一个已开的窗口导航过去，没有窗口就开新窗口。
+- 导航请求照常走网络；网络失败时返回写在 sw.js 里的一页「连不上服务器」（503，带「重试」），不读任何缓存。其他请求不经过它。
+
+**推送渠道**（`src/lib/push.ts`）：
+
+- **VAPID**：第一次用到时（打开通知设置或投递）用 `web-push` 生成密钥对，写进 secrets 目录的 `vapid.json`（600），之后一直用它；删掉这个文件等于让所有设备的订阅作废。`subject` 是公开地址（`HEBI8_PUBLIC_URL`，Apple 要求 https: 或 mailto:）。
+- **订阅**：每台设备（浏览器）一条，存在这个人在 `notify-users.json` 里的 `push` 数组（§2.5，和 Telegram、webhook 同一个人同一个条目；owner 的记在第一个 owner 名下）；同一个 endpoint 再订阅一次是替换；一个浏览器只属于最后在它上面开启推送的人（别人在这个浏览器上登录后开启，它就从上一个人的列表里移走）。退出登录不退订。设备名取订阅时的 User-Agent（「Chrome · Android」）。页面上一台设备用 endpoint 的 SHA-256 前 16 位十六进制表示，endpoint 本身不回到页面，也不进日志（错误里只有推送服务的主机名）。
+- **投递**：加密交给 `web-push` 的 `generateRequestDetails`（aes128gcm），请求用 fetch 发出（15 秒超时，`TTL` 一天，`Urgency: high`），所有设备同时发。推送服务回 404 / 410 的订阅从文件里删掉。有一台设备收到就算这个通道成功；一台都没收到时这个通道失败，原因是各设备的错误加「N 台设备的订阅已失效，已移除」。
+- **内容**：和 Telegram 同一条摘要：标题就是摘要标题，正文是摘要去掉标题行和链接行；点开去哪里由事件决定：都是同一个标的就是它的图表页（`/chart/<key>`），几个标的就是总览，没有事件的消息（使用量提醒）也是总览。地址是相对路径，所以从哪个地址订阅就回到哪个地址。
+
+**通知设置里的「推送」**（`PushSettings`）：一个「在此设备上接收推送」复选框和已开启的设备列表（设备名、「此设备」、开启日期、「移除」）。打开时先在点击里要通知权限，再用 VAPID 公钥 `pushManager.subscribe`，把订阅 `PUT /api/notify/push`；关掉或移除「此设备」时也在浏览器里 `unsubscribe`。不能开的时候复选框置灰，旁边写原因：
+
+- 不是安全上下文（局域网、Tailscale 的 http）：浏览器只在 HTTPS 下允许推送，附「用 HTTPS 地址打开」链接（公开地址是 https 时）。
+- iPhone / iPad 不是从主屏幕打开的：要先「分享 → 添加到主屏幕」再从图标打开（iOS 16.4 及以上）。
+- 浏览器没有 service worker / Push API / Notification（包括 16.4 以前的 iOS）：不支持网页推送。
+- 通知权限已被拒绝：去浏览器的网站设置里允许。
+
+单用户模式没有登录，也就没有这个开关（§2.5），推送只在共用实例上可用。
 
 ---
 
@@ -826,12 +853,12 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 - **公开地址**：`HEBI8_PUBLIC_URL`（`app-info.ts` 的 `publicUrl()`，须是 http(s) 地址，否则用默认 `https://market-hebi8.dreaife.tokyo`）。根 layout 的 `generateMetadata` 用它做 `metadataBase`，请求时读取，所以换地址只要改环境变量重启。
 - **根 layout**：`title` 模板 `%s · hebi8/market`（默认 `hebi8/market`）、`description`、`applicationName`、`openGraph`（website、站点名、zh_CN）、`twitter: summary_large_image`。文字常量在 `src/lib/brand.ts`（`BRAND`、`SLOGAN`、`TAGLINE`、`DESCRIPTION`、社交图用的深色 `DARK`），页头也用它们。
 - **页面标题**：图表页 `generateMetadata` 给「名称 代码 · 周线」（viewer 的名字和存的周期）、描述、canonical、openGraph / twitter 标题；复盘、设置、使用情况是「复盘」「设置」「使用情况」并且 `robots: noindex, nofollow`；隐私说明是「隐私说明」。
-- **图标**：`icon.svg`（带 `width`/`height`，canvas 和 Firefox 才能画它）、`apple-icon.tsx`（180px PNG，icon.svg 铺满深色方块，iOS 自己切圆角）、`manifest.ts`（standalone，深色底，两个图标）。
+- **图标**：`icon.svg`（带 `width`/`height`，canvas 和 Firefox 才能画它）、`apple-icon.tsx`（180px PNG，icon.svg 铺满深色方块，iOS 自己切圆角）、`pwa-icon/[file]`（192 / 512 和 maskable，§2.7）、`manifest.ts`（standalone，深色底）。
 - **分享卡片**（`opengraph-image.tsx`，next/og，1200×630，深色主题，`force-dynamic`）：站点卡片是大 logo +「hebi8/market」+ 标语 + 一句话介绍 + 公开域名；图表卡片（`/chart/[key]/opengraph-image`）是名称和代码、源 · 币种 · 近半年涨跌、最新收盘和日涨跌 + 日期、近 130 根日线收盘的折线和渐变填充（涨跌色看半年涨跌），底部是和导出图片同样的 logo +「hebi8/market」+ 地址。涨跌色取根 yaml 的 `updown`。
 - **卡片不泄露个人内容**：抓取方没有会话，卡片也不读 cookie：名字、配色、合成表达式的别名只从根 vault 的 yaml 读（未登录访客本来就看这个），K 线只从公共缓存读，不碰任何 `users/<login>/`、画线、笔记、警报。没缓存的 key 显示「暂无缓存的日线」，读取不会触发同步。
 - **字体不走网络**：next/og 遇到已加载字体里没有的字会去 Google Fonts 下载、遇到 emoji 会去拉 twemoji，违反「读取不碰网络」。所以 `src/lib/og.tsx` 只用本机字体：`HEBI8_OG_FONT` 或常见路径下的 Noto Sans CJK SC `.otf`（satori 读不了 `.ttc`）、DejaVu Sans Mono 一类的等宽字体，找不到中文字体时用 next/og 自带的 Geist；图上画的每一段文字（名称、代码、说明、价格、空态文案、地址）都过 `ogText`：按字素切开，含 emoji 成分的整段去掉（国旗、ZWJ 组合、keycap、变体选择符），再去掉任何已加载字体的 cmap 里都没有的字（`src/lib/font-coverage.ts`），所以没有中文字体时中文也一起去掉。字体数组整个进程只建一次，satori 按引用缓存解析结果（第一次约 0.4s，之后十几毫秒）。
 - **`robots.txt`**：只禁止 `/api/`，指向 `sitemap.xml`。设置、复盘、使用情况不在 Disallow 里：它们靠页面上的 noindex 不被收录，而爬虫只有能抓取才读得到 noindex（被 Disallow 的地址反而可能只以链接的形式进索引）。首页有 canonical 指向公开地址的根路径。**`sitemap.xml`**：首页 + 根 vault 自选里每个标的的图表页（`lastModified` 是同步时间）。两个都 `force-dynamic`，地址和自选在请求时读。
-- 这些元数据文件（图标、manifest、分享卡片、robots、sitemap）不计入流量（proxy 的 matcher 排除，§1.7）。
+- 这些元数据文件（图标、manifest、分享卡片、robots、sitemap）和 `sw.js` 不计入流量（proxy 的 matcher 排除，`pwa-icon/*.png` 和 `sw.js` 靠扩展名，§1.7）。
 
 ---
 
