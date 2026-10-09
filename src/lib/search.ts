@@ -258,6 +258,33 @@ export function typeLabel(r: Pick<SearchResult, "key" | "kind" | "typespecs">): 
   return undefined;
 }
 
+type RowInfo = Pick<SearchResult, "exchange" | "sourceLogo" | "kind" | "typespecs" | "logo">;
+
+const HOME_EXCHANGES: Record<string, string> = { HK: "HKEX", SS: "SSE", SZ: "SZSE" };
+
+/**
+ * What the key and the dictionary say about a symbol that no source has answered for: the
+ * exchange (TradingView's prefix, Binance, the home market of `.HK/.SS/.SZ`) with TV's logo for
+ * it, and the dictionary's type and logo; a Binance pair's coin logo follows TV's naming.
+ */
+export function keyInfo(key: string): RowInfo {
+  const dict = wellKnown(key);
+  const info: RowInfo = { kind: dict?.kind, typespecs: dict?.typespecs, logo: dict?.logo };
+  if (isSynthetic(key)) return info;
+  const { source, ticker } = parseKey(key);
+  if (source === "binance") return { ...info, exchange: "Binance", sourceLogo: "source/BINANCE", logo: `crypto/XTVC${ticker.replace(/USDT$/, "")}` };
+  const exchange = source === "tv" ? ticker.split(":")[0] : source === "yahoo" ? HOME_EXCHANGES[ticker.split(".").pop()!.toUpperCase()] : undefined;
+  return exchange ? { ...info, exchange, sourceLogo: `source/${exchange}` } : info;
+}
+
+/** A row with what it lacks taken from `keyInfo`: the type as one, the exchange together with its logo. */
+function withKeyInfo(r: SearchResult): SearchResult {
+  const k = keyInfo(r.key);
+  const type = r.kind || r.typespecs ? r : k;
+  const place = r.sourceLogo || !k.sourceLogo ? r : k;
+  return { ...r, kind: type.kind, typespecs: type.typespecs, logo: r.logo ?? k.logo, exchange: place.exchange, sourceLogo: place.sourceLogo };
+}
+
 // ---------------------------------------------------------------------------- matching
 
 interface Fields {
@@ -544,7 +571,8 @@ export function rankExternal(query: string, raw: RawExternal, ctx: SearchContext
 
 /**
  * Local rows first; external rows that repeat a local key are dropped, after lending it what the
- * source says about the instrument (exchange, type, logos).
+ * source says about the instrument (exchange, type, logos). What no source said comes from the
+ * key and the dictionary.
  */
 export function mergeResults(local: SearchResult[], external: SearchResult[]): SearchResult[] {
   const byKey = new Map(external.map((r) => [r.key, r]));
@@ -560,5 +588,5 @@ export function mergeResults(local: SearchResult[], external: SearchResult[]): S
     seen.add(r.key);
     out.push(r);
   }
-  return out.slice(0, MAX_RESULTS + 2);
+  return out.slice(0, MAX_RESULTS + 2).map(withKeyInfo);
 }

@@ -8,6 +8,7 @@ import {
   groupLabel,
   insertText,
   isExpression,
+  keyInfo,
   localSearch,
   looksLikeYield,
   mergeResults,
@@ -279,8 +280,42 @@ describe("rankExternal", () => {
     const gold = mergeResults(local, external).find((r) => r.key === "tv:TVC:GOLD")!;
     expect(gold).toMatchObject({ name: "黄金", source: "watchlist", inWatchlist: "宏观", exchange: "TVC", logo: "metal/gold", sourceLogo: "provider/tvc" });
     expect(typeLabel(gold)).toBe("CFD");
-    // nothing to lend: no logo, the row falls back to its initial
-    expect(mergeResults(localSearch("qqq", ctx), [])[0].logo).toBeUndefined();
+  });
+
+  it("tells local rows no source answered for what their key and the dictionary say", () => {
+    const rows = mergeResults(localSearch("黄金", ctx), []);
+    expect(rows.find((r) => r.key === "tv:TVC:GOLD")).toMatchObject({ name: "黄金", exchange: "TVC", sourceLogo: "source/TVC", logo: "metal/gold" });
+    const etf = rows.find((r) => r.key === "yahoo:GLD")!;
+    expect(etf).toMatchObject({ source: "wellknown", logo: "spdr-sandp500-etf-tr" });
+    expect([typeLabel(etf), etf.exchange]).toEqual(["ETF", undefined]);
+    const btc = mergeResults(localSearch("btc", ctx), []).find((r) => r.key === "binance:BTCUSDT")!;
+    expect([btc.exchange, btc.sourceLogo, btc.logo, typeLabel(btc)]).toEqual(["Binance", "source/BINANCE", "crypto/XTVCBTC", "加密"]);
+  });
+
+  it("keeps a source's own type and exchange, filling only what it lacks", () => {
+    const yahoo: SearchResult = { key: "yahoo:0700.HK", name: "Tencent", exchange: "HKSE", kind: "equity", source: "yahoo", suggestedGroup: "港 A" };
+    // Yahoo's exchange name has no logo: the home market's name and logo go together
+    expect(mergeResults([], [yahoo])[0]).toMatchObject({ kind: "equity", exchange: "HKEX", sourceLogo: "source/HKEX", logo: "tencent" });
+    const us: SearchResult = { key: "yahoo:PLTR", name: "Palantir", exchange: "NasdaqGS", kind: "equity", source: "yahoo", suggestedGroup: "美股" };
+    expect(mergeResults([], [us])[0]).toMatchObject({ exchange: "NasdaqGS", sourceLogo: undefined, logo: undefined });
+  });
+});
+
+describe("keyInfo", () => {
+  it("reads the exchange off the key and the type and logo off the dictionary", () => {
+    expect(keyInfo("tv:FX_IDC:EURUSD")).toEqual({ exchange: "FX_IDC", sourceLogo: "source/FX_IDC", kind: "forex", typespecs: undefined, logo: "country/EU" });
+    expect(keyInfo("tv:OANDA:XAUUSD")).toMatchObject({ exchange: "OANDA", sourceLogo: "source/OANDA", kind: undefined, logo: undefined });
+    expect(keyInfo("yahoo:600519.SS")).toMatchObject({ exchange: "SSE", sourceLogo: "source/SSE", kind: "stock", logo: "moutai" });
+    expect(keyInfo("yahoo:^GSPC")).toEqual({ kind: "index", typespecs: undefined, logo: "indices/s-and-p-500" });
+    expect(keyInfo("yahoo:PLTR")).toEqual({ kind: undefined, typespecs: undefined, logo: undefined });
+    expect(keyInfo("binance:PEPEUSDT")).toMatchObject({ exchange: "Binance", logo: "crypto/XTVCPEPE" });
+    expect(keyInfo("=BTC/GOLD")).toEqual({ kind: undefined, typespecs: undefined, logo: undefined });
+  });
+
+  it("labels the dictionary's TradingView CFDs as TradingView does", () => {
+    expect(typeLabel({ key: "tv:TVC:GOLD", ...keyInfo("tv:TVC:GOLD") })).toBe("CFD");
+    expect(typeLabel({ key: "tv:TVC:DXY", ...keyInfo("tv:TVC:DXY") })).toBe("指数 CFD");
+    expect(typeLabel({ key: "tv:TVC:US10Y", ...keyInfo("tv:TVC:US10Y") })).toBe("债券");
   });
 });
 

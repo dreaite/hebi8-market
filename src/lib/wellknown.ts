@@ -13,10 +13,86 @@ export interface WellKnown {
   aliases: string[];
   /** Tickers it goes by elsewhere (TradingView's `SPX` for `^GSPC`), resolved like its own in a spread */
   codes?: string[];
+  /** What TradingView's search says about it, for search rows no source has answered for (`TV_META`) */
+  kind?: string;
+  typespecs?: string[];
+  logo?: string;
 }
 
 const w = (key: string, zh: string, en: string | undefined, ...aliases: string[]): WellKnown => ({ key, zh, en, aliases });
 const tv = (entry: WellKnown, ...codes: string[]): WellKnown => ({ ...entry, codes });
+
+const index = (logo?: string) => ({ kind: "index", logo });
+const etf = (logo: string) => ({ kind: "etf", logo });
+const stock = (logo: string) => ({ kind: "stock", logo });
+const cfd = (kind: string, logo: string) => ({ kind, typespecs: ["cfd"], logo });
+
+/**
+ * Type and logo id of the entries as TradingView's symbol search reports them (crypto pairs get
+ * theirs from the key). Yahoo's indices are labelled as the index, not TradingView's CFD of it.
+ */
+const TV_META: Record<string, Pick<WellKnown, "kind" | "typespecs" | "logo">> = {
+  "yahoo:SPY": etf("spdr-sandp500-etf-tr"),
+  "yahoo:^GSPC": index("indices/s-and-p-500"),
+  "yahoo:QQQ": etf("invesco"),
+  "yahoo:^NDX": index("indices/nasdaq-100"),
+  "yahoo:^IXIC": index("indices/nasdaq-composite"),
+  "yahoo:^DJI": index("indices/dow-30"),
+  "yahoo:^RUT": index("indices/russell-2000"),
+  "yahoo:IWM": etf("ishares"),
+  "yahoo:^VIX": index("indices/volatility-s-and-p-500"),
+  "yahoo:TLT": etf("ishares"),
+  "yahoo:GLD": etf("spdr-sandp500-etf-tr"),
+  "yahoo:IBIT": etf("ishares"),
+  "yahoo:^HSI": index("indices/hang-seng"),
+  "yahoo:^HSCE": index("indices/hang-seng-china-enterprises"),
+  "tv:HSI:HSTECH": index(),
+  "tv:SSE:000300": index("indices/csi-300-index-futures"),
+  "yahoo:000001.SS": index("indices/sse-composite"),
+  "yahoo:399006.SZ": index(),
+  "tv:TVC:GOLD": cfd("commodity", "metal/gold"),
+  "tv:TVC:SILVER": cfd("commodity", "metal/silver"),
+  "tv:TVC:USOIL": cfd("commodity", "crude-oil"),
+  "tv:TVC:UKOIL": cfd("commodity", "crude-oil"),
+  "tv:TVC:US02Y": { kind: "bond", logo: "country/US" },
+  "tv:TVC:US10Y": { kind: "bond", logo: "country/US" },
+  "tv:TVC:US30Y": { kind: "bond", logo: "country/US" },
+  "tv:TVC:DXY": cfd("index", "indices/u-s-dollar-index"),
+  "tv:FX_IDC:USDCNH": { kind: "forex", logo: "country/US" },
+  "tv:FX_IDC:USDJPY": { kind: "forex", logo: "country/US" },
+  "tv:FX_IDC:EURUSD": { kind: "forex", logo: "country/EU" },
+  "yahoo:^N225": index("indices/nikkei-225"),
+  "yahoo:^GDAXI": index("indices/dax"),
+  "yahoo:^FTSE": index("indices/ftse-100-index"),
+  "yahoo:^STOXX50E": index("indices/euro-stoxx-50"),
+  "yahoo:^KS11": index("indices/korea-composite-index"),
+  "yahoo:^TWII": index(),
+  "yahoo:AAPL": stock("apple"),
+  "yahoo:MSFT": stock("microsoft"),
+  "yahoo:NVDA": stock("nvidia"),
+  "yahoo:TSLA": stock("tesla"),
+  "yahoo:GOOGL": stock("alphabet"),
+  "yahoo:AMZN": stock("amazon"),
+  "yahoo:META": stock("meta-platforms"),
+  "yahoo:TSM": stock("taiwan-semiconductor"),
+  "yahoo:AMD": stock("advanced-micro-devices"),
+  "yahoo:AVGO": stock("broadcom"),
+  "yahoo:NFLX": stock("netflix"),
+  "yahoo:BRK-B": stock("berkshire-hathaway"),
+  "yahoo:COIN": stock("coinbase"),
+  "yahoo:MSTR": stock("strategy-cad-hedged-cibc-cdr"),
+  "yahoo:0700.HK": stock("tencent"),
+  "yahoo:9988.HK": stock("alibaba"),
+  "yahoo:3690.HK": stock("meituan"),
+  "yahoo:1810.HK": stock("xiaomi"),
+  "yahoo:1211.HK": stock("byd-electronic"),
+  "yahoo:9618.HK": stock("jd-com"),
+  "yahoo:9888.HK": stock("baidu"),
+  "yahoo:0981.HK": stock("semiconductor-manufacturing-international"),
+  "yahoo:2318.HK": stock("ping-an"),
+  "yahoo:600519.SS": stock("moutai"),
+  "yahoo:300750.SZ": stock("contemporary-amper"),
+};
 
 export const WELLKNOWN: WellKnown[] = [
   // crypto
@@ -94,7 +170,7 @@ export const WELLKNOWN: WellKnown[] = [
   w("yahoo:2318.HK", "中国平安", "Ping An Insurance", "2318", "pingan", "pa", "zhongguopingan", "zgpa"),
   w("yahoo:600519.SS", "贵州茅台", "Kweichow Moutai", "600519", "maotai", "mt", "guizhoumaotai", "gzmt"),
   w("yahoo:300750.SZ", "宁德时代", "CATL", "300750", "catl", "ningde", "nd", "ningdeshidai", "ndsd"),
-];
+].map((e) => ({ ...e, ...TV_META[e.key] }));
 
 const byKey = new Map(WELLKNOWN.map((e) => [e.key, e]));
 

@@ -58,7 +58,7 @@ const EXAMPLES = ["BTC/GOLD", "SPY/QQQ", "2*(SPY - QQQ)"];
 function SymbolLogo({ logo, ticker }: { logo?: string; ticker: string }) {
   const [failed, setFailed] = useState(false);
   if (!logo || failed) {
-    const letter = ticker.replace(/^[=^]/, "").replace(/^[A-Z_]+:/, "").charAt(0).toUpperCase();
+    const letter = ticker.replace(/^[=^]/, "").replace(/^[A-Z_]+:/i, "").charAt(0).toUpperCase();
     return (
       <span aria-hidden className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-line text-[10px] text-muted">
         {letter}
@@ -69,12 +69,23 @@ function SymbolLogo({ logo, ticker }: { logo?: string; ticker: string }) {
   return <img src={logoUrl(logo)} alt="" width={18} height={18} loading="lazy" onError={() => setFailed(true)} className="h-[18px] w-[18px] shrink-0 rounded-full" />;
 }
 
-/** The exchange's small logo before its name; just the name when it does not load. */
-function SourceLogo({ logo }: { logo: string }) {
+/**
+ * Like TradingView's search, on the right: the type, then the exchange name and its small logo.
+ * A phone keeps only the logo, unless there is none or it does not load. Remount it (`key`) for another logo.
+ */
+function RowMeta({ type, exchange, logo }: { type?: string; exchange?: string; logo?: string }) {
   const [failed, setFailed] = useState(false);
-  if (failed) return null;
-  // eslint-disable-next-line @next/next/no-img-element -- TradingView's SVG logos, nothing to optimise
-  return <img src={logoUrl(logo)} alt="" width={14} height={14} loading="lazy" onError={() => setFailed(true)} className="h-[14px] w-[14px] shrink-0 rounded-full" />;
+  const showLogo = logo && !failed;
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted">
+      {type && <span>{type}</span>}
+      {exchange && <span className={`max-w-[9rem] truncate ${showLogo ? "max-sm:hidden" : ""}`}>{exchange}</span>}
+      {showLogo && (
+        // eslint-disable-next-line @next/next/no-img-element -- TradingView's SVG logos, nothing to optimise
+        <img src={logoUrl(logo)} alt="" width={14} height={14} loading="lazy" onError={() => setFailed(true)} className="h-[14px] w-[14px] shrink-0 rounded-full" />
+      )}
+    </span>
+  );
 }
 
 type Section = "key" | "watchlist" | "common" | "external";
@@ -360,28 +371,24 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
                 className={`flex cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1.5 ${isActive ? "bg-bg" : ""}`}
               >
                 <SymbolLogo key={r.logo} logo={r.logo} ticker={ticker} />
-                <span className="min-w-0 flex-1 truncate">
-                  {r.source === "key" && !replaces(r) && <span className="mr-1 text-muted">使用</span>}
-                  <span className="text-sm" title={r.name}>
-                    {r.name}
+                {/* the name gives way down to 4rem, the code never; past that the row's buttons wrap to a second line */}
+                <span className="flex min-w-min flex-1 items-baseline gap-2">
+                  <span className="w-16 max-w-fit grow truncate">
+                    {r.source === "key" && !replaces(r) && <span className="mr-1 text-muted">使用</span>}
+                    <span className="text-sm" title={r.name}>
+                      {r.name}
+                    </span>
                   </span>
-                  {r.name !== ticker && <span className="ml-2 font-mono text-[11px] text-muted">{ticker}</span>}
+                  {r.name !== ticker && <span className="max-w-full shrink-0 truncate font-mono text-[11px] text-muted">{ticker}</span>}
                 </span>
-                {/* like TradingView's search: type, then exchange name and logo, on the right */}
-                {(type || r.exchange) && (
-                  <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted">
-                    {type && <span>{type}</span>}
-                    {r.exchange && <span className="max-w-[9rem] truncate max-sm:hidden">{r.exchange}</span>}
-                    {r.sourceLogo && <SourceLogo key={r.sourceLogo} logo={r.sourceLogo} />}
-                  </span>
-                )}
+                {(type || r.exchange) && <RowMeta key={r.sourceLogo} type={type} exchange={r.exchange} logo={r.sourceLogo} />}
                 {replaces(r) ? (
                   isActive && <span className="shrink-0 text-[11px] text-muted">替换</span>
                 ) : mode === "pick" && pickActions ? (
                   !isActive ? (
                     groupOf(r) && <span className="shrink-0 text-[11px] text-muted">{groupOf(r)}</span>
                   ) : (
-                    <span className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                    <span className="ml-auto flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
                       {pickActions.map((a, ai) => (
                         <button
                           key={a.id}
@@ -399,7 +406,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
                   <span className="shrink-0 text-[11px] text-muted">{section === "watchlist" ? groupOf(r) : `已在自选 · ${groupOf(r)}`}</span>
                 ) : addable(r) ? (
                   // on a phone the highlighted row's group chips take a line of their own, so the name stays readable
-                  <span className={`flex shrink-0 flex-wrap items-center gap-1 ${isActive ? "max-sm:basis-full" : ""}`} onClick={(e) => e.stopPropagation()}>
+                  <span className={`ml-auto flex shrink-0 flex-wrap items-center gap-1 ${isActive ? "max-sm:basis-full" : ""}`} onClick={(e) => e.stopPropagation()}>
                     {newGroup?.key === r.key ? (
                       <input
                         value={newGroup.name}
