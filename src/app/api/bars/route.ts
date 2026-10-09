@@ -6,6 +6,7 @@ import { aggregate } from "@/lib/series";
 import { pricePrecision } from "@/lib/stats";
 import { getSymbol } from "@/lib/store";
 import { isSynthetic, isTimeframe, isValidKey, parseKey } from "@/lib/symbols";
+import { synthName } from "@/lib/synth";
 import { SESSION_COOKIE } from "@/lib/github";
 import { readConfigSafe } from "@/lib/vault";
 import { resolveViewer } from "@/lib/viewer";
@@ -55,9 +56,9 @@ export async function GET(request: NextRequest) {
   const body: BarsResponse = {
     symbol: {
       key,
-      name: item?.name ?? row?.name ?? (isSynthetic(key) ? key.slice(1) : parseKey(key).ticker),
+      name: item?.name ?? row?.name ?? (isSynthetic(key) ? synthName(key) : parseKey(key).ticker),
       source: isSynthetic(key) ? "expr" : parseKey(key).source,
-      ticker: isSynthetic(key) ? key.slice(1) : parseKey(key).ticker,
+      ticker: isSynthetic(key) ? synthName(key) : parseKey(key).ticker,
       currency: row?.currency ?? null,
       bench,
       syncedAt: row?.syncedAt ?? null,

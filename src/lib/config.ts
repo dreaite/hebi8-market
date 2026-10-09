@@ -4,7 +4,7 @@ import { ALERT_CONDS, describeCondition, parseCondition, type AlertCondition, ty
 import { CHANGE_PERIODS, DEFAULT_PERIODS, MAX_PERIODS, type ChangePeriod } from "./periods";
 import type { Prices } from "./series";
 import { DATA_ID, TF_LABELS, hash6, isSynthetic, isTimeframe, isValidKey, tickerOf, type Timeframe } from "./symbols";
-import { parseSynth } from "./synth";
+import { parseSynth, synthName } from "./synth";
 
 export type UpDown = "green-up" | "red-up";
 export type ChartStyle = "candle_solid" | "candle_up_stroke" | "ohlc" | "area";
@@ -300,7 +300,7 @@ export function normalizeUserConfig(raw: unknown, root: Config): Config {
 }
 
 /** The short name an alert's generated label uses: the alias, else the ticker. */
-const shortName = (key: string, aliases: Record<string, string>) => Object.entries(aliases).find(([, k]) => k === key)?.[0] ?? tickerOf(key);
+const shortName = (key: string, aliases: Record<string, string>) => Object.entries(aliases).find(([, k]) => k === key)?.[0] ?? (isSynthetic(key) ? synthName(key) : tickerOf(key));
 
 /**
  * The id an old condition keeps as an alert: its own, `cond-<id>` when an alert in `alerts` has

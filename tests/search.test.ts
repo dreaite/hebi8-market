@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  analyzeExpression,
   canonicalKey,
   directKey,
   filterTv,
   filterYahoo,
   groupLabel,
+  isExpression,
   localSearch,
   looksLikeYield,
   mergeResults,
   needsTv,
   rankExternal,
+  resolveOperand,
   suggestGroup,
   type SearchContext,
 } from "@/lib/search";
@@ -255,5 +258,73 @@ describe("needsTv / displayName", () => {
     expect(displayName("tv:TVC:US02Y", null, "US 2Y")).toBe("美债 2 年");
     expect(displayName("yahoo:ZZZ", null, "Zed Corp")).toBe("Zed Corp");
     expect(displayName("yahoo:ZZZ")).toBe("ZZZ");
+  });
+});
+
+describe("isExpression", () => {
+  it.each(["AAPL/MSFT", "BTCUSDT/GOLD", "2*(SPY-QQQ)", "binance:BTCUSDT/tv:TVC:GOLD", "SPY - QQQ", "^GSPC/^DJI", "SPY^2", "=SPY-QQQ", "腾讯/阿里", "SPY-2"])("%j is a spread", (q) => {
+    expect(isExpression(q)).toBe(true);
+  });
+  it.each(["AAPL", "^GSPC", "0700.HK", "BRK-B", "BTC-USD", "Berkshire B-share", "S&P 500", "data:gpu/4090-xianyu", "data:gpu/", "tv:TVC:GOLD", "苹果"])("%j is one symbol", (q) => {
+    expect(isExpression(q)).toBe(false);
+  });
+});
+
+describe("resolveOperand", () => {
+  it("does not depend on the watchlist", () => {
+    // aliases, keys and the dictionary first, whatever is watched
+    expect(resolveOperand("gold", false, ctx.aliases)).toBe("tv:TVC:GOLD");
+    expect(resolveOperand("Yahoo:aapl", false, ctx.aliases)).toBe("yahoo:AAPL");
+    expect(resolveOperand("黄金", false, {})).toBe("tv:TVC:GOLD");
+    expect(resolveOperand("BTCUSDT", false, {})).toBe("binance:BTCUSDT");
+    expect(resolveOperand("eth", false, {})).toBe("binance:ETHUSDT");
+    expect(resolveOperand("gspc", false, {})).toBe("yahoo:^GSPC");
+    // the dictionary's pinyin initials are not codes: BP is BP, not the S&P 500 ETF
+    expect(resolveOperand("BP", false, {})).toBe("yahoo:BP");
+    // TradingView ids move to the preferred source
+    expect(resolveOperand("NASDAQ:AAPL", false, {})).toBe("yahoo:AAPL");
+    expect(resolveOperand("TVC:DXY", false, {})).toBe("tv:TVC:DXY");
+    // the rest on its default source; NVDA is watched, which changes nothing
+    expect(resolveOperand("nvda", false, ctx.aliases)).toBe("yahoo:NVDA");
+    expect(resolveOperand("^n225", false, {})).toBe("yahoo:^N225");
+    expect(resolveOperand("PEPEUSDT", false, {})).toBe("binance:PEPEUSDT");
+    expect(resolveOperand("yahoo:BRK-B", true, {})).toBe("yahoo:BRK-B");
+  });
+  it("leaves names that need a search unresolved", () => {
+    expect(resolveOperand("某某科技", false, {})).toBeNull();
+    expect(resolveOperand("bad key", true, {})).toBeNull();
+    expect(resolveOperand("=BTC/GOLD", true, {})).toBeNull();
+  });
+});
+
+describe("analyzeExpression", () => {
+  it("normalizes operands to full keys", () => {
+    expect(analyzeExpression("AAPL/MSFT", 9, {}).key).toBe("=yahoo:AAPL/yahoo:MSFT");
+    expect(analyzeExpression("= 2 * (SPY - QQQ)", 0, ctx.aliases).key).toBe("=2*(yahoo:SPY-yahoo:QQQ)");
+    expect(analyzeExpression('btc/"yahoo:BRK-B"', 0, ctx.aliases).key).toBe('=binance:BTCUSDT/"yahoo:BRK-B"');
+    expect(analyzeExpression("^GSPC/^DJI", 0, {}).key).toBe("=yahoo:^GSPC/yahoo:^DJI");
+  });
+
+  it("finds the operand at the caret, with its position in the query", () => {
+    const a = analyzeExpression("=AAPL / msf", 11, {});
+    expect(a.active).toEqual({ text: "msf", start: 8, end: 11, key: "yahoo:MSF" });
+    expect(analyzeExpression("=AAPL / msf", 3, {}).active?.text).toBe("AAPL");
+    // right after an operator there is nothing to search
+    expect(analyzeExpression("AAPL/", 5, {}).active).toBeNull();
+  });
+
+  it("says what is wrong", () => {
+    expect(analyzeExpression("AAPL/", 5, {}).error).toBe("表达式不完整");
+    expect(analyzeExpression("(AAPL/MSFT", 0, {}).error).toBe("缺少「)」");
+    expect(analyzeExpression("腾讯/AAPL", 0, {}).error).toBe("「腾讯」要从搜索结果里选一个标的");
+    expect(analyzeExpression("AAPL/MSFT %", 0, {}).error).toBe("无法识别的字符「%」");
+    expect(analyzeExpression("AAPL/MSFT", 0, {}).error).toBeNull();
+  });
+});
+
+describe("displayName of a spread", () => {
+  it("is short, like TradingView", () => {
+    expect(displayName("=yahoo:AAPL/yahoo:MSFT")).toBe("AAPL/MSFT");
+    expect(displayName("=BTC/GOLD")).toBe("BTC/GOLD");
   });
 });

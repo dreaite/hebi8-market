@@ -13,7 +13,8 @@ import { CHART_STYLES, type ChartPrefs, type ChartStyle, type FormulaDef, type P
 import { fmtAgo } from "@/lib/format";
 import { setChartContext } from "@/lib/page-context";
 import type { Prices } from "@/lib/series";
-import { SOURCE_LABELS, TF_LABELS, TIMEFRAMES, tickerOf, type Timeframe } from "@/lib/symbols";
+import { SOURCE_LABELS, TF_LABELS, TIMEFRAMES, isSynthetic, tickerOf, type Timeframe } from "@/lib/symbols";
+import { synthName } from "@/lib/synth";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { useMediaQuery } from "@/lib/use-media-query";
 import type { ChartState, OverlaySpec } from "@/lib/vault";
@@ -491,7 +492,7 @@ export function ChartView({
     setRevealSeq((n) => n + 1);
   };
   const name = names[symbolKey] ?? meta?.name ?? symbolKey;
-  const ticker = meta?.ticker ?? tickerOf(symbolKey);
+  const ticker = meta?.ticker ?? (isSynthetic(symbolKey) ? synthName(symbolKey) : tickerOf(symbolKey));
   const sourceLabel = meta ? (meta.source === "expr" ? "合成" : SOURCE_LABELS[meta.source]) : null;
   const syncText = meta ? (meta.source === "expr" ? "按需合成" : fmtAgo(meta.syncedAt)) : "";
   const subtitle = [

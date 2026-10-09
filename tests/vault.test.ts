@@ -27,6 +27,8 @@ describe("fileKey", () => {
     expect(fileKey("yahoo:0700.HK")).toBe("yahoo_0700.HK");
     expect(fileKey("yahoo:^GSPC")).toBe("yahoo__GSPC");
     expect(fileKey("=BTC/GOLD")).toBe("expr_BTC_GOLD");
+    expect(fileKey("=yahoo:AAPL/yahoo:^GSPC")).toBe("expr_yahoo_AAPL_yahoo__GSPC");
+    expect(fileKey('="yahoo:BRK-B"*2')).toBe("expr__yahoo_BRK-B__2");
     expect(hash6("=BTC/GOLD")).toMatch(/^[0-9a-f]{6}$/);
   });
 });

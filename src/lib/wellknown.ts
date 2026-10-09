@@ -3,7 +3,8 @@
  * the Chinese name and lower-case aliases (code, English, pinyin, pinyin initials). Matched
  * locally by the global search, so「腾讯」or「tx」finds 0700.HK without any network call.
  */
-import { tickerOf } from "./symbols";
+import { isSynthetic, tickerOf } from "./symbols";
+import { synthName } from "./synth";
 
 export interface WellKnown {
   key: string;
@@ -104,5 +105,5 @@ export function wellKnownName(key: string): string | null {
 
 /** Display rule everywhere: the yaml name, else the dictionary's Chinese name, else what the source reports. */
 export function displayName(key: string, yamlName?: string | null, sourceName?: string | null): string {
-  return yamlName ?? wellKnownName(key) ?? sourceName ?? tickerOf(key);
+  return yamlName ?? wellKnownName(key) ?? sourceName ?? (isSynthetic(key) ? synthName(key) : tickerOf(key));
 }

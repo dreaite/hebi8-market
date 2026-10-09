@@ -5,7 +5,8 @@ import { deleteAlert, saveAlert, type AlertInput } from "@/app/actions";
 import { compileFormula } from "@/indicators/formula-indicators";
 import { ALERT_CONDS, WATCHLIST, describeCondition, parseCondition, type AlertCond, type AlertCondition, type AlertTrigger } from "@/lib/alert-conds";
 import type { AlertView } from "@/lib/alert-view";
-import { TF_LABELS, TIMEFRAMES, tickerOf, type Timeframe } from "@/lib/symbols";
+import { isSynthetic, TF_LABELS, TIMEFRAMES, tickerOf, type Timeframe } from "@/lib/symbols";
+import { synthName } from "@/lib/synth";
 import { Dialog } from "./Dialog";
 import { LoginButton } from "./UiProvider";
 
@@ -89,7 +90,7 @@ export function AlertDialog({
   }, [cond, shape, level, low, high, pct, bars]);
   // on the whole watchlist `bench` is each symbol's own
   const formulaError = cond === "formula" ? compileFormula(when, { aliases, bench: all ? undefined : bench }).error : null;
-  const short = Object.entries(aliases).find(([, k]) => k === symbolKey)?.[0] ?? tickerOf(symbolKey);
+  const short = Object.entries(aliases).find(([, k]) => k === symbolKey)?.[0] ?? (isSynthetic(symbolKey) ? synthName(symbolKey) : tickerOf(symbolKey));
   const what = parsed && "condition" in parsed ? describeCondition(parsed.condition) : cond === "formula" ? when.trim() : "";
   const autoName = what && !all && cond !== "formula" ? `${short} ${what}` : what;
   /** A price or a channel only means something on one symbol */

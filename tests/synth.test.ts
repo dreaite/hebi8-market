@@ -1,16 +1,68 @@
 import { describe, expect, it } from "vitest";
 import type { Bar } from "@/lib/series";
-import { evalSynth, parseSynth } from "@/lib/synth";
+import { evalSynth, lexSynth, parseSynth, synthName, synthOperand } from "@/lib/synth";
 
 const day = (iso: string) => Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 1000;
 const bar = (iso: string, o: number, h: number, l: number, c: number): Bar => ({ t: day(iso), o, h, l, c, v: 1, adj: 1 });
 
 const aliases = { BTC: "binance:BTCUSDT", GOLD: "tv:TVC:GOLD" };
 
+const lexed = (src: string) => lexSynth(src).map((t) => (t.type === "bad" ? `!${t.message}` : t.type === "ref" ? `[${t.text}]` : t.text));
+
+describe("lexSynth", () => {
+  it("reads keys, tickers and numbers as operands where they cannot be operators", () => {
+    expect(lexed("yahoo:AAPL/tv:TVC:GOLD")).toEqual(["[yahoo:AAPL]", "/", "[tv:TVC:GOLD]"]);
+    // `^` opens an index ticker where an operand is expected and is a power after one
+    expect(lexed("^GSPC/yahoo:^DJI^2")).toEqual(["[^GSPC]", "/", "[yahoo:^DJI]", "^", "2"]);
+    expect(lexed("-(^VIX)")).toEqual(["-", "(", "[^VIX]", ")"]);
+    // a digit followed by a word character is a ticker, a bare number a constant
+    expect(lexed("0700.HK*2.5e1+600519")).toEqual(["[0700.HK]", "*", "2.5e1", "+", "600519"]);
+    // `-` is always an operator; `=` and `!` belong to tickers
+    expect(lexed("BRK-B+yahoo:GC=F+ES1!")).toEqual(["[BRK]", "-", "[B]", "+", "[yahoo:GC=F]", "+", "[ES1!]"]);
+    expect(lexed('"yahoo:BRK-B"/腾讯')).toEqual(["[yahoo:BRK-B]", "/", "[腾讯]"]);
+  });
+
+  it("marks what it cannot read instead of throwing", () => {
+    expect(lexed("A % B")).toEqual(["[A]", "!无法识别的字符「%」", "[B]"]);
+    expect(lexed('A/"yahoo:B')).toEqual(["[A]", "/", "!引号没有闭合"]);
+  });
+
+  it("gives positions in the source", () => {
+    expect(lexSynth(' A / "b:c"').map((t) => [t.start, t.end])).toEqual([
+      [1, 2],
+      [3, 4],
+      [5, 10],
+    ]);
+  });
+});
+
+describe("synthOperand / synthName", () => {
+  it("leaves a key bare only when it reads back as one operand", () => {
+    expect(synthOperand("yahoo:AAPL")).toBe("yahoo:AAPL");
+    expect(synthOperand("yahoo:^GSPC")).toBe("yahoo:^GSPC");
+    expect(synthOperand("tv:TVC:GOLD")).toBe("tv:TVC:GOLD");
+    expect(synthOperand("yahoo:EURUSD=X")).toBe("yahoo:EURUSD=X");
+    expect(synthOperand("yahoo:BRK-B")).toBe('"yahoo:BRK-B"');
+    expect(synthOperand("data:gpu/4090-xianyu")).toBe('"data:gpu/4090-xianyu"');
+  });
+
+  it("shows operands by ticker, like a TradingView spread", () => {
+    expect(synthName("=yahoo:AAPL/yahoo:MSFT")).toBe("AAPL/MSFT");
+    expect(synthName("=2*(yahoo:SPY-yahoo:QQQ)")).toBe("2*(SPY-QQQ)");
+    expect(synthName('=binance:BTCUSDT/tv:TVC:GOLD+"data:gpu/4090-xianyu"')).toBe("BTCUSDT/GOLD+4090-xianyu");
+    expect(synthName("=BTC / GOLD")).toBe("BTC/GOLD");
+  });
+});
+
 describe("parseSynth", () => {
   it("collects operands from aliases and quoted keys, in order", () => {
     expect(parseSynth("BTC/GOLD", aliases).keys).toEqual(["binance:BTCUSDT", "tv:TVC:GOLD"]);
     expect(parseSynth('"yahoo:SPY" - 2 * GOLD', aliases).keys).toEqual(["yahoo:SPY", "tv:TVC:GOLD"]);
+  });
+
+  it("takes keys without quotes", () => {
+    expect(parseSynth("yahoo:^GSPC/tv:TVC:GOLD-yahoo:0700.HK^2", {}).keys).toEqual(["yahoo:^GSPC", "tv:TVC:GOLD", "yahoo:0700.HK"]);
+    expect(parseSynth('2*(yahoo:SPY-"yahoo:BRK-B")', {}).keys).toEqual(["yahoo:SPY", "yahoo:BRK-B"]);
   });
 
   it.each([
@@ -21,6 +73,8 @@ describe("parseSynth", () => {
     ["BTC GOLD", "表达式多了内容"],
     ["1 + 2", "至少要引用一个标的"],
     ["BTC % 2", "无法识别的字符"],
+    ["nope:AAPL/BTC", "无效的标的 key「nope:AAPL」"],
+    ["data:gpu/BTC", "无效的标的 key「data:gpu」"],
   ])("rejects %j", (expr, message) => {
     expect(() => parseSynth(expr, aliases)).toThrow(message);
   });

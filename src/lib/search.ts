@@ -5,6 +5,7 @@
  */
 import type { SearchHit } from "./sources/types";
 import { isSynthetic, isValidKey, parseKey, SOURCES, tickerOf, type Source } from "./symbols";
+import { lexSynth, parseSynth, synthOperand } from "./synth";
 import { displayName, WELLKNOWN, wellKnown, wellKnownName } from "./wellknown";
 
 export type SearchSource = "key" | "watchlist" | "alias" | "wellknown" | Source;
@@ -62,6 +63,86 @@ export function directKey(query: string, aliases: Record<string, string>): strin
   if (!(SOURCES as readonly string[]).includes(source) || !ticker) return null;
   const key = `${source}:${ticker}`;
   return isValidKey(key) ? key : null;
+}
+
+// ---------------------------------------------------------------------------- expressions
+
+/**
+ * Typed as a spread (`AAPL/MSFT`, `2*(SPY-QQQ)`, `^GSPC/^DJI`) rather than one symbol: it starts
+ * with `=`, or it has an operator. A hyphen with no spaces around it and nothing else
+ * (`BRK-B`, `BTC-USD`) stays a ticker, and so does a dataset key (`data:gpu/4090-xianyu`).
+ */
+export function isExpression(query: string): boolean {
+  const q = normalizeQuery(query);
+  if (q.startsWith("=")) return true;
+  if (/^data:\S*$/i.test(q)) return false;
+  const tokens = lexSynth(q);
+  const ops = tokens.filter((t) => t.type === "op");
+  const hyphenated = ops.every((t) => t.text === "-" && /\S/.test(q[t.start - 1] ?? "") && /\S/.test(q[t.end] ?? "")) && !tokens.some((t) => t.type === "num");
+  return ops.length > 0 && !hyphenated;
+}
+
+/**
+ * The key an operand stands for, without looking at the watchlist: an alias or key as typed, a
+ * dictionary code or name (`GOLD`, `BTC`, `黄金`), a TradingView id (`NASDAQ:AAPL`), else a ticker on
+ * its default source (`…USDT` on Binance, the rest on Yahoo). Names that need a search (`腾讯` unless in the dictionary) are null.
+ */
+export function resolveOperand(text: string, quoted: boolean, aliases: Record<string, string>): string | null {
+  if (quoted) return isValidKey(text) && !isSynthetic(text) ? text : null;
+  const direct = directKey(text, aliases);
+  if (direct) return isSynthetic(direct) ? null : direct;
+  const lower = text.toLowerCase();
+  // codes and names only: pinyin initials like `bp` are real tickers too
+  const dict = WELLKNOWN.find((e) => e.zh === text || e.en?.toLowerCase() === lower || bareCodes(e.key).includes(lower));
+  if (dict) return dict.key;
+  // TradingView's own spelling, `NASDAQ:AAPL`, moves to the preferred source like a TV search hit
+  if (/^[A-Za-z0-9_]+:[A-Za-z0-9_.!]+$/.test(text)) return canonicalKey(`tv:${text.toUpperCase()}`);
+  if (!/^\^?[A-Za-z0-9][A-Za-z0-9.=!]*$/.test(text)) return null;
+  return /USDT$/i.test(text) ? `binance:${text.toUpperCase()}` : `yahoo:${text.toUpperCase()}`;
+}
+
+export interface ExprOperand {
+  text: string;
+  /** Position in the query, quotes included */
+  start: number;
+  end: number;
+  key: string | null;
+}
+
+export interface ExprAnalysis {
+  operands: ExprOperand[];
+  /** The operand the caret is in or touches: the search box suggests for it and replaces it */
+  active: ExprOperand | null;
+  /** `=…` with every operand a full key, when the whole expression parses */
+  key: string | null;
+  error: string | null;
+}
+
+/** An expression as typed, at caret position `caret`; positions are the query's own. */
+export function analyzeExpression(query: string, caret: number, aliases: Record<string, string>): ExprAnalysis {
+  // the leading `=` becomes a space so positions stay put
+  const tokens = lexSynth(query.replace(/^(\s*)=/, "$1 "));
+  const operands: ExprOperand[] = tokens.flatMap((t) => (t.type === "ref" ? [{ text: t.text, start: t.start, end: t.end, key: resolveOperand(t.text, t.quoted, aliases) }] : []));
+  const active = operands.find((o) => o.start <= caret && caret <= o.end) ?? null;
+  const parts: string[] = [];
+  let ref = 0;
+  for (const t of tokens) {
+    if (t.type === "bad") return { operands, active, key: null, error: t.message };
+    if (t.type !== "ref") {
+      parts.push(t.text);
+      continue;
+    }
+    const { text, key } = operands[ref++];
+    if (!key) return { operands, active, key: null, error: `「${text}」要从搜索结果里选一个标的` };
+    parts.push(synthOperand(key));
+  }
+  const expr = parts.join("");
+  try {
+    parseSynth(expr, {});
+    return { operands, active, key: `=${expr}`, error: null };
+  } catch (err) {
+    return { operands, active, key: null, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 // ---------------------------------------------------------------------------- groups

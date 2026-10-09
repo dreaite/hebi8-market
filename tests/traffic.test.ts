@@ -35,6 +35,8 @@ describe("where a request comes from", () => {
     // one spelling per chart key; the flush decides whether the key is anyone's
     expect(routeOf("/chart/binance:BTCUSDT")).toBe("/chart/binance%3ABTCUSDT");
     expect(routeOf("/chart/binance%3ABTCUSDT")).toBe("/chart/binance%3ABTCUSDT");
+    expect(routeOf("/chart/%3Dyahoo%3AAAPL%2Fyahoo%3A%5EGSPC")).toBe("/chart/%3Dyahoo%3AAAPL%2Fyahoo%3A%5EGSPC");
+    expect(routeOf("/chart/=yahoo:AAPL%2F%22yahoo:BRK-B%22")).toBe("/chart/%3Dyahoo%3AAAPL%2F%22yahoo%3ABRK-B%22");
     expect(routeOf("/chart/%E0%A4%A")).toBe(ANY_CHART);
     expect(routeOf(`/chart/${"x".repeat(101)}`)).toBe(ANY_CHART);
   });

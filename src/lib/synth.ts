@@ -1,10 +1,12 @@
 /**
- * Synthetic symbols: `=BTC/GOLD`, `="binance:BTCUSDT"/"tv:TVC:GOLD"`, `=2*(SPY-QQQ)`.
- * Operands are aliases or quoted keys; each OHLC field is computed separately, like a
- * TradingView spread. Trading days follow the first operand, the rest are forward-filled.
+ * Synthetic symbols: `=BTC/GOLD`, `=binance:BTCUSDT/tv:TVC:GOLD`, `=2*(yahoo:SPY-yahoo:QQQ)`.
+ * Operands are aliases or full keys, quoted when the ticker has characters an expression uses
+ * (`="yahoo:BRK-B"/yahoo:SPY`, `="data:gpu/4090-xianyu"/USDCNH`); each OHLC field is computed
+ * separately, like a TradingView spread. Trading days follow the first operand, the rest are
+ * forward-filled.
  */
 import { align, type Bar } from "./series";
-import { isValidKey } from "./symbols";
+import { isSynthetic, isValidKey, parseKey } from "./symbols";
 
 type Op = "+" | "-" | "*" | "/" | "^";
 type Node =
@@ -19,41 +21,105 @@ export interface Synth {
   node: Node;
 }
 
-type Token = { type: "num"; value: number } | { type: "sym"; key: string } | { type: "op"; value: string };
+/** `ref` is an operand as written: an alias, a key, or a bare ticker typed into the search box. */
+export type SynthToken =
+  | { type: "num"; text: string; start: number; end: number }
+  | { type: "op"; text: string; start: number; end: number }
+  | { type: "ref"; text: string; quoted: boolean; start: number; end: number }
+  | { type: "bad"; message: string; start: number; end: number };
 
-function tokenize(src: string, aliases: Record<string, string>): Token[] {
-  const tokens: Token[] = [];
+/** Letters (any script), digits, `_ . ! =`, and `:` with an optional `^` after it (`yahoo:^GSPC`). */
+const WORD = /^(?:[\p{L}\p{N}_.!=]|:\^?)+/u;
+const NUMBER = /^(\d+\.?\d*|\.\d+)(e[+-]?\d+)?/i;
+
+/**
+ * Never throws, so the search box can lex what is being typed. A digit starts a number unless a
+ * word character follows it (`0700.HK`); `^` starts an operand where one is expected (`^GSPC/^DJI`)
+ * and is a power after one (`SPY^2`); `-` is always an operator, so `yahoo:BRK-B` needs quotes.
+ */
+export function lexSynth(src: string): SynthToken[] {
+  const tokens: SynthToken[] = [];
+  const operandNext = () => {
+    const last = tokens.at(-1);
+    return !last || (last.type === "op" && last.text !== ")");
+  };
   let i = 0;
   while (i < src.length) {
     const ch = src[i];
     if (/\s/.test(ch)) {
       i++;
-    } else if (/[0-9.]/.test(ch)) {
-      const m = /^(\d+\.?\d*|\.\d+)(e[+-]?\d+)?/i.exec(src.slice(i));
-      if (!m) throw new Error("无法识别的数字");
-      tokens.push({ type: "num", value: Number(m[0]) });
-      i += m[0].length;
-    } else if (ch === '"') {
+      continue;
+    }
+    if (ch === '"') {
       const end = src.indexOf('"', i + 1);
-      if (end < 0) throw new Error("引号没有闭合");
-      const key = src.slice(i + 1, end);
-      if (!isValidKey(key)) throw new Error(`无效的标的 key「${key}」`);
-      tokens.push({ type: "sym", key });
+      if (end < 0) {
+        tokens.push({ type: "bad", message: "引号没有闭合", start: i, end: src.length });
+        break;
+      }
+      tokens.push({ type: "ref", text: src.slice(i + 1, end), quoted: true, start: i, end: end + 1 });
       i = end + 1;
-    } else if (/[A-Za-z_]/.test(ch)) {
-      const name = /^[A-Za-z_][A-Za-z0-9_.]*/.exec(src.slice(i))![0];
-      const key = aliases[name];
-      if (!key) throw new Error(`未知别名「${name}」`);
-      tokens.push({ type: "sym", key });
-      i += name.length;
+      continue;
+    }
+    const num = NUMBER.exec(src.slice(i));
+    if (num && !WORD.test(src.slice(i + num[0].length))) {
+      tokens.push({ type: "num", text: num[0], start: i, end: i + num[0].length });
+      i += num[0].length;
+      continue;
+    }
+    const caret = ch === "^" && operandNext() ? 1 : 0;
+    const word = WORD.exec(src.slice(i + caret));
+    if (word) {
+      const end = i + caret + word[0].length;
+      tokens.push({ type: "ref", text: src.slice(i, end), quoted: false, start: i, end });
+      i = end;
     } else if ("+-*/^()".includes(ch)) {
-      tokens.push({ type: "op", value: ch });
+      tokens.push({ type: "op", text: ch, start: i, end: i + 1 });
       i++;
     } else {
-      throw new Error(`无法识别的字符「${ch}」`);
+      tokens.push({ type: "bad", message: `无法识别的字符「${ch}」`, start: i, end: i + 1 });
+      i++;
     }
   }
   return tokens;
+}
+
+/** An alias, else a full key (`source:` prefix or quoted). */
+function refKey(t: Extract<SynthToken, { type: "ref" }>, aliases: Record<string, string>): string {
+  if (!t.quoted && aliases[t.text]) return aliases[t.text];
+  if (!t.quoted && !t.text.includes(":")) throw new Error(`未知别名「${t.text}」`);
+  if (isSynthetic(t.text) || !isValidKey(t.text)) throw new Error(`无效的标的 key「${t.text}」`);
+  return t.text;
+}
+
+type Token = { type: "num"; value: number } | { type: "sym"; key: string } | { type: "op"; value: string };
+
+function tokenize(src: string, aliases: Record<string, string>): Token[] {
+  return lexSynth(src).map((t): Token => {
+    if (t.type === "bad") throw new Error(t.message);
+    if (t.type === "num") return { type: "num", value: Number(t.text) };
+    if (t.type === "op") return { type: "op", value: t.text };
+    return { type: "sym", key: refKey(t, aliases) };
+  });
+}
+
+/** A key as an operand: bare when it reads back as one word, quoted otherwise. */
+export const synthOperand = (key: string) => (WORD.exec(key)?.[0] === key ? key : `"${key}"`);
+
+/** What a chart calls a key: `AAPL/MSFT` for `=yahoo:AAPL/yahoo:MSFT`, `GOLD` for `tv:TVC:GOLD`. */
+function shortTicker(key: string): string {
+  const { source, ticker } = parseKey(key);
+  return source === "tv" || source === "data" ? ticker.slice(ticker.search(/[:/]/) + 1) : ticker;
+}
+
+/** A synthetic key the way TradingView shows a spread: operands by ticker, no spaces. */
+export function synthName(key: string): string {
+  const parts: string[] = [];
+  for (const t of lexSynth(key.slice(1))) {
+    if (t.type === "bad") return key.slice(1);
+    const full = t.type === "ref" && (t.quoted || t.text.includes(":")) && isValidKey(t.text) && !isSynthetic(t.text);
+    parts.push(full ? shortTicker(t.text) : t.text);
+  }
+  return parts.join("");
 }
 
 class Parser {
