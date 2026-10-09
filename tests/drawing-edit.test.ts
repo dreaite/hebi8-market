@@ -6,6 +6,8 @@ import {
   channelOffset,
   dragBox,
   dragChannel,
+  extensionOf,
+  withExtension,
 } from "@/components/drawing-edit";
 
 const DAY = 86400000;
@@ -101,5 +103,34 @@ describe("parallel channel", () => {
     expect(dragChannel(old, "a2", { x: 0, y: 140 })).toEqual([{ x: 0, y: 110 }, channel[1], { x: 0, y: 140 }]);
     // its own handle, in the middle of the second line, moves that line
     expect(dragChannel(old, "p2", { x: 60, y: 120 })).toEqual([channel[0], channel[1], { x: 0, y: 150 }]);
+  });
+});
+
+describe("trend line extension", () => {
+  const early = { timestamp: 1 * DAY, value: 10 };
+  const late = { timestamp: 9 * DAY, value: 20 };
+
+  it("reads left and right as on the chart", () => {
+    expect(extensionOf("segment", [early, late])).toEqual({ left: false, right: false });
+    expect(extensionOf("straightLine", [late, early])).toEqual({ left: true, right: true });
+    expect(extensionOf("rayLine", [early, late])).toEqual({ left: false, right: true });
+    // the TradingView import's left-only trend line: a ray from the later point
+    expect(extensionOf("rayLine", [late, early])).toEqual({ left: true, right: false });
+  });
+
+  it("picks the tool and point order, and round-trips", () => {
+    expect(withExtension([late, early], { left: false, right: false })).toEqual({ name: "segment", points: [late, early] });
+    expect(withExtension([late, early], { left: true, right: true })).toEqual({ name: "straightLine", points: [late, early] });
+    expect(withExtension([late, early], { left: false, right: true })).toEqual({ name: "rayLine", points: [early, late] });
+    expect(withExtension([early, late], { left: true, right: false })).toEqual({ name: "rayLine", points: [late, early] });
+    for (const ext of [
+      { left: false, right: false },
+      { left: true, right: false },
+      { left: false, right: true },
+      { left: true, right: true },
+    ]) {
+      const { name, points } = withExtension([early, late], ext);
+      expect(extensionOf(name, points)).toEqual(ext);
+    }
   });
 });

@@ -31,8 +31,9 @@ import type { Timeframe } from "@/lib/symbols";
 import type { CompareEntry, OverlaySpec } from "@/lib/vault";
 import { ChartLegend, createLegendStore, type ChartLegendProps } from "./ChartLegend";
 import { IconAlarm } from "./chart-icons";
-import { registerDrawingTemplates, setOverlayChart, setOverlayTheme, textOf, textSizeOf } from "./chart-overlays";
+import { registerDrawingTemplates, setOverlayChart, setOverlayTheme, snapToBar, textOf, textSizeOf } from "./chart-overlays";
 import { LOG_AXIS } from "./log-axis";
+import { extensionOf, TREND_LINES, withExtension } from "./drawing-edit";
 import type { PriceScale } from "./drawing-scale";
 import { dashOf, drawingStyles, lineOf, withAlpha } from "./drawing-style";
 import { COMPARE_COLORS, MONO, OPEN_DRAWINGS, SANS, SCALED_DRAWINGS, TEXT_DRAWINGS, type ChartControl, type IndicatorSpec, type LegendValue } from "./chart-types";
@@ -606,6 +607,8 @@ export function KChart({
       locked: Boolean(flagsRef.current.get(o.id)?.lock),
       values: o.points.map((p) => p.value ?? 0),
       scale: flagsRef.current.get(o.id)?.scale,
+      timestamps: o.points.map((p) => p.timestamp ?? 0),
+      extend: TREND_LINES.has(o.name) ? extensionOf(o.name, o.points) : null,
     };
   };
   const overlayById = (id: string) => chartRef.current?.getOverlays({ id })[0];
@@ -627,7 +630,7 @@ export function KChart({
     if (chart && o) setSettings({ id, info: infoOf(chart, o) });
   };
 
-  /** Style, text and point prices from the floating toolbar or the settings dialog. */
+  /** Style, text, point prices and dates, and a trend line's extension from the floating toolbar or the settings dialog. */
   const changeDrawing = (id: string, change: DrawingChange) => {
     const chart = chartRef.current;
     const o = overlayById(id);
@@ -637,14 +640,33 @@ export function KChart({
     if (TEXT_DRAWINGS.has(o.name)) styles.text = { ...styles.text, size: change.textSize ?? textSizeOf(o) };
     // before the override, which redraws it (new styles always do)
     if (change.scale) flagsRef.current.set(id, { ...flagsRef.current.get(id), scale: change.scale });
-    chart.overrideOverlay({
-      id,
-      styles,
-      ...(change.text !== undefined ? { extendData: change.text } : {}),
-      ...(change.values ? { points: o.points.map((p, i) => ({ ...p, value: change.values![i] ?? p.value })) } : {}),
-    });
+    // a date lands on the bar it falls in on this timeframe, in the empty space past the last bar too
+    let points = o.points.map((p, i) => ({
+      ...p,
+      value: change.values?.[i] ?? p.value,
+      ...(change.timestamps?.[i] !== undefined ? { timestamp: snapToBar(chart, change.timestamps[i]) } : {}),
+    }));
+    let name = o.name;
+    if (change.extend && TREND_LINES.has(o.name)) ({ name, points } = withExtension(points, change.extend));
+    const moved = Boolean(change.values || change.timestamps || change.extend);
+    if (name === o.name) {
+      chart.overrideOverlay({ id, styles, ...(change.text !== undefined ? { extendData: change.text } : {}), ...(moved ? { points } : {}) });
+      persistOverlays();
+      return refreshSelected(id);
+    }
+    // another tool (趋势线, 射线, 延长线): KLineChart cannot rename an overlay, so it is drawn again
+    const flags = flagsRef.current.get(id);
+    const modes = modesOf(id);
+    const wasSelected = selectedRef.current === id;
+    restoringRef.current = true;
+    chart.removeOverlay({ id });
+    restoringRef.current = false;
+    const next = chart.createOverlay({ name, points, styles, extendData: o.extendData, paneId: CANDLE_PANE, ...modes, ...overlayHandlers() });
+    if (typeof next !== "string") return;
+    flagsRef.current.delete(id);
+    if (flags) flagsRef.current.set(next, flags);
     persistOverlays();
-    refreshSelected(id);
+    if (wasSelected) select(overlayById(next) ?? null);
   };
 
   const setFlag = (id: string, flag: keyof DrawingFlags, on: boolean) => {

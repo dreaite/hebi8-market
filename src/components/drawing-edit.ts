@@ -1,6 +1,6 @@
 /**
- * Editing finished drawings the TradingView way: the extra handles of boxes and parallel channels.
- * Type-only imports, so it loads without KLineChart.
+ * Editing finished drawings the TradingView way: the extra handles of boxes and parallel channels,
+ * and a trend line's extension. Type-only imports, so it loads without KLineChart.
  */
 import type { Coordinate, Point } from "klinecharts";
 
@@ -101,4 +101,30 @@ export function dragChannel(cs: C[], handle: ChannelHandle, to: C): C[] {
     case "mid2":
       return [a, b, below(start2, to.y - (a.y + b.y) / 2 - d)];
   }
+}
+
+// ---------------------------------------------------------------------------- trend lines
+
+/** TradingView's trend line with 向左延长 / 向右延长 is one of these three, as the TradingView import maps it. */
+export const TREND_LINES = new Set(["segment", "rayLine", "straightLine"]);
+
+export interface Extension {
+  left: boolean;
+  right: boolean;
+}
+
+/** Which ways a trend line runs on past its points (left and right as on the chart). */
+export function extensionOf(name: string, points: P[]): Extension {
+  if (name === "straightLine") return { left: true, right: true };
+  if (name !== "rayLine") return { left: false, right: false };
+  // a ray runs on past its second point
+  const leftward = (points[0]?.timestamp ?? 0) > (points[1]?.timestamp ?? 0);
+  return { left: leftward, right: !leftward };
+}
+
+/** The tool and point order that draw a trend line extended this way: a leftward ray starts at its later point. */
+export function withExtension<T extends P>(points: T[], ext: Extension): { name: string; points: T[] } {
+  if (ext.left === ext.right) return { name: ext.left ? "straightLine" : "segment", points };
+  const [early, late] = (points[0].timestamp ?? 0) <= (points[1].timestamp ?? 0) ? [points[0], points[1]] : [points[1], points[0]];
+  return { name: "rayLine", points: ext.right ? [early, late] : [late, early] };
 }

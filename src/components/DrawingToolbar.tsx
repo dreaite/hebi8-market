@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { PriceScale } from "./drawing-scale";
 import type { LineDash } from "./drawing-style";
+import type { Extension } from "./drawing-edit";
 import { Dialog } from "./Dialog";
 import { DRAW_ICONS, IconAlarm, IconCaret, IconEye, IconGear, IconLineDash, IconLineWidth, IconLock, IconText, IconTrash } from "./chart-icons";
 import { DRAW_TOOLS, SCALED_DRAWINGS, TEXT_DRAWINGS } from "./chart-types";
@@ -19,6 +20,9 @@ export interface DrawingInfo {
   values: number[];
   /** The price scale it was drawn on; none for older drawings and tools the scale does not change */
   scale?: PriceScale;
+  timestamps: number[];
+  /** 向左延长 / 向右延长 of a trend line; null for other drawings */
+  extend: Extension | null;
 }
 
 export interface DrawingChange {
@@ -29,6 +33,9 @@ export interface DrawingChange {
   text?: string;
   values?: number[];
   scale?: PriceScale;
+  /** UTC midnight of each point's date; KChart puts it on the bar that date falls in */
+  timestamps?: number[];
+  extend?: Extension;
 }
 
 /** TradingView's colour picker: a row of hues and a row of greys. */
@@ -193,7 +200,10 @@ export function DrawingToolbar({
   );
 }
 
-/** The 设置 dialog of a drawing: style, its text (text drawings) and the price of each point. */
+/** A point's date as the date field shows it (UTC, like the chart). */
+const dayOf = (timestamp: number) => new Date(timestamp).toISOString().slice(0, 10);
+
+/** The 设置 dialog of a drawing: style, its text (text drawings), a trend line's extension and the date and price of each point. */
 export function DrawingSettings({ info, precision, onApply, onClose }: { info: DrawingInfo; precision: number; onApply: (change: DrawingChange) => void; onClose: () => void }) {
   const isText = TEXT_DRAWINGS.has(info.name);
   const [color, setColor] = useState(info.color);
@@ -204,6 +214,9 @@ export function DrawingSettings({ info, precision, onApply, onClose }: { info: D
   const shown = info.values.map((v) => v.toFixed(precision));
   const [values, setValues] = useState(shown);
   const [scale, setScale] = useState(info.scale);
+  const shownDays = info.timestamps.map(dayOf);
+  const [days, setDays] = useState(shownDays);
+  const [extend, setExtend] = useState(info.extend);
   const row = "flex items-center justify-between gap-4";
 
   return (
@@ -215,9 +228,19 @@ export function DrawingSettings({ info, precision, onApply, onClose }: { info: D
           // only the prices typed over change; the rest keep their full precision
           const edited = values.some((v, i) => v !== shown[i]);
           const nums = values.map((v, i) => (v === shown[i] ? info.values[i] : Number(v)));
+          // dates likewise: an untouched one keeps the point exactly where it is
+          const moved = days.some((d, i) => d && d !== shownDays[i]);
+          const times = days.map((d, i) => (d && d !== shownDays[i] ? Date.parse(`${d}T00:00:00Z`) : info.timestamps[i]));
           // a log drawing has no place for a price at zero or below
           const valid = nums.every((v) => Number.isFinite(v) && (scale !== "log" || v > 0));
-          onApply({ color, ...(isText ? { textSize, text } : { size, dash }), ...(edited && valid ? { values: nums } : {}), ...(scale !== info.scale ? { scale } : {}) });
+          onApply({
+            color,
+            ...(isText ? { textSize, text } : { size, dash }),
+            ...(edited && valid ? { values: nums } : {}),
+            ...(moved ? { timestamps: times } : {}),
+            ...(extend && (extend.left !== info.extend?.left || extend.right !== info.extend?.right) ? { extend } : {}),
+            ...(scale !== info.scale ? { scale } : {}),
+          });
         }}
       >
         <div className={row}>
@@ -265,6 +288,19 @@ export function DrawingSettings({ info, precision, onApply, onClose }: { info: D
             </div>
           </>
         )}
+        {extend && (
+          <div className={row}>
+            <span className="text-muted">延长</span>
+            <span className="flex gap-3">
+              {(["left", "right"] as const).map((side) => (
+                <label key={side} className="flex items-center gap-1.5">
+                  <input type="checkbox" checked={extend[side]} onChange={(e) => setExtend({ ...extend, [side]: e.target.checked })} />
+                  {side === "left" ? "向左延长" : "向右延长"}
+                </label>
+              ))}
+            </span>
+          </div>
+        )}
         {SCALED_DRAWINGS.has(info.name) && (
           <div className={row}>
             <span className="text-muted" title="画线在哪种价格坐标里是直线；在另一种坐标上显示为曲线">
@@ -292,18 +328,28 @@ export function DrawingSettings({ info, precision, onApply, onClose }: { info: D
         )}
         {values.length > 0 && (
           <fieldset className="flex flex-col gap-1.5">
-            <legend className="mb-1 text-muted">坐标（价格）</legend>
+            <legend className="mb-1 text-muted">坐标（日期、价格）</legend>
             {values.map((v, i) => (
-              <label key={i} className={row}>
+              <div key={i} className={row}>
                 <span className="text-xs text-muted">点 {i + 1}</span>
-                <input
-                  className="input h-7 w-36 font-mono"
-                  inputMode="decimal"
-                  value={v}
-                  onFocus={(e) => e.target.select()}
-                  onChange={(e) => setValues(values.map((x, j) => (j === i ? e.target.value : x)))}
-                />
-              </label>
+                <span className="flex gap-1.5">
+                  <input
+                    type="date"
+                    aria-label={`点 ${i + 1} 日期`}
+                    className="input h-7 w-36 font-mono"
+                    value={days[i]}
+                    onChange={(e) => setDays(days.map((x, j) => (j === i ? e.target.value : x)))}
+                  />
+                  <input
+                    aria-label={`点 ${i + 1} 价格`}
+                    className="input h-7 w-28 font-mono"
+                    inputMode="decimal"
+                    value={v}
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setValues(values.map((x, j) => (j === i ? e.target.value : x)))}
+                  />
+                </span>
+              </div>
             ))}
           </fieldset>
         )}
