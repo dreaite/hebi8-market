@@ -1,6 +1,6 @@
 /**
  * Editing finished drawings the TradingView way: the extra handles of boxes and parallel channels,
- * and a trend line's extension. Type-only imports, so it loads without KLineChart.
+ * a trend line's extension, and undo / redo. Type-only imports, so it loads without KLineChart.
  */
 import type { Coordinate, Point } from "klinecharts";
 
@@ -127,4 +127,33 @@ export function withExtension<T extends P>(points: T[], ext: Extension): { name:
   if (ext.left === ext.right) return { name: ext.left ? "straightLine" : "segment", points };
   const [early, late] = (points[0].timestamp ?? 0) <= (points[1].timestamp ?? 0) ? [points[0], points[1]] : [points[1], points[0]];
   return { name: "rayLine", points: ext.right ? [early, late] : [late, early] };
+}
+
+// ---------------------------------------------------------------------------- undo / redo
+
+/** Saved states of the drawings, oldest first; `present` is what the chart shows. */
+export interface History<T> {
+  past: T[];
+  present: T;
+  future: T[];
+}
+
+const DEPTH = 100;
+
+export const historyOf = <T>(present: T): History<T> => ({ past: [], present, future: [] });
+
+/** A change was made: the old state can be undone, and what was undone is gone. Same state, same history. */
+export function record<T>(h: History<T>, next: T): History<T> {
+  if (JSON.stringify(next) === JSON.stringify(h.present)) return h;
+  return { past: [...h.past, h.present].slice(-DEPTH), present: next, future: [] };
+}
+
+export function undo<T>(h: History<T>): History<T> | null {
+  if (h.past.length === 0) return null;
+  return { past: h.past.slice(0, -1), present: h.past[h.past.length - 1], future: [h.present, ...h.future] };
+}
+
+export function redo<T>(h: History<T>): History<T> | null {
+  if (h.future.length === 0) return null;
+  return { past: [...h.past, h.present], present: h.future[0], future: h.future.slice(1) };
 }

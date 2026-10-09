@@ -73,6 +73,9 @@ export interface ChartControl {
   deleteSelected: () => boolean;
   /** The chart for 拍快照; null before it exists */
   capture: () => ChartCapture | null;
+  /** Ctrl+Z / Ctrl+Y on the drawings; false when there is nothing to undo or redo, or a drawing is half done */
+  undo: () => boolean;
+  redo: () => boolean;
 }
 
 // Same stacks as globals.css; a canvas cannot read Tailwind's theme.

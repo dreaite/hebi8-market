@@ -33,7 +33,7 @@ import { ChartLegend, createLegendStore, type ChartLegendProps } from "./ChartLe
 import { IconAlarm } from "./chart-icons";
 import { registerDrawingTemplates, setOverlayChart, setOverlayTheme, snapToBar, textOf, textSizeOf } from "./chart-overlays";
 import { LOG_AXIS } from "./log-axis";
-import { extensionOf, TREND_LINES, withExtension } from "./drawing-edit";
+import { extensionOf, historyOf, record, redo, TREND_LINES, undo, withExtension, type History } from "./drawing-edit";
 import type { PriceScale } from "./drawing-scale";
 import { dashOf, drawingStyles, lineOf, withAlpha } from "./drawing-style";
 import { COMPARE_COLORS, MONO, OPEN_DRAWINGS, SANS, SCALED_DRAWINGS, TEXT_DRAWINGS, type ChartControl, type IndicatorSpec, type LegendValue } from "./chart-types";
@@ -401,6 +401,8 @@ export function KChart({
   /** The saved drawings are on the chart (once per mount: another symbol mounts a new chart) */
   const restoredRef = useRef(false);
   const flagsRef = useRef(new Map<string, DrawingFlags>());
+  /** The saved drawings, for undo and redo on this page (another symbol mounts a new chart) */
+  const historyRef = useRef<History<OverlaySpec[]>>(historyOf([]));
   const selectedRef = useRef<string | null>(null);
   const drawingRef = useRef<{ tool: string; id: string; overlay: Overlay | null; extendData?: unknown } | null>(null);
   const onOverlaysChangeRef = useRef(onOverlaysChange);
@@ -491,7 +493,28 @@ export function KChart({
   const persistOverlays = (except?: string) => {
     const chart = chartRef.current;
     if (!chart || restoringRef.current) return;
-    onOverlaysChangeRef.current(serializeOverlays(chart, flagsRef.current, except));
+    const specs = serializeOverlays(chart, flagsRef.current, except);
+    historyRef.current = record(historyRef.current, specs);
+    onOverlaysChangeRef.current(specs);
+  };
+
+  /** Undo or redo: the drawings go back to that state and are saved; not while a drawing is half done. */
+  const applyHistory = (h: History<OverlaySpec[]> | null): boolean => {
+    const chart = chartRef.current;
+    const d = drawingRef.current;
+    if (!chart || !h || (d?.overlay && d.overlay.currentStep > 1)) return false;
+    historyRef.current = h;
+    restoringRef.current = true;
+    select(null);
+    setSettings(null);
+    setMenu(null);
+    for (const o of chart.getOverlays({ paneId: CANDLE_PANE })) {
+      if (o.groupId !== ALERT_GROUP && o.currentStep === DRAW_DONE) chart.removeOverlay({ id: o.id });
+    }
+    flagsRef.current = createDrawings(chart, h.present);
+    restoringRef.current = false;
+    onOverlaysChangeRef.current(h.present);
+    return true;
   };
 
   /** Drop the drawing in progress (if any) and start the same tool again. */
@@ -999,6 +1022,8 @@ export function KChart({
         chart.scrollToRealTime();
         return space >= MIN_BAR_SPACE;
       },
+      undo: () => applyHistory(undo(historyRef.current)),
+      redo: () => applyHistory(redo(historyRef.current)),
       dialogOpen: () => settingsOpenRef.current,
       closeDialog: () => setSettings(null),
       deleteSelected: () => {
@@ -1046,6 +1071,7 @@ export function KChart({
     restoringRef.current = true;
     flagsRef.current = createDrawings(chart, overlaysRef.current);
     restoringRef.current = false;
+    historyRef.current = historyOf(serializeOverlays(chart, flagsRef.current));
     crosshairRef.current = null;
     scheduleLegend();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handlers are stable refs
@@ -1190,6 +1216,8 @@ export function KChart({
     if (typing && typingFlags) flags.set(typing.id, typingFlags);
     flagsRef.current = flags;
     restoringRef.current = false;
+    // what was undone before is not what is on the server now
+    historyRef.current = historyOf(serializeOverlays(chart, flagsRef.current));
     scheduleLegend();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per reload
   }, [reloadSeq]);
@@ -1204,6 +1232,7 @@ export function KChart({
     for (const o of chart.getOverlays({ paneId: CANDLE_PANE })) if (o.groupId !== ALERT_GROUP) chart.removeOverlay({ id: o.id });
     flagsRef.current = new Map();
     restoringRef.current = false;
+    historyRef.current = record(historyRef.current, []);
     onOverlaysChangeRef.current([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per clear
   }, [clearSeq]);

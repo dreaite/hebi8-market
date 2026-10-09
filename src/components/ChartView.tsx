@@ -533,6 +533,13 @@ export function ChartView({
         downloadImage();
         return;
       }
+      // TradingView: Ctrl+Z undoes a drawing change, Ctrl+Y or Ctrl+Shift+Z redoes it (⌘ on a Mac)
+      const key = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (key === "z" || key === "y")) {
+        const done = key === "y" || e.shiftKey ? control.current?.redo() : control.current?.undo();
+        if (done) e.preventDefault();
+        return;
+      }
       if (e.altKey && !e.ctrlKey && !e.metaKey) {
         const tool = DRAW_TOOLS.find((t) => t.code === e.code);
         if (tool) {

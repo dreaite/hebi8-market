@@ -7,6 +7,10 @@ import {
   dragBox,
   dragChannel,
   extensionOf,
+  historyOf,
+  record,
+  redo,
+  undo,
   withExtension,
 } from "@/components/drawing-edit";
 
@@ -132,5 +136,28 @@ describe("trend line extension", () => {
       const { name, points } = withExtension([early, late], ext);
       expect(extensionOf(name, points)).toEqual(ext);
     }
+  });
+});
+
+describe("undo history", () => {
+  it("undoes and redoes, and a new change drops what was undone", () => {
+    let h = historyOf<string[]>([]);
+    h = record(h, ["a"]);
+    h = record(h, ["a", "b"]);
+    h = undo(h)!;
+    expect(h.present).toEqual(["a"]);
+    h = undo(h)!;
+    expect(h.present).toEqual([]);
+    expect(undo(h)).toBeNull();
+    h = redo(h)!;
+    expect(h.present).toEqual(["a"]);
+    h = record(h, ["a", "c"]);
+    expect(redo(h)).toBeNull();
+    expect(undo(h)!.present).toEqual(["a"]);
+  });
+
+  it("records nothing when the state is the same (a click that moved nothing)", () => {
+    const h = record(historyOf([{ name: "rect" }]), [{ name: "rect" }]);
+    expect(h.past).toEqual([]);
   });
 });
