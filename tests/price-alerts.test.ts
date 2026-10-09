@@ -480,6 +480,19 @@ describe("quote polling", () => {
       expect(readAllStats("")[BTC]?.last).not.toBe(105);
     });
 
+    it("the overview leaves a quote for a day before the last bar alone: no tag, the daily close", async () => {
+      const { liveReader, liveStats } = await import("@/lib/quotes");
+      const { writeBars, writeQuotes } = await import("@/lib/store");
+      const { getDb } = await import("@/lib/db");
+      // the last bar is Tuesday Jan 6; after the sync a fresh quote for Monday comes in
+      writeBars(SPY, closes(110, 120), "replace");
+      getDb().prepare("UPDATE symbols SET synced_at = ? WHERE key = ?").run(Date.now() - 60_000, SPY);
+      writeQuotes([{ key: SPY, price: 115, time: T0 + 15 * 3600, session: "open", fetchedAt: Date.now() }]);
+      const cfg = normalizeConfig({});
+      expect(liveStats([SPY], cfg)).toEqual({});
+      expect(liveReader()(SPY).at(-1)?.c).toBe(120);
+    });
+
     it("a weekly bench stops at the main symbol's last day, leaving out quotes after it", async () => {
       const { writeBars, writeQuotes } = await import("@/lib/store");
       const { NextRequest } = await import("next/server");

@@ -98,8 +98,16 @@ function quoteDay(key: string, q: Pick<Quote, "time" | "session">, timeZone: str
   return localDay(q.time + 7 * 3600, sessionZone);
 }
 
-/** A quote stands for the price until a daily sync after it brings the real bar. */
-const newerThanSync = (quote: QuoteRow | undefined, syncedAt: number | null): quote is QuoteRow => quote !== undefined && (syncedAt === null || quote.fetchedAt > syncedAt);
+/**
+ * The trading day a quote extends or adds, or null when it is not taken: not newer than the last
+ * daily sync (the synced bar wins), or on a day before the last bar.
+ */
+export function quoteDayIn(bars: Bar[], quote: QuoteRow, timeZone: string, syncedAt: number | null, kind?: string): number | null {
+  if (syncedAt !== null && quote.fetchedAt <= syncedAt) return null;
+  const t = quoteDay(quote.key, quote, timeZone, kind);
+  const last = bars.at(-1);
+  return last && t < last.t ? null : t;
+}
 
 /**
  * Daily bars with today's unfinished bar from the quote: merged into the last bar when it is the
@@ -107,10 +115,10 @@ const newerThanSync = (quote: QuoteRow | undefined, syncedAt: number | null): qu
  * ignored, the synced bar is newer. Memory only.
  */
 export function withQuote(bars: Bar[], quote: QuoteRow | undefined, timeZone: string, syncedAt: number | null, seen?: Intraday, kind?: string): Bar[] {
-  if (!newerThanSync(quote, syncedAt)) return bars;
-  const t = quoteDay(quote.key, quote, timeZone, kind);
+  if (!quote) return bars;
+  const t = quoteDayIn(bars, quote, timeZone, syncedAt, kind);
+  if (t === null) return bars;
   const last = bars.at(-1);
-  if (last && t < last.t) return bars;
   const same = last?.t === t ? last : null;
   const ownDay = seen?.t === t ? seen : null;
   const highs = [quote.price, quote.dayHigh, same?.h, ownDay?.h].filter((v): v is number => v !== undefined);
@@ -219,9 +227,9 @@ export function symbolStatus(key: string, quotes = readQuotes()): SymbolStatus {
 }
 
 /**
- * The overview's rows whose price comes from a quote, by the same rule as `withQuote` (newer than
- * the daily sync): stats from today's live bar, so the price and the changes match the chart and
- * the alerts. `status.session` is only set while the quote is current. Computed on read, never stored.
+ * The overview's rows whose price comes from a quote, wherever `withQuote` takes it (`quoteDayIn`):
+ * stats from today's live bar, so the price and the changes match the chart and the alerts.
+ * `status.session` is only set while the quote is current. Computed on read, never stored.
  */
 export function liveStats(keys: string[], cfg: Config): Record<string, { stats: Stats; status: SymbolStatus }> {
   const quotes = readQuotes();
@@ -229,7 +237,8 @@ export function liveStats(keys: string[], cfg: Config): Record<string, { stats: 
   const out: Record<string, { stats: Stats; status: SymbolStatus }> = {};
   for (const key of keys) {
     const meta = getSymbol(key);
-    if (!newerThanSync(quotes[key], meta?.syncedAt ?? null)) continue;
+    const quote = quotes[key];
+    if (!quote || quoteDayIn(readDaily(key), quote, meta?.timezone ?? "UTC", meta?.syncedAt ?? null, meta?.kind ?? undefined) === null) continue;
     const stats = computeStats(loadDaily(key, cfg.prices, cfg, read), { currency: meta?.currency ?? null });
     if (stats) out[key] = { stats, status: symbolStatus(key, quotes) };
   }
