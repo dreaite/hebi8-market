@@ -9,6 +9,7 @@ import { AccountPanel } from "./AccountPanel";
 import { Guide } from "./Guide";
 import { HelpPanel, type HelpTab } from "./HelpPanel";
 import { SymbolSearch, type PickDetail } from "./SymbolSearch";
+import { useScrollLock } from "./use-scroll-lock";
 
 /** The global search either opens what is chosen, or (the watchlist's「+」) adds it. */
 export type GlobalSearchMode = "navigate" | "add";
@@ -94,6 +95,7 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
     setSearch({ query, mode, seq: ++seq.current });
   }, []);
   const closeSearch = useCallback(() => setSearch(null), []);
+  useScrollLock(Boolean(search));
 
   const openHelp = useCallback((tab?: HelpTab, notice: string | null = null) => {
     setSearch(null);
@@ -205,7 +207,7 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
     <UiContext.Provider value={value}>
       {children}
       {search && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-3 pt-[12vh]" onMouseDown={closeSearch}>
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-3 pt-[12vh] [@media(max-height:500px)]:pt-2" onMouseDown={closeSearch}>
           <div
             className="w-full max-w-[600px] overflow-hidden rounded-lg border border-line bg-card shadow-xl"
             onMouseDown={(e) => e.stopPropagation()}

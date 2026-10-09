@@ -2,10 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { IconClose } from "./chart-icons";
-
-/** Dialogs open now: the first one locks the page's scroll, the last one closed puts back what it found. */
-let openDialogs = 0;
-let pageStyle = { overflow: "", scrollbarGutter: "" };
+import { useScrollLock } from "./use-scroll-lock";
 
 /**
  * TradingView-style modal: title bar with ×, closes on backdrop click (Esc is handled by the page). The title bar
@@ -13,20 +10,7 @@ let pageStyle = { overflow: "", scrollbarGutter: "" };
  * page behind does not scroll while it is open.
  */
 export function Dialog({ title, onClose, children, className = "max-w-[560px]" }: { title: string; onClose: () => void; children: ReactNode; className?: string }) {
-  useEffect(() => {
-    const html = document.documentElement;
-    if (openDialogs++ === 0) {
-      pageStyle = { overflow: html.style.overflow, scrollbarGutter: html.style.scrollbarGutter };
-      // keep the scrollbar's room, so the page does not shift sideways
-      if (window.innerWidth > html.clientWidth) html.style.scrollbarGutter = "stable";
-      html.style.overflow = "hidden";
-    }
-    return () => {
-      if (--openDialogs > 0) return;
-      html.style.overflow = pageStyle.overflow;
-      html.style.scrollbarGutter = pageStyle.scrollbarGutter;
-    };
-  }, []);
+  useScrollLock();
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-3 pt-[8dvh]" onMouseDown={onClose}>
       <div

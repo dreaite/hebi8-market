@@ -353,7 +353,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
           ))}
         </div>
       )}
-      <ul id={listId} role="listbox" className="max-h-[60vh] overflow-y-auto py-1">
+      <ul id={listId} role="listbox" className="max-h-[60vh] overflow-y-auto py-1 [@media(max-height:500px)]:max-h-[calc(100dvh-7rem)]">
         {items.map(({ r, section, header }, i) => {
           const isActive = i === active;
           const ticker = tickerOf(r.key);

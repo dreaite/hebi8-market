@@ -4,13 +4,15 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKe
 import type { HelpInfo } from "@/lib/help-info";
 import { IconClose, IconExternal } from "./chart-icons";
 import { isEditable } from "./UiProvider";
+import { useScrollLock } from "./use-scroll-lock";
 
 /**
  * The right-hand drawer (a bottom sheet on narrow screens) that help / feedback and 登录 /
- * 通知设置 open in. Esc, `?` and a click outside close it; its keys never reach the page behind.
+ * 通知设置 open in. Esc, `?` and a click outside close it; its keys never reach the page behind, nor does it scroll.
  */
 export function Drawer({ label, header, onClose, children }: { label: string; header: ReactNode; onClose: () => void; children: ReactNode }) {
   const panelRef = useRef<HTMLElement>(null);
+  useScrollLock();
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     panelRef.current?.focus();
@@ -70,9 +72,9 @@ export function useHelpInfo() {
   return { info, error, reload };
 }
 
-export function Section({ title, children }: { title: string; children: ReactNode }) {
+export function Section({ title, className = "", children }: { title: string; className?: string; children: ReactNode }) {
   return (
-    <section className="mb-5">
+    <section className={`mb-5 ${className}`}>
       <h3 className="mb-2 text-[11px] font-medium tracking-wide text-muted">{title}</h3>
       {children}
     </section>

@@ -156,7 +156,8 @@ function UsageTab() {
         </button>
       </Section>
 
-      <Section title="快捷键（焦点在输入框里时不响应，Esc 除外）">
+      {/* a touch screen has no keys to press: one line instead of the table */}
+      <Section title="快捷键（焦点在输入框里时不响应，Esc 除外）" className="pointer-coarse:hidden">
         <table className="w-full">
           <tbody>
             {SHORTCUTS.map(({ group, rows }) => (
@@ -164,6 +165,9 @@ function UsageTab() {
             ))}
           </tbody>
         </table>
+      </Section>
+      <Section title="快捷键" className="hidden pointer-coarse:block">
+        <p className="leading-relaxed text-muted">接上键盘就能用快捷键，比如 / 搜索、? 打开帮助；完整列表在电脑上打开这里查看。</p>
       </Section>
 
       <Section title="更多">
