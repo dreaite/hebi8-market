@@ -333,6 +333,55 @@ input:focus-visible {
     background: color-mix(in srgb, var(--fg) 7%, transparent);
     outline: none;
   }
+  /*
+   * Touch screens: the chart bars and the header links look the same but take a finger. Their hit
+   * area reaches past the visible button only into empty room: bar buttons up and down to the bar's
+   * edge (the bar clips it, so it never lies over the chart) and 1px sideways (they sit 2px apart),
+   * the side strips' buttons sideways to the strip's edge, the header links 8px round (12px apart).
+   * Fields and segmented controls grow to 36px.
+   */
+  @media (pointer: coarse) {
+    .scroll-row .tb-btn,
+    [aria-orientation="vertical"] .tb-btn,
+    .site-header nav > a,
+    .seg > button {
+      position: relative;
+    }
+    .scroll-row .tb-btn::after,
+    [aria-orientation="vertical"] .tb-btn::after,
+    .site-header nav > a::after,
+    .seg > button::after {
+      content: "";
+      position: absolute;
+    }
+    .scroll-row .tb-btn::after {
+      inset: -8px -1px;
+    }
+    [aria-orientation="vertical"] .tb-btn::after {
+      inset: -1px -5px;
+    }
+    .site-header nav > a::after {
+      inset: -8px;
+    }
+    /* the segment takes the control's padding and border */
+    .seg > button::after {
+      inset: -3px 0;
+    }
+    /* the hit areas must not make a bar scroll up and down */
+    .scroll-row {
+      overflow-y: hidden;
+    }
+    .seg {
+      height: auto;
+      min-height: 36px;
+    }
+    .seg > button {
+      height: auto;
+    }
+    .input {
+      min-height: 36px;
+    }
+  }
 }
 
 /*
