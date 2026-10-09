@@ -338,7 +338,7 @@ input:focus-visible {
    * area reaches past the visible button only into empty room: bar buttons up and down to the bar's
    * edge (the bar clips it, so it never lies over the chart) and 1px sideways (they sit 2px apart),
    * the side strips' buttons sideways to the strip's edge, the header links 8px round (12px apart).
-   * Fields and segmented controls grow to 36px.
+   * Buttons, fields and segmented controls grow to 36px.
    */
   @media (pointer: coarse) {
     .scroll-row .tb-btn,
@@ -378,6 +378,7 @@ input:focus-visible {
     .seg > button {
       height: auto;
     }
+    .btn,
     .input {
       min-height: 36px;
     }
