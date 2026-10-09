@@ -109,6 +109,19 @@ interface AxisImpl {
   setAutoCalcTickFlag: (flag: boolean) => void;
 }
 
+/** The drawing being dragged, as KLineChart's store (`chart.getChartStore()`, off its public type) holds it. */
+interface PressedOverlay {
+  paneId: string;
+  overlay: Overlay | null;
+  figureType: string;
+  figureIndex: number;
+  figure: OverlayFigure | null;
+}
+interface StoreImpl {
+  getPressedOverlayInfo: () => PressedOverlay;
+  setPressedOverlayInfo: (info: PressedOverlay) => void;
+}
+
 const PERIODS = {
   D: { type: "day", span: 1 },
   W: { type: "week", span: 1 },
@@ -945,8 +958,18 @@ export function KChart({
       clearTimeout(checkTimer);
       checkTimer = setTimeout(() => onAutoScaleRef.current(yAxisAuto()), 30);
     };
+    // KLineChart hears a release anywhere in the page, but ends a drawing's drag (onPressedMoveEnd, which
+    // saves) only when it is over one of its panes or axes: finish one let go anywhere else, after it had its turn
+    const store = (chart as unknown as { getChartStore: () => StoreImpl }).getChartStore();
+    const endDrag = () => {
+      const { paneId, overlay, figure } = store.getPressedOverlayInfo();
+      if (!overlay) return;
+      store.setPressedOverlayInfo({ paneId, overlay: null, figureType: "none", figureIndex: -1, figure: null });
+      overlay.onPressedMoveEnd?.({ chart, overlay, figure: figure ?? undefined });
+    };
     const onUp = () => {
       onRelease();
+      endDrag();
       checkAuto();
     };
     window.addEventListener("mouseup", onUp);
