@@ -472,9 +472,19 @@ tr[data-drop="into"] > td {
   display: none;
 }
 
+/*
+ * Touch screens: text fields are 16px. iOS zooms the page in when a smaller field takes focus and
+ * keeps the zoom after it loses focus. Unlayered, so it wins over the fields' text-xs/text-sm.
+ */
+@media (pointer: coarse) {
+  :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"]), textarea, select) {
+    font-size: 16px;
+  }
+}
+
 /* Settings on a phone: 14px text and bold 14px section titles, set over the page's small text sizes. */
 @media (max-width: 639px) {
-  .settings-page :is(.text-xs, .text-\[11px\], .btn, .input, .seg > button) {
+  .settings-page :is(.text-xs, .text-\[11px\], .btn, .seg > button) {
     font-size: 14px;
   }
   .settings-page h2 {
