@@ -212,29 +212,25 @@ function infoBox(p: Params, x: number, top: number, lines: string[], color?: str
 
 // ---------------------------------------------------------------------------- bars
 
-function dataIndexOf(chart: Chart, timestamp: number): number {
-  const list = chart.getDataList();
-  if (list.length === 0) return 0;
-  const last = list.length - 1;
-  const step = list.length > 1 ? list[last].timestamp - list[last - 1].timestamp : 86400000;
-  if (timestamp > list[last].timestamp) return last + Math.round((timestamp - list[last].timestamp) / step);
-  let lo = 0;
-  let hi = last;
-  while (lo < hi) {
-    const m = (lo + hi) >> 1;
-    if (list[m].timestamp < timestamp) lo = m + 1;
-    else hi = m;
-  }
-  return lo;
+/**
+ * KLineChart's own placing of a timestamp (the store behind the chart, not on its public type): the
+ * bar at or before it, and past either end of the data the period's calendar (a day bar per day, a
+ * month bar per month), so the counts here match where the chart draws the points.
+ */
+interface ChartStore {
+  timestampToDataIndex: (timestamp: number) => number;
+  dataIndexToTimestamp: (dataIndex: number) => number | null;
+  getHoverOverlayInfo: () => { overlay: Overlay | null; figureType: string; figure: OverlayFigure | null };
+  getClickOverlayInfo: () => { overlay: Overlay | null; figureType: string };
 }
+const storeOf = (chart: Chart) => (chart as unknown as { getChartStore: () => ChartStore }).getChartStore();
 
-function timestampOf(chart: Chart, index: number): number {
-  const list = chart.getDataList();
-  const last = list.length - 1;
-  if (index <= last) return list[Math.max(0, index)].timestamp;
-  const step = list.length > 1 ? list[last].timestamp - list[last - 1].timestamp : 86400000;
-  return list[last].timestamp + (index - last) * step;
-}
+const dataIndexOf = (chart: Chart, timestamp: number): number => storeOf(chart).timestampToDataIndex(timestamp);
+
+const timestampOf = (chart: Chart, index: number): number => storeOf(chart).dataIndexToTimestamp(index) ?? 0;
+
+/** The time of the bar a timestamp falls in on the chart's period, also past the last bar. */
+export const snapToBar = (chart: Chart, timestamp: number): number => timestampOf(chart, dataIndexOf(chart, timestamp));
 
 /** "12 根 K 线 · 84 天" between two points. */
 function span(p: Params, a: Partial<Point>, b: Partial<Point>): string {
@@ -399,7 +395,7 @@ const lines: Template[] = [
 /** The closes between two times fitted in the scale's space (log closes for a log drawing), ±k deviations there. */
 function regression(chart: Chart, t0: number, t1: number, scale: PriceScale) {
   const list = chart.getDataList();
-  const [i0, i1] = [dataIndexOf(chart, Math.min(t0, t1)), Math.min(list.length - 1, dataIndexOf(chart, Math.max(t0, t1)))];
+  const [i0, i1] = [Math.max(0, dataIndexOf(chart, Math.min(t0, t1))), Math.min(list.length - 1, dataIndexOf(chart, Math.max(t0, t1)))];
   const fit = fitLine(list.slice(i0, i1 + 1).map((d) => d.close), scale);
   return fit && { i0, i1, price: (i: number, k = 0) => fit.price(i - i0, k) };
 }
