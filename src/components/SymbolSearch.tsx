@@ -77,6 +77,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
   // external results by search text, kept while the box is open: an expression's operands need theirs to resolve
   const [found, setFound] = useState<Map<string, SearchResult[]>>(new Map());
   const [fetching, setFetching] = useState<string[]>([]);
+  const [failed, setFailed] = useState<Set<string>>(new Set());
   // the highlight resets whenever the list changes (query, or the operand searched), without an effect
   const [activeFor, setActiveFor] = useState<{ query: string; index: number }>({ query: "", index: 0 });
   const [groupChoice, setGroupChoice] = useState<Record<string, string>>({});
@@ -135,9 +136,17 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
       for (const q of lookupKey.split("\n")) {
         setFetching((f) => [...f, q]);
         fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: controller.signal })
-          .then((res) => (res.ok ? (res.json() as Promise<SearchResult[]>) : []))
+          .then((res) => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.json() as Promise<SearchResult[]>;
+          })
           .then((list) => setFound((f) => new Map(f).set(q, list)))
-          .catch(() => undefined)
+          .catch((err: Error) => {
+            if (err.name === "AbortError") return;
+            // nothing found for it now; the status line says the search failed rather than "no results"
+            setFound((f) => new Map(f).set(q, []));
+            setFailed((f) => new Set(f).add(q));
+          })
           .finally(() => setFetching((f) => f.filter((x) => x !== q)));
       }
     }, 300);
@@ -288,7 +297,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
               aria-label={op.title}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => typeOperator(op.text)}
-              className="h-[22px] min-w-[22px] rounded border border-line px-1 font-mono text-[12px] leading-none text-muted hover:border-muted hover:text-fg"
+              className="h-[22px] min-w-[22px] rounded border border-line px-1 text-[12px] leading-none text-muted hover:border-muted hover:text-fg"
             >
               {op.label}
             </button>
@@ -303,7 +312,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
           {EXAMPLES.map((ex, i) => (
             <span key={ex}>
               {i > 0 && " · "}
-              <button type="button" tabIndex={-1} onMouseDown={(e) => e.preventDefault()} onClick={() => typeAt(ex, 0, query.length)} className="font-mono text-fg hover:text-accent hover:underline">
+              <button type="button" tabIndex={-1} onMouseDown={(e) => e.preventDefault()} onClick={() => typeAt(ex, 0, query.length)} className="hover:text-fg hover:underline">
                 {ex}
               </button>
             </span>
@@ -324,7 +333,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
                 onMouseEnter={() => setActive(i)}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => pick(r)}
-                className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 ${isActive ? "bg-bg" : ""}`}
+                className={`flex cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1.5 ${isActive ? "bg-bg" : ""}`}
               >
                 <span className="min-w-0 flex-1 truncate">
                   {r.source === "key" && !replaces(r) && <span className="mr-1 text-muted">使用</span>}
@@ -357,7 +366,8 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
                 ) : groupOf(r) ? (
                   <span className="shrink-0 text-[11px] text-muted">{section === "watchlist" ? groupOf(r) : `已在自选 · ${groupOf(r)}`}</span>
                 ) : addable(r) ? (
-                  <span className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                  // on a phone the highlighted row's group chips take a line of their own, so the name stays readable
+                  <span className={`flex shrink-0 flex-wrap items-center gap-1 ${isActive ? "max-sm:basis-full" : ""}`} onClick={(e) => e.stopPropagation()}>
                     {newGroup?.key === r.key ? (
                       <input
                         value={newGroup.name}
@@ -418,9 +428,9 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
         })}
       </ul>
       {needsLogin && <div className="border-t border-line px-3 py-2 text-[11px] text-muted">登录后可以打开不在列表里的标的，并加入自己的自选</div>}
-      {(searching || error || expr?.error || (trimmed && rows.length === 0)) && (
+      {(searching || error || failed.has(term) || expr?.error || (trimmed && rows.length === 0)) && (
         <div className={`border-t border-line px-3 py-2 text-[11px] ${error ? "text-down" : "text-muted"}`}>
-          {error ?? (searching ? "搜索中…" : expr?.error ? `表达式：${expr.error}` : "无结果，可直接输入 source:ticker 或 AAPL/MSFT 这样的表达式")}
+          {error ?? (searching ? "搜索中…" : failed.has(term) ? "搜索失败，稍后再试" : expr?.error ? `表达式：${expr.error}` : "无结果，可直接输入 source:ticker 或 AAPL/MSFT 这样的表达式")}
         </div>
       )}
       {busy && <div className="border-t border-line px-3 py-2 text-[11px] text-muted">拉取数据中…</div>}
