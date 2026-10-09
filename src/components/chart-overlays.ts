@@ -17,7 +17,8 @@ import {
   type OverlayTemplate,
   type Point,
 } from "klinecharts";
-import { movePrices, type PriceScale } from "./drawing-scale";
+import { SCALED_DRAWINGS } from "./chart-types";
+import { bendLine, bendPolygon, fitLine, levelPrice, makeWarp, movePrices, toSpace, type PriceScale, type Warp } from "./drawing-scale";
 import { lineOf, withAlpha } from "./drawing-style";
 
 type Params = OverlayCreateFiguresCallbackParams<unknown>;
@@ -32,8 +33,11 @@ export function setOverlayTheme(next: typeof theme) {
 
 /** The chart the regression and position tools read bars from while they are drawn or dragged. */
 let activeChart: Chart | null = null;
-export function setOverlayChart(chart: Chart | null) {
+/** The scale each drawing was drawn on (KChart keeps it with the drawing); older drawings have none. */
+let scaleOf: (id: string) => PriceScale | undefined = () => undefined;
+export function setOverlayChart(chart: Chart | null, scales: typeof scaleOf = () => undefined) {
   activeChart = chart;
+  scaleOf = scales;
 }
 
 const DASHED = { style: "dashed", dashedValue: [4, 4] } as const;
@@ -78,10 +82,82 @@ function arrowHead(from: C, to: C, size: number): C[] {
   return [wing(0.45), to, wing(-0.45)];
 }
 
+/** The point `d` px from a towards b. */
+function toward(a: C, b: C, d: number): C {
+  const k = d / (Math.hypot(b.x - a.x, b.y - a.y) || 1);
+  return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
+}
+
 // ---------------------------------------------------------------------------- price scale
 
 const axisScale = (yAxis?: { name: string } | null): PriceScale => (yAxis?.name === "logarithm" ? "log" : "linear");
 const mainScale = () => axisScale(activeChart?.getYAxes({ paneId: "candle_pane" })[0]);
+/** The space a drawing's geometry is straight in: the scale it was drawn on, or for an older drawing the axis it is on. */
+const spaceOf = (p: Params): PriceScale => scaleOf(p.overlay.id) ?? axisScale(p.yAxis);
+const spaceById = (id: string): PriceScale => scaleOf(id) ?? mainScale();
+
+/** Figures a template made in the axis' pixels (arrow heads, info boxes): not bent. */
+const onScreen = new WeakSet<OverlayFigure>();
+function screenFigures(figures: Figures): Figures {
+  figures.forEach((f) => onScreen.add(f));
+  return figures;
+}
+/** Where a point of the template's coordinates is on screen, for marks drawn in pixels. */
+type Bent = Params & { screen?: (c: C) => C };
+const screenOf = (p: Params) => (p as Bent).screen ?? ((c: C) => c);
+
+/**
+ * A tool whose geometry is straight in its drawing's scale. On an axis of the other scale its
+ * figures are made in the drawing's own space (coordinates and y-axis) and bent onto the axis:
+ * lines and outlines become curves, labels go with their anchor. Older drawings, and drawings on
+ * an axis of their own scale, are drawn as they are.
+ */
+function scaled(t: Template): Template {
+  const create = t.createPointFigures!;
+  return {
+    ...t,
+    createPointFigures: (p) => {
+      const scale = scaleOf(p.overlay.id);
+      const yAxis = p.yAxis;
+      const values = p.overlay.points.flatMap((pt) => (pt.value === undefined ? [] : [pt.value]));
+      const axis = axisScale(yAxis);
+      if (!scale || !yAxis || scale === axis || !values.length) return create(p);
+      // KLineChart rounds its pixels, which shows on a curve; its inverse does not, and the axis is linear in its own space
+      const { height } = p.bounding;
+      const [top, bottom] = [0, height].map((y) => toSpace(axis, yAxis.convertFromPixel(y)));
+      const toPixel = (v: number) => (height * (toSpace(axis, v) - top)) / (bottom - top);
+      const warp = makeWarp(scale, { scale: axis, toPixel, fromPixel: (y) => yAxis.convertFromPixel(y), width: p.bounding.width, height }, values);
+      if (!warp) return create(p);
+      const own: Bent = {
+        ...p,
+        coordinates: p.coordinates.map((c, i) => ({ x: c.x, y: warp.toY(p.overlay.points[i]?.value ?? 0) })),
+        yAxis: Object.assign(Object.create(yAxis), { convertToPixel: warp.toY, convertFromPixel: warp.fromY }),
+        screen: (c) => warp.point(c) ?? c,
+      };
+      return [create(own)].flat().flatMap((f) => (onScreen.has(f) ? [f] : bendFigure(f, warp)));
+    },
+  };
+}
+
+function bendFigure(f: OverlayFigure, warp: Warp): Figures {
+  const list = [f.attrs].flat() as { x: number; y: number; height: number; coordinates: C[] }[];
+  let attrs: object[];
+  if (f.type === "line") attrs = list.flatMap((a) => bendLine(a.coordinates, warp).map((coordinates) => ({ coordinates })));
+  else if (f.type === "polygon") attrs = list.map((a) => ({ coordinates: bendPolygon(a.coordinates, warp) })).filter((a) => a.coordinates.length > 2);
+  else if (f.type === "rect")
+    attrs = list.flatMap((a) => {
+      const top = warp.point({ x: a.x, y: a.y });
+      const bottom = warp.point({ x: a.x, y: a.y + a.height });
+      return top && bottom ? [{ ...a, y: Math.min(top.y, bottom.y), height: Math.abs(bottom.y - top.y) }] : [];
+    });
+  // texts, circles and arcs go with their anchor
+  else
+    attrs = list.flatMap((a) => {
+      const at = warp.point({ x: a.x, y: a.y });
+      return at ? [{ ...a, y: at.y }] : [];
+    });
+  return attrs.length ? [{ ...f, attrs }] : [];
+}
 
 // ---------------------------------------------------------------------------- labels and numbers
 
@@ -180,6 +256,21 @@ const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
 const FIB_EXT = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.618, 2.618];
 
 const lines: Template[] = [
+  // KLineChart's own straight lines, again here so they follow their drawing's scale
+  { name: "segment", totalStep: 3, ...base, createPointFigures: ({ coordinates: [a, b] }) => (b ? [line([a, b])] : []) },
+  { name: "rayLine", totalStep: 3, ...base, createPointFigures: ({ coordinates: [a, b] }) => (b ? [line(ray(a, b))] : []) },
+  { name: "straightLine", totalStep: 3, ...base, createPointFigures: ({ coordinates: [a, b] }) => (b ? [line(both(a, b))] : []) },
+  {
+    name: "priceChannelLine",
+    totalStep: 4,
+    ...base,
+    // the line, its parallel through the third point and one more as far on the other side
+    createPointFigures: ({ coordinates: [a, b, c] }) => {
+      if (!b) return [];
+      const dy = c ? c.y - yAt(a, b, c.x) : 0;
+      return (c ? [0, dy, -dy] : [0]).map((d) => line(both(add(a, { x: 0, y: d }), add(b, { x: 0, y: d }))));
+    },
+  },
   {
     name: "infoLine",
     totalStep: 3,
@@ -188,11 +279,14 @@ const lines: Template[] = [
       const [a, b] = p.coordinates;
       if (!b) return [];
       const [pa, pb] = p.overlay.points;
-      const deg = (Math.atan2(a.y - b.y, b.x - a.x) * 180) / Math.PI;
-      const below = b.y >= a.y;
+      // the angle and the box go by where the ends are on screen
+      const s = screenOf(p);
+      const [sa, sb] = [s(a), s(b)];
+      const deg = (Math.atan2(sa.y - sb.y, sb.x - sa.x) * 180) / Math.PI;
+      const below = sb.y >= sa.y;
       return [
         line([a, b]),
-        ...infoBox(p, b.x, below ? b.y + 12 : b.y - 12 - 54, [priceChange(p, pa.value ?? 0, pb.value ?? 0), span(p, pa, pb), `${deg.toFixed(1)}°`]),
+        ...screenFigures(infoBox(p, sb.x, below ? sb.y + 12 : sb.y - 12 - 54, [priceChange(p, pa.value ?? 0, pb.value ?? 0), span(p, pa, pb), `${deg.toFixed(1)}°`])),
       ];
     },
   },
@@ -203,14 +297,20 @@ const lines: Template[] = [
     createPointFigures: (p) => {
       const [a, b] = p.coordinates;
       if (!b) return [];
-      const angle = Math.atan2(b.y - a.y, b.x - a.x);
+      // the angle on screen where the line starts
+      const s = screenOf(p);
+      const sa = s(a);
+      const next = s(toward(a, b, 10));
+      const angle = Math.atan2(next.y - sa.y, next.x - sa.x);
       const deg = (-angle * 180) / Math.PI;
       const r = 36;
       return [
         line([a, b]),
-        line([a, { x: a.x + r + 24, y: a.y }], DASHED, true),
-        { type: "arc", attrs: { x: a.x, y: a.y, r, startAngle: Math.min(0, angle), endAngle: Math.max(0, angle) }, ignoreEvent: true },
-        plain(p, a.x + r + 6, a.y + (angle < 0 ? -4 : 14), `${deg.toFixed(1)}°`),
+        ...screenFigures([
+          line([sa, { x: sa.x + r + 24, y: sa.y }], DASHED, true),
+          { type: "arc", attrs: { x: sa.x, y: sa.y, r, startAngle: Math.min(0, angle), endAngle: Math.max(0, angle) }, ignoreEvent: true },
+          plain(p, sa.x + r + 6, sa.y + (angle < 0 ? -4 : 14), `${deg.toFixed(1)}°`),
+        ]),
       ];
     },
   },
@@ -246,16 +346,20 @@ const lines: Template[] = [
     name: "regressionTrend",
     totalStep: 3,
     ...base,
-    // the handles sit on the regression line, like TradingView's
-    performEventMoveForDrawing: (e) => snapToRegression(e),
-    performEventPressedMove: (e) => snapToRegression(e),
+    // the handles sit on the regression line, like TradingView's (KLineChart calls these on the overlay)
+    performEventMoveForDrawing: function (this: Overlay, e: OverlayPerformEventParams) {
+      snapToRegression(this.id, e);
+    },
+    performEventPressedMove: function (this: Overlay, e: OverlayPerformEventParams) {
+      snapToRegression(this.id, e);
+    },
     createPointFigures: (p) => {
       const [a, b] = p.coordinates;
       const [pa, pb] = p.overlay.points;
       if (!b || pa.timestamp === undefined || pb.timestamp === undefined || !p.yAxis) return [];
-      const fit = regression(p.chart, pa.timestamp, pb.timestamp);
+      const fit = regression(p.chart, pa.timestamp, pb.timestamp, spaceOf(p));
       if (!fit) return [line([a, b])];
-      const y = (i: number, k: number) => p.yAxis!.convertToPixel(fit.at(i) + k * fit.sd);
+      const y = (i: number, k: number) => p.yAxis!.convertToPixel(fit.price(i, k));
       const [i0, i1] = pa.timestamp <= pb.timestamp ? [fit.i0, fit.i1] : [fit.i1, fit.i0];
       const pts = (k: number) => [
         { x: a.x, y: y(i0, k) },
@@ -292,43 +396,45 @@ const lines: Template[] = [
   },
 ];
 
-function regression(chart: Chart, t0: number, t1: number) {
+/** The closes between two times fitted in the scale's space (log closes for a log drawing), ±k deviations there. */
+function regression(chart: Chart, t0: number, t1: number, scale: PriceScale) {
   const list = chart.getDataList();
   const [i0, i1] = [dataIndexOf(chart, Math.min(t0, t1)), Math.min(list.length - 1, dataIndexOf(chart, Math.max(t0, t1)))];
-  const n = i1 - i0 + 1;
-  if (n < 2) return null;
-  let sx = 0;
-  let sy = 0;
-  let sxy = 0;
-  let sxx = 0;
-  for (let i = i0; i <= i1; i++) {
-    const v = list[i].close;
-    sx += i;
-    sy += v;
-    sxy += i * v;
-    sxx += i * i;
-  }
-  const slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);
-  const intercept = (sy - slope * sx) / n;
-  const at = (i: number) => intercept + slope * i;
-  let ss = 0;
-  for (let i = i0; i <= i1; i++) ss += (list[i].close - at(i)) ** 2;
-  return { i0, i1, at, sd: Math.sqrt(ss / n) };
+  const fit = fitLine(list.slice(i0, i1 + 1).map((d) => d.close), scale);
+  return fit && { i0, i1, price: (i: number, k = 0) => fit.price(i - i0, k) };
 }
 
-function snapToRegression({ points }: OverlayPerformEventParams) {
+function snapToRegression(id: string, { points }: OverlayPerformEventParams) {
   const [a, b] = points;
   if (!activeChart || a?.timestamp === undefined || b?.timestamp === undefined) return;
-  const fit = regression(activeChart, a.timestamp, b.timestamp);
+  const fit = regression(activeChart, a.timestamp, b.timestamp, spaceById(id));
   if (!fit) return;
   const [ia, ib] = a.timestamp <= b.timestamp ? [fit.i0, fit.i1] : [fit.i1, fit.i0];
-  a.value = fit.at(ia);
-  b.value = fit.at(ib);
+  a.value = fit.price(ia);
+  b.value = fit.price(ib);
 }
 
 const fibLevelText = (p: Params, level: number, value: number) => `${level} (${fmt(p.chart, value)})`;
 
 const fib: Template[] = [
+  // KLineChart's own retracement, with the levels a share of the move in the drawing's scale
+  {
+    name: "fibonacciLine",
+    totalStep: 3,
+    ...base,
+    createPointFigures: (p) => {
+      const [pa, pb] = p.overlay.points;
+      if (!p.coordinates[1] || pa.value === undefined || pb.value === undefined || !p.yAxis) return [];
+      const levels = [1, 0.786, 0.618, 0.5, 0.382, 0.236, 0].map((level) => {
+        const value = levelPrice(spaceOf(p), pb.value!, pa.value!, level);
+        return { level, value, y: p.yAxis!.convertToPixel(value) };
+      });
+      return [
+        { type: "line", attrs: levels.map(({ y }) => ({ coordinates: [{ x: 0, y }, { x: p.bounding.width, y }] })) },
+        { type: "text", attrs: levels.map(({ level, value, y }) => ({ x: 0, y, text: `${fmt(p.chart, value)} (${(level * 100).toFixed(1)}%)`, baseline: "bottom" })), ignoreEvent: true },
+      ];
+    },
+  },
   {
     name: "fibExtension",
     totalStep: 4,
@@ -339,12 +445,11 @@ const fib: Template[] = [
       if (!b) return [];
       const guide = line(c ? [a, b, c] : [a, b], DASHED);
       if (!c || !p.yAxis) return [guide];
-      const move = (pb.value ?? 0) - (pa.value ?? 0);
       const x1 = Math.max(b.x, c.x) + Math.abs(b.x - a.x);
       return [
         guide,
         ...FIB_EXT.flatMap((level) => {
-          const value = (pc.value ?? 0) + move * level;
+          const value = levelPrice(spaceOf(p), pa.value ?? 0, pb.value ?? 0, level, pc.value ?? 0);
           const y = p.yAxis!.convertToPixel(value);
           return [line([{ x: c.x, y }, { x: x1, y }]), plain(p, c.x, y, fibLevelText(p, level, value))];
         }),
@@ -774,7 +879,9 @@ const shapes: Template[] = [
     createPointFigures: (p) => {
       const cs = p.coordinates;
       if (cs.length < 2) return [];
-      return [line(cs), line(arrowHead(cs[cs.length - 2], cs[cs.length - 1], 10))];
+      const s = screenOf(p);
+      const [prev, last] = cs.slice(-2);
+      return [line(cs), ...screenFigures([line(arrowHead(s(toward(last, prev, 10)), s(last), 10))])];
     },
   },
   {
@@ -849,7 +956,8 @@ const annotation: Template[] = [
     createPointFigures: (p) => {
       const [a, b] = p.coordinates;
       if (!b) return [];
-      return [line([a, b]), line(arrowHead(a, b, 12))];
+      const s = screenOf(p);
+      return [line([a, b]), ...screenFigures([line(arrowHead(s(toward(b, a, 10)), s(b), 12))])];
     },
   },
   arrowMark("arrowMarkUp", true),
@@ -889,14 +997,16 @@ function arrowMark(name: string, up: boolean): Template {
 
 /**
  * KLineChart drags a whole drawing by adding the price difference to every point, which bends it
- * on a log axis and can push it to zero and below. Move it in the axis' space instead (by the
- * ratio on a log one), never to a price that cannot be drawn there.
+ * on a log axis and can push it to zero and below. Move it in its own space instead (by the ratio
+ * in a log one), never to a price that cannot be drawn; a point of a log drawing dragged on its own
+ * keeps its price while the pointer is at zero or below.
  */
 function patchMoves() {
   type Moving = Overlay & {
     _prevPressedPoint: Partial<Point> | null;
     _prevPressedPoints: Partial<Point>[];
     eventPressedOtherMove: (point: Partial<Point>, store: unknown) => void;
+    eventPressedPointMove: (point: Partial<Point>, index: number) => void;
   };
   const proto = Object.getPrototypeOf(getOverlayClass("segment")!.prototype) as Moving;
   const moveAll = proto.eventPressedOtherMove;
@@ -905,17 +1015,22 @@ function patchMoves() {
     moveAll.call(this, point, store);
     const from = this._prevPressedPoint?.value;
     if (from === undefined || point.value === undefined) return;
-    const space = mainScale();
+    const space = spaceById(this.id);
     const values = movePrices(
       this._prevPressedPoints.map((pt) => pt.value),
       from,
       point.value,
       space,
-      space === "log",
+      space === "log" || mainScale() === "log",
     );
     this.points.forEach((pt, i) => (pt.value = values ? values[i] : before[i]?.value));
     // a regression's handles go back onto the fit of its new bars
     this.performEventPressedMove?.({ currentStep: this.currentStep, mode: this.mode, points: this.points, performPointIndex: 0, performPoint: this.points[0] });
+  };
+  const moveOne = proto.eventPressedPointMove;
+  proto.eventPressedPointMove = function (this: Moving, point, index) {
+    const stay = spaceById(this.id) === "log" && point.value !== undefined && point.value <= 0;
+    moveOne.call(this, stay ? { ...point, value: undefined } : point, index);
   };
 }
 
@@ -923,6 +1038,6 @@ let registered = false;
 export function registerDrawingTemplates() {
   if (registered) return;
   registered = true;
-  for (const t of [...lines, ...fib, ...patterns, ...measure, ...shapes, ...annotation]) registerOverlay(t);
+  for (const t of [...lines, ...fib, ...patterns, ...measure, ...shapes, ...annotation]) registerOverlay(SCALED_DRAWINGS.has(t.name) ? scaled(t) : t);
   patchMoves();
 }

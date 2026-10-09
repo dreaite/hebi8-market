@@ -371,7 +371,7 @@ export async function saveChartState(key: string, state: ChartState): Promise<Ac
     const overlays = (Array.isArray(state.overlays) ? state.overlays : []).flatMap((o) => {
       if (typeof o?.name !== "string" || !Array.isArray(o.points)) return [];
       const points = o.points.filter((p) => Number.isFinite(p?.timestamp) && Number.isFinite(p?.value)).map((p) => ({ timestamp: p.timestamp, value: p.value }));
-      return [{ name: o.name, points, ...(o.styles ? { styles: o.styles } : {}), ...(o.lock ? { lock: true } : {}), ...(o.hidden ? { hidden: true } : {}), ...(o.extendData !== undefined ? { extendData: o.extendData } : {}), ...(typeof o.tvId === "string" ? { tvId: o.tvId } : {}) }];
+      return [{ name: o.name, points, ...(o.styles ? { styles: o.styles } : {}), ...(o.lock ? { lock: true } : {}), ...(o.hidden ? { hidden: true } : {}), ...(o.extendData !== undefined ? { extendData: o.extendData } : {}), ...(typeof o.tvId === "string" ? { tvId: o.tvId } : {}), ...(o.scale === "log" || o.scale === "linear" ? { scale: o.scale } : {}) }];
     });
     // compare targets must be in the cache before the chart asks for them
     for (const c of compare) {

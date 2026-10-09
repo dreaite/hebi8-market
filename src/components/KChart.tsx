@@ -33,8 +33,9 @@ import { ChartLegend, createLegendStore, type ChartLegendProps } from "./ChartLe
 import { IconAlarm } from "./chart-icons";
 import { registerDrawingTemplates, setOverlayChart, setOverlayTheme, textOf, textSizeOf } from "./chart-overlays";
 import { LOG_AXIS } from "./log-axis";
+import type { PriceScale } from "./drawing-scale";
 import { dashOf, drawingStyles, lineOf, withAlpha } from "./drawing-style";
-import { COMPARE_COLORS, MONO, OPEN_DRAWINGS, SANS, TEXT_DRAWINGS, type ChartControl, type IndicatorSpec, type LegendValue } from "./chart-types";
+import { COMPARE_COLORS, MONO, OPEN_DRAWINGS, SANS, SCALED_DRAWINGS, TEXT_DRAWINGS, type ChartControl, type IndicatorSpec, type LegendValue } from "./chart-types";
 import { DrawingSettings, DrawingToolbar, TextEditor, type DrawingChange, type DrawingInfo } from "./DrawingToolbar";
 
 export interface DrawingModes {
@@ -91,10 +92,11 @@ const PRICE_LINES = new Set(["horizontalStraightLine", "horizontalRayLine", "cro
 const DRAW_DONE = -1;
 
 /**
- * Per-drawing lock and hide ("lock all" and "hide all" are UI modes applied on top), and the
- * TradingView drawing an imported one came from: kept beside KLineChart, which has no field for them.
+ * Per-drawing lock and hide ("lock all" and "hide all" are UI modes applied on top), the
+ * TradingView drawing an imported one came from, and the price scale it was drawn on: kept beside
+ * KLineChart, which has no field for them.
  */
-type DrawingFlags = { lock?: boolean; hidden?: boolean; tvId?: string };
+type DrawingFlags = { lock?: boolean; hidden?: boolean; tvId?: string; scale?: PriceScale };
 
 /** The y-axis object behind `getYAxes`; KLineChart keeps these methods off its public type. */
 interface AxisImpl {
@@ -140,6 +142,8 @@ const VOLUME_AXIS: YAxisOverride = {
     return { ...r, to, range: to - r.from, realTo: to, realRange: to - r.realFrom, displayTo: to, displayRange: to - r.displayFrom };
   },
 };
+/** Ids of the saved drawings put on a chart (KLineChart makes up the rest). */
+let drawingSeq = 0;
 const compareName = (slot: number) => `CMP${slot}`;
 const comparePane = (slot: number) => `pane_cmp_${slot}`;
 const isCompare = (name: string) => name.startsWith("CMP");
@@ -290,6 +294,7 @@ function specOf(o: Overlay, flags: Map<string, DrawingFlags>): OverlaySpec | nul
   if (f?.hidden) spec.hidden = true;
   if (o.extendData !== undefined && o.extendData !== null && typeof o.extendData !== "function") spec.extendData = o.extendData;
   if (f?.tvId) spec.tvId = f.tvId;
+  if (f?.scale) spec.scale = f.scale;
   return spec;
 }
 
@@ -508,8 +513,16 @@ export function KChart({
   const createDrawings = (chart: Chart, specs: OverlaySpec[]): Map<string, DrawingFlags> => {
     const flags = new Map<string, DrawingFlags>();
     if (!specs.length) return flags;
-    const ids = chart.createOverlay(
-      specs.map((o) => ({
+    // the ids up front, so the flags are there while KLineChart creates them: a regression snaps
+    // its points to the fit as it is created, in its own scale
+    const ids = specs.map(() => `drawing_${++drawingSeq}`);
+    specs.forEach(({ lock, hidden, tvId, scale }, i) => {
+      if (lock || hidden || tvId || scale) flags.set(ids[i], { lock, hidden, tvId, scale });
+    });
+    for (const [id, f] of flags) flagsRef.current.set(id, f);
+    chart.createOverlay(
+      specs.map((o, i) => ({
+        id: ids[i],
         name: o.name,
         points: o.points,
         extendData: o.extendData,
@@ -518,12 +531,13 @@ export function KChart({
         ...overlayModes({ lock: o.lock, hidden: o.hidden }),
         ...overlayHandlers(),
       })),
-    ) as (string | null)[];
-    ids.forEach((id, i) => {
-      const { lock, hidden, tvId } = specs[i];
-      if (id && (lock || hidden || tvId)) flags.set(id, { lock, hidden, tvId });
-    });
+    );
     return flags;
+  };
+
+  /** A finished drawing keeps the scale of the axis it was drawn on (a % axis is linear), if its tool depends on one. */
+  const keepScale = (id: string, tool: string) => {
+    if (SCALED_DRAWINGS.has(tool)) flagsRef.current.set(id, { ...flagsRef.current.get(id), scale: candleAxis()?.name === "logarithm" ? "log" : "linear" });
   };
 
   const overlayHandlers = (): Partial<OverlayCreate> => ({
@@ -533,6 +547,7 @@ export function KChart({
         e.chart.removeOverlay({ id: e.overlay.id });
         return;
       }
+      keepScale(e.overlay.id, e.overlay.name);
       // drawn while "lock all" is on: lock it like the rest once it is finished
       if (drawingModesRef.current.locked) e.chart.overrideOverlay({ id: e.overlay.id, lock: true });
       // KLineChart finishes a path on a double click, keeping the click and the cursor point on the same spot
@@ -590,6 +605,7 @@ export function KChart({
       text: textOf(o),
       locked: Boolean(flagsRef.current.get(o.id)?.lock),
       values: o.points.map((p) => p.value ?? 0),
+      scale: flagsRef.current.get(o.id)?.scale,
     };
   };
   const overlayById = (id: string) => chartRef.current?.getOverlays({ id })[0];
@@ -619,6 +635,8 @@ export function KChart({
     const line = lineOf(chart, o);
     const styles = drawingStyles(change.color ?? line.color, change.size ?? line.size, change.dash ?? dashOf(line));
     if (TEXT_DRAWINGS.has(o.name)) styles.text = { ...styles.text, size: change.textSize ?? textSizeOf(o) };
+    // before the override, which redraws it (new styles always do)
+    if (change.scale) flagsRef.current.set(id, { ...flagsRef.current.get(id), scale: change.scale });
     chart.overrideOverlay({
       id,
       styles,
@@ -709,7 +727,8 @@ export function KChart({
     drawingRef.current = null;
     chart.removeOverlay({ id: d.id });
     if (points.length >= 2) {
-      chart.createOverlay({ name: d.tool, paneId: CANDLE_PANE, points, ...overlayModes(), ...overlayHandlers() });
+      const id = chart.createOverlay({ name: d.tool, paneId: CANDLE_PANE, points, ...overlayModes(), ...overlayHandlers() });
+      if (typeof id === "string") keepScale(id, d.tool);
       persistOverlays();
     }
     if (notify) onDrawDoneRef.current();
@@ -807,7 +826,7 @@ export function KChart({
     });
     if (!chart) return;
     chartRef.current = chart;
-    setOverlayChart(chart);
+    setOverlayChart(chart, (id) => flagsRef.current.get(id)?.scale);
     applyTheme(chart, styleRef.current);
     sizePanes();
     // The full history arrives in one response, so there is never more to load.

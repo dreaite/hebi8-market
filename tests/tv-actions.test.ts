@@ -227,6 +227,20 @@ describe("TradingView drawings", () => {
     expect(third.ok && third.symbols[0]).toMatchObject({ imported: 0, already: 3 });
   });
 
+  it("keeps the scale a drawing was drawn on, and only a known one", async () => {
+    const { saveChartState } = await import("@/app/actions");
+    const { readChartState } = await import("@/lib/vault");
+    const points = [{ timestamp: day("2026-09-02") * 1000, value: 100 }, { timestamp: day("2026-09-04") * 1000, value: 101 }];
+    const overlays = [
+      { name: "segment", points, scale: "log" as const },
+      { name: "segment", points, scale: "linear" as const },
+      { name: "segment", points, scale: "percent" as unknown as "log" },
+      { name: "segment", points },
+    ];
+    expect(await saveChartState("yahoo:NVDA", { compare: [], overlays })).toEqual({ ok: true });
+    expect(readChartState(root, "yahoo:NVDA").overlays.map((o) => o.scale)).toEqual(["log", "linear", undefined, undefined]);
+  });
+
   it("previews a drawing on an expression of symbols as skipped, and imports nothing for it", async () => {
     const { importTvDrawings, previewTvDrawings } = await import("@/app/tv-actions");
     const drawings = [{ id: "e1", symbol: "1/FX:USDJPY*TVC:DXY", type: "LineToolHorzLine", points: [{ time_t: t("2026-09-08"), price: 1 }], state: {} }];

@@ -261,6 +261,44 @@ export const TEXT_DRAWINGS = new Set(["text", "simpleAnnotation"]);
 /** Tools drawn click by click until a double click, Enter or Esc. */
 export const OPEN_DRAWINGS = new Set(["path", "polyline"]);
 
+/**
+ * Tools whose geometry depends on the price scale (lines through their points, parallels, levels):
+ * they record the scale they were drawn on (`OverlaySpec.scale`) and keep to it on the other axis.
+ * The rest are the same on either (horizontal / vertical lines, boxes, single points) or are pixel
+ * figures (circles, spirals, arcs, the ellipse in its box).
+ */
+export const SCALED_DRAWINGS = new Set([
+  "segment",
+  "rayLine",
+  "straightLine",
+  "infoLine",
+  "trendAngle",
+  "parallelChannel",
+  "regressionTrend",
+  "priceChannelLine",
+  "pitchfork",
+  "fibonacciLine",
+  "fibExtension",
+  "fibChannel",
+  "fibFan",
+  "gannBox",
+  "gannFan",
+  "xabcd",
+  "abcd",
+  "trianglePattern",
+  "headShoulders",
+  "elliottImpulse",
+  "elliottCorrection",
+  "elliottTriangle",
+  "elliottDoubleCombo",
+  "triangle",
+  "arc",
+  "curve",
+  "path",
+  "polyline",
+  "arrow",
+]);
+
 /** Date-range buttons under the chart; null = all history. */
 export const RANGES: { label: string; years: number | null }[] = [
   { label: "1年", years: 1 },

@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { PriceScale } from "./drawing-scale";
 import type { LineDash } from "./drawing-style";
 import { Dialog } from "./Dialog";
 import { DRAW_ICONS, IconAlarm, IconCaret, IconEye, IconGear, IconLineDash, IconLineWidth, IconLock, IconText, IconTrash } from "./chart-icons";
-import { DRAW_TOOLS, TEXT_DRAWINGS } from "./chart-types";
+import { DRAW_TOOLS, SCALED_DRAWINGS, TEXT_DRAWINGS } from "./chart-types";
 
 /** What the floating toolbar and the settings dialog show of the selected drawing. */
 export interface DrawingInfo {
@@ -16,6 +17,8 @@ export interface DrawingInfo {
   text: string;
   locked: boolean;
   values: number[];
+  /** The price scale it was drawn on; none for older drawings and tools the scale does not change */
+  scale?: PriceScale;
 }
 
 export interface DrawingChange {
@@ -25,6 +28,7 @@ export interface DrawingChange {
   textSize?: number;
   text?: string;
   values?: number[];
+  scale?: PriceScale;
 }
 
 /** TradingView's colour picker: a row of hues and a row of greys. */
@@ -39,6 +43,10 @@ const DASHES: { dash: LineDash; label: string }[] = [
   { dash: "dotted", label: "点线" },
 ];
 const TEXT_SIZES = [10, 12, 14, 16, 20, 24, 28, 32, 40];
+const SCALES: { scale: PriceScale; label: string }[] = [
+  { scale: "linear", label: "常规" },
+  { scale: "log", label: "对数" },
+];
 
 export const toolLabel = (name: string) => DRAW_TOOLS.find((t) => t.name === name)?.label ?? name;
 
@@ -195,6 +203,7 @@ export function DrawingSettings({ info, precision, onApply, onClose }: { info: D
   const [text, setText] = useState(info.text);
   const shown = info.values.map((v) => v.toFixed(precision));
   const [values, setValues] = useState(shown);
+  const [scale, setScale] = useState(info.scale);
   const row = "flex items-center justify-between gap-4";
 
   return (
@@ -206,7 +215,9 @@ export function DrawingSettings({ info, precision, onApply, onClose }: { info: D
           // only the prices typed over change; the rest keep their full precision
           const edited = values.some((v, i) => v !== shown[i]);
           const nums = values.map((v, i) => (v === shown[i] ? info.values[i] : Number(v)));
-          onApply({ color, ...(isText ? { textSize, text } : { size, dash }), ...(edited && nums.every(Number.isFinite) ? { values: nums } : {}) });
+          // a log drawing has no place for a price at zero or below
+          const valid = nums.every((v) => Number.isFinite(v) && (scale !== "log" || v > 0));
+          onApply({ color, ...(isText ? { textSize, text } : { size, dash }), ...(edited && valid ? { values: nums } : {}), ...(scale !== info.scale ? { scale } : {}) });
         }}
       >
         <div className={row}>
@@ -253,6 +264,31 @@ export function DrawingSettings({ info, precision, onApply, onClose }: { info: D
               </span>
             </div>
           </>
+        )}
+        {SCALED_DRAWINGS.has(info.name) && (
+          <div className={row}>
+            <span className="text-muted" title="画线在哪种价格坐标里是直线；在另一种坐标上显示为曲线">
+              价格坐标
+            </span>
+            <span className="flex gap-1">
+              {SCALES.map((s) => {
+                const off = s.scale === "log" && info.values.some((v) => v <= 0);
+                return (
+                  <button
+                    key={s.scale}
+                    type="button"
+                    className="tb-btn h-7 px-2 text-xs"
+                    aria-pressed={s.scale === scale}
+                    disabled={off}
+                    title={off ? "有价格在 0 或以下，不能用对数" : scale ? undefined : "旧画线没有记录坐标，在当前坐标上画直线"}
+                    onClick={() => setScale(s.scale)}
+                  >
+                    {s.label}
+                  </button>
+                );
+              })}
+            </span>
+          </div>
         )}
         {values.length > 0 && (
           <fieldset className="flex flex-col gap-1.5">

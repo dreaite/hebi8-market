@@ -333,6 +333,8 @@ export interface OverlaySpec {
   extendData?: unknown;
   /** The TradingView drawing it was imported from (§5.5), so importing it again adds nothing */
   tvId?: string;
+  /** The price scale it was drawn on, which its lines are straight in; older drawings have none and follow the axis */
+  scale?: "log" | "linear";
 }
 
 export interface ChartState {
