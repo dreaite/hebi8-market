@@ -19,7 +19,7 @@ import {
   type Point,
 } from "klinecharts";
 import { SCALED_DRAWINGS } from "./chart-types";
-import { bendLine, bendPolygon, fitLine, levelPrice, makeWarp, movePrices, toSpace, type PriceScale, type Warp } from "./drawing-scale";
+import { bendLine, bendPolygon, fitLine, fromSpace, levelPrice, makeWarp, movePrices, toSpace, type PriceScale, type Warp } from "./drawing-scale";
 import { lineOf, withAlpha } from "./drawing-style";
 import { BOX_HANDLES, boxHandleAt, channelHandles, dragBox, dragChannel, yAt, type ChannelHandle } from "./drawing-edit";
 
@@ -278,6 +278,23 @@ function dragged(e: OverlayEvent<unknown>): { key: string; prev: Partial<Point>[
   return { key: point ? `p${point[1]}` : key, prev: pressed.points };
 }
 
+/**
+ * A parallel channel's points as x in px and y in its drawing's price space (log prices for a log
+ * drawing), where its two lines are straight and parallel whatever the axis; the handles' geometry
+ * (`dragChannel`) is worked out there.
+ */
+function channelSpace(chart: Chart, id: string, paneId: string) {
+  const scale = spaceById(id);
+  const filter = { paneId };
+  const price = (u: number) => fromSpace(scale, u);
+  return {
+    price,
+    of: (pt: Partial<Point>): C => ({ x: (chart.convertToPixel({ timestamp: pt.timestamp }, filter) as Partial<C>).x ?? 0, y: toSpace(scale, pt.value ?? 0) }),
+    pointer: (x: number, y: number): C => ({ x, y: toSpace(scale, (chart.convertFromPixel([{ y }], filter) as Partial<Point>[])[0].value ?? NaN) }),
+    point: (c: C): Partial<Point> => ({ timestamp: (chart.convertFromPixel([{ x: c.x }], filter) as Partial<Point>[])[0].timestamp, value: price(c.y) }),
+  };
+}
+
 /** TradingView's eight box handles: the two stored corners, the other two and the middle of each side. */
 const boxHandles = {
   onPressedMoveStart: onPress,
@@ -370,28 +387,30 @@ const lines: Template[] = [
     totalStep: 4,
     ...base,
     // the third click sets the width; the point then sits at the start of the second line, like TradingView's
-    performEventMoveForDrawing: ({ points, performPointIndex }) => {
+    performEventMoveForDrawing: function (this: Overlay, { points, performPointIndex }: OverlayPerformEventParams) {
       const [a, , c] = points;
-      if (performPointIndex === 2 && activeChart && c && a?.timestamp !== undefined && c.timestamp !== undefined) {
-        const [pa, pb, pc] = activeChart.convertToPixel(points, { paneId: "candle_pane" }) as C[];
-        points[2] = { timestamp: a.timestamp, value: (activeChart.convertFromPixel([{ y: pa.y + pc.y - yAt(pa, pb, pc.x) }], { paneId: "candle_pane" }) as Partial<Point>[])[0].value };
-      }
+      if (performPointIndex !== 2 || !activeChart || !c || a?.timestamp === undefined) return;
+      const space = channelSpace(activeChart, this.id, "candle_pane");
+      const [sa, sb, sc] = points.map(space.of);
+      points[2] = { timestamp: a.timestamp, value: space.price(sa.y + sc.y - yAt(sa, sb, sc.x)) };
     },
     onPressedMoveStart: onPress,
     onPressedMoving: (e) => {
       const d = dragged(e);
-      if (!d || !["p0", "p1", "p2", "a2", "b2", "mid1", "mid2"].includes(d.key)) return;
+      if (!d || !pressed || !["p0", "p1", "p2", "a2", "b2", "mid1", "mid2"].includes(d.key)) return;
       const handle = d.key as ChannelHandle;
-      const filter = { paneId: e.overlay.paneId };
-      const prev = e.chart.convertToPixel(d.prev, filter) as C[];
+      const space = channelSpace(e.chart, e.overlay.id, e.overlay.paneId);
+      const prev = d.prev.map(space.of);
       // a stored point is where KLineChart put it (magnet included); the others moved with the pointer
-      const travel = { x: (e.x ?? 0) - (pressed?.at.x ?? 0), y: (e.y ?? 0) - (pressed?.at.y ?? 0) };
-      const stored = /^p\d$/.test(handle) ? (e.chart.convertToPixel(e.overlay.points[Number(handle[1])], filter) as C) : null;
+      const stored = /^p\d$/.test(handle) ? space.of(e.overlay.points[Number(handle[1])]) : null;
       const from = stored ?? channelHandles(prev)[handle as Exclude<ChannelHandle, "p0" | "p1" | "p2">];
-      const to = stored ?? { x: from.x + travel.x, y: from.y + travel.y };
+      const [now, then] = [space.pointer(e.x ?? 0, e.y ?? 0), space.pointer(pressed.at.x, pressed.at.y)];
+      const to = stored ?? { x: from.x + now.x - then.x, y: from.y + now.y - then.y };
+      // a pointer where the drawing's scale has no price (zero or below for a log one) leaves it as it was
+      if (!Number.isFinite(to.y)) return;
       const next = dragChannel(prev, handle, to);
       // points that did not move keep their exact values
-      e.overlay.points = next.map((c, i) => (c.x === prev[i].x && c.y === prev[i].y ? d.prev[i] : (e.chart.convertFromPixel([c], filter) as Partial<Point>[])[0]));
+      e.overlay.points = next.map((c, i) => (c.x === prev[i].x && c.y === prev[i].y ? d.prev[i] : space.point(c)));
     },
     createPointFigures: (p) => {
       const [a, b, c] = p.coordinates;

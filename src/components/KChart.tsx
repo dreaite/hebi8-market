@@ -511,7 +511,7 @@ export function KChart({
     for (const o of chart.getOverlays({ paneId: CANDLE_PANE })) {
       if (o.groupId !== ALERT_GROUP && o.currentStep === DRAW_DONE) chart.removeOverlay({ id: o.id });
     }
-    flagsRef.current = createDrawings(chart, h.present);
+    flagsRef.current = createDrawings(chart, h.present).flags;
     restoringRef.current = false;
     onOverlaysChangeRef.current(h.present);
     return true;
@@ -534,9 +534,9 @@ export function KChart({
   const modesOf = (id: string) => overlayModes(flagsRef.current.get(id));
 
   /** Saved drawings onto the chart; their flags by the new ids. */
-  const createDrawings = (chart: Chart, specs: OverlaySpec[]): Map<string, DrawingFlags> => {
+  const createDrawings = (chart: Chart, specs: OverlaySpec[]): { ids: string[]; flags: Map<string, DrawingFlags> } => {
     const flags = new Map<string, DrawingFlags>();
-    if (!specs.length) return flags;
+    if (!specs.length) return { ids: [], flags };
     // the ids up front, so the flags are there while KLineChart creates them: a regression snaps
     // its points to the fit as it is created, in its own scale
     const ids = specs.map(() => `drawing_${++drawingSeq}`);
@@ -556,7 +556,7 @@ export function KChart({
         ...overlayHandlers(),
       })),
     );
-    return flags;
+    return { ids, flags };
   };
 
   /** A finished drawing keeps the scale of the axis it was drawn on (a % axis is linear), if its tool depends on one. */
@@ -678,16 +678,15 @@ export function KChart({
       return refreshSelected(id);
     }
     // another tool (趋势线, 射线, 延长线): KLineChart cannot rename an overlay, so it is drawn again
-    const flags = flagsRef.current.get(id);
-    const modes = modesOf(id);
+    // the way saved drawings are put back, keeping its flags (scale, tvId, lock, hidden)
+    const spec = specOf(o, flagsRef.current);
+    if (!spec) return;
     const wasSelected = selectedRef.current === id;
     restoringRef.current = true;
     chart.removeOverlay({ id });
-    restoringRef.current = false;
-    const next = chart.createOverlay({ name, points, styles, extendData: o.extendData, paneId: CANDLE_PANE, ...modes, ...overlayHandlers() });
-    if (typeof next !== "string") return;
     flagsRef.current.delete(id);
-    if (flags) flagsRef.current.set(next, flags);
+    const [next] = createDrawings(chart, [{ ...spec, name, styles, points: points.map((p) => ({ timestamp: p.timestamp!, value: p.value! })) }]).ids;
+    restoringRef.current = false;
     persistOverlays();
     if (wasSelected) select(overlayById(next) ?? null);
   };
@@ -1069,7 +1068,7 @@ export function KChart({
     }
     restoredRef.current = true;
     restoringRef.current = true;
-    flagsRef.current = createDrawings(chart, overlaysRef.current);
+    flagsRef.current = createDrawings(chart, overlaysRef.current).flags;
     restoringRef.current = false;
     historyRef.current = historyOf(serializeOverlays(chart, flagsRef.current));
     crosshairRef.current = null;
@@ -1211,7 +1210,7 @@ export function KChart({
       typed = null;
       return false;
     });
-    const flags = createDrawings(chart, rest);
+    const { flags } = createDrawings(chart, rest);
     const typingFlags = typing && flagsRef.current.get(typing.id);
     if (typing && typingFlags) flags.set(typing.id, typingFlags);
     flagsRef.current = flags;
