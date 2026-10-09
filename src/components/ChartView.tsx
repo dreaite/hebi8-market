@@ -44,7 +44,7 @@ import {
   IconWatchlist,
 } from "./chart-icons";
 import { renderSnapshot, snapshotFileName } from "./chart-snapshot";
-import { COMPARE_COLORS, DRAW_GROUPS, DRAW_TOOLS, OPEN_DRAWINGS, RANGES, SUB_PANE_HEIGHT, type ChartControl, type IndicatorSpec } from "./chart-types";
+import { COMPARE_COLORS, DRAW_GROUPS, DRAW_TOOLS, OPEN_DRAWINGS, RANGES, type ChartControl, type IndicatorSpec } from "./chart-types";
 import { DrawToolGroups, GroupMenuItems } from "./DrawToolGroups";
 import { AlertDialog, AlertLoginDialog } from "./AlertDialog";
 import { AlertsPanel } from "./AlertsPanel";
@@ -430,7 +430,6 @@ export function ChartView({
   const forcedPercent = compare.some((c) => c.mode === "percent" && !hiddenCompares.includes(c.key));
   const percentOn = forcedPercent || pctAxis;
   const compareWithHidden = useMemo(() => compare.map((c) => ({ ...c, hidden: hiddenCompares.includes(c.key) })), [compare, hiddenCompares]);
-  const subPanes = specs.filter((s) => s.pane === "sub").length + compare.filter((c) => c.mode === "pane").length;
   const drawLabel = DRAW_TOOLS.find((t) => t.name === drawTool)?.label;
   // drawings hidden one by one (the floating toolbar's eye) are shown again by the same button as "hide all"
   const someHidden = drawing.hidden || chartState.overlays.some((o) => o.hidden);
@@ -682,7 +681,7 @@ export function ChartView({
   return (
     <main
       className="flex w-full flex-col overflow-hidden bg-card"
-      style={{ height: "calc(100dvh - var(--site-header-h))", minHeight: chartMinHeight(subPanes) + 70 }}
+      style={{ height: "calc(100dvh - var(--site-header-h))" }}
     >
       {/* top toolbar: one row, scrolls sideways on narrow screens */}
       <div className="scroll-row flex h-[38px] shrink-0 items-center gap-0.5 overflow-x-auto border-b border-line px-1.5" role="toolbar" aria-label="图表工具栏">
@@ -1092,9 +1091,4 @@ export function ChartView({
       )}
     </main>
   );
-}
-
-/** Tall enough that the main pane keeps 45% once each sub pane (plus separator) and the x-axis take theirs. */
-function chartMinHeight(subPanes: number): number {
-  return Math.max(520, Math.ceil(((SUB_PANE_HEIGHT + 1) * subPanes + 25) / 0.54));
 }

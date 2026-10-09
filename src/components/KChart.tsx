@@ -19,6 +19,7 @@ import {
   type Overlay,
   type OverlayCreate,
   type OverlayFigure,
+  type PaneOptions,
   type Point,
   type Styles,
   type YAxisOverride,
@@ -131,9 +132,11 @@ function initialBarSpace(width: number, tf: Timeframe, total: number): number {
 }
 
 const CANDLE_PANE = "candle_pane";
-/** The main pane keeps at least this share of the chart; sub panes are a fixed height. */
+const X_AXIS_PANE = "x_axis_pane";
+/** The main pane keeps at least this share of the chart; sub panes are 100px, all shrunk alike when they do not fit. */
 const MAIN_PANE_SHARE = 0.45;
 const SUB_PANE_HEIGHT = 100;
+const SUB_PANE_MIN_HEIGHT = 60;
 const MIN_BAR_SPACE = 1;
 const BOTTOM_GAP = 0.1;
 const MAX_COMPARE = COMPARE_COLORS.length;
@@ -772,11 +775,31 @@ export function KChart({
     chartRef.current?.removeOverlay({ id: d.id });
   };
 
+  /** Each sub pane's height as created or last dragged, before `paneScaleRef` shrinks it to fit a short chart. */
+  const paneHeightsRef = useRef(new Map<string, number>());
+  const paneScaleRef = useRef(1);
+  const subPanes = (chart: Chart) => (chart.getPaneOptions() as PaneOptions[]).filter((p) => p.id !== CANDLE_PANE && p.id !== X_AXIS_PANE);
   const sizePanes = () => {
     const chart = chartRef.current;
     const el = containerRef.current;
     if (!chart || !el) return;
-    chart.setPaneOptions({ id: CANDLE_PANE, minHeight: Math.round(el.clientHeight * MAIN_PANE_SHARE) });
+    const main = Math.round(el.clientHeight * MAIN_PANE_SHARE);
+    chart.setPaneOptions({ id: CANDLE_PANE, minHeight: main });
+    // like TradingView on a short window: the sub panes shrink in proportion instead of squeezing the main pane
+    const panes = subPanes(chart);
+    const wanted = panes.map((p) => paneHeightsRef.current.get(p.id) ?? SUB_PANE_HEIGHT);
+    const room = el.clientHeight - main - (chart.getSize(X_AXIS_PANE)?.height ?? 0) - panes.length * chart.getStyles().separator.size;
+    paneScaleRef.current = Math.min(1, room / wanted.reduce((a, b) => a + b, 0));
+    panes.forEach((p, i) => {
+      const height = Math.floor(wanted[i] * paneScaleRef.current);
+      if (height !== p.height) chart.setPaneOptions({ id: p.id, height, minHeight: Math.min(SUB_PANE_MIN_HEIGHT, height) });
+    });
+  };
+  /** A dragged separator sets the heights the panes go back to on a taller chart. */
+  const keepPaneHeights = () => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    for (const p of subPanes(chart)) paneHeightsRef.current.set(p.id, p.height / paneScaleRef.current);
   };
 
   const candleAxis = () => chartRef.current?.getYAxes({ paneId: CANDLE_PANE })[0] as unknown as AxisImpl | undefined;
@@ -852,7 +875,7 @@ export function KChart({
     const chart = init(el, {
       locale: "zh-CN",
       timezone: "UTC",
-      layout: { pane: { height: SUB_PANE_HEIGHT, minHeight: 60 }, barSpaceLimit: { min: MIN_BAR_SPACE, max: 50 } },
+      layout: { pane: { height: SUB_PANE_HEIGHT, minHeight: SUB_PANE_MIN_HEIGHT }, barSpaceLimit: { min: MIN_BAR_SPACE, max: 50 } },
     });
     if (!chart) return;
     chartRef.current = chart;
@@ -884,7 +907,10 @@ export function KChart({
       scheduleLegend();
     };
     el.addEventListener("mouseleave", onLeave);
-    chart.subscribeAction("onPaneDrag", scheduleLegend);
+    chart.subscribeAction("onPaneDrag", () => {
+      keepPaneHeights();
+      scheduleLegend();
+    });
     // Drawing follows the mouse into sub panes; a click there is thrown away and the tool restarts on the main pane.
     const onClick = () =>
       setTimeout(() => {

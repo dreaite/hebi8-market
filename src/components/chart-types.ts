@@ -89,9 +89,6 @@ export const MONO = 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace
  */
 export const COMPARE_COLORS = ["#0e9aa7", "#c2410c", "#2f6fde", "#a21caf", "#65a30d", "#4b5563"];
 
-/** Height of one indicator or compare sub pane, matching KChart's layout. */
-export const SUB_PANE_HEIGHT = 100;
-
 export interface DrawTool {
   /** KLineChart overlay name (built in, or registered in chart-overlays.ts) */
   name: string;
