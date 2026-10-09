@@ -21,7 +21,7 @@ import {
 import { SCALED_DRAWINGS } from "./chart-types";
 import { bendLine, bendPolygon, fitLine, fromSpace, levelPrice, makeWarp, movePrices, toSpace, type PriceScale, type Warp } from "./drawing-scale";
 import { lineOf, withAlpha } from "./drawing-style";
-import { BOX_HANDLES, boxHandleAt, channelHandles, dragBox, dragChannel, yAt, type ChannelHandle } from "./drawing-edit";
+import { BOX_HANDLES, boxHandleAt, channelHandles, dragBoxBy, dragChannel, drawable, yAt, type ChannelHandle } from "./drawing-edit";
 
 type Params = OverlayCreateFiguresCallbackParams<unknown>;
 type Figures = OverlayFigure[];
@@ -265,11 +265,25 @@ function handleFigures(p: Params, at: { key: string; c: C }[]): Figures {
   });
 }
 
-/** The drawing's points and the pointer when a drag began, for the handles' `onPressedMoving`. */
-let pressed: { id: string; points: Partial<Point>[]; at: C } | null = null;
+/**
+ * The drawing's points and the pointer (px and price) when a drag began, for the handles'
+ * `onPressedMoving`, and the last points a handle put on it that could be drawn.
+ */
+let pressed: { id: string; points: Partial<Point>[]; at: C; value: number; last: Partial<Point>[] } | null = null;
+const pointerValue = (e: OverlayEvent<unknown>) => (e.chart.convertFromPixel([{ y: e.y ?? 0 }], { paneId: e.overlay.paneId }) as Partial<Point>[])[0]?.value ?? NaN;
 const onPress = (e: OverlayEvent<unknown>) => {
-  pressed = { id: e.overlay.id, points: e.overlay.points.map((pt) => ({ ...pt })), at: { x: e.x ?? 0, y: e.y ?? 0 } };
+  const points = e.overlay.points.map((pt) => ({ ...pt }));
+  pressed = { id: e.overlay.id, points, at: { x: e.x ?? 0, y: e.y ?? 0 }, value: pointerValue(e), last: points };
 };
+/**
+ * A handle's result goes on the drawing when every price of it can be drawn (above zero where the
+ * drawing or the axis is log); otherwise the drawing stays where the handle last put it.
+ */
+function settle(e: OverlayEvent<unknown>, next: Partial<Point>[]) {
+  if (!pressed) return;
+  if (drawable(next, spaceById(e.overlay.id) === "log" || mainScale() === "log")) pressed.last = next;
+  e.overlay.points = pressed.last.map((pt) => ({ ...pt }));
+}
 /** The handle being dragged (a stored point's own handle is `p0`, `p1`…), with the points when the drag began. */
 function dragged(e: OverlayEvent<unknown>): { key: string; prev: Partial<Point>[] } | null {
   const key = e.figure?.key ?? "";
@@ -301,7 +315,7 @@ const boxHandles = {
   onPressedMoving: (e: OverlayEvent<unknown>) => {
     const d = dragged(e);
     const h = BOX_HANDLES.find((b) => b.key === d?.key);
-    if (d && h) e.overlay.points = dragBox(d.prev, e.overlay.points, h);
+    if (d && h && pressed) settle(e, dragBoxBy(d.prev, e.overlay.points, h, pressed.value, pointerValue(e), spaceById(e.overlay.id)));
   },
 } satisfies Partial<Template>;
 const boxHandleFigures = (p: Params): Figures => handleFigures(p, BOX_HANDLES.map((h) => ({ key: h.key, c: boxHandleAt(p.coordinates, h) })));
@@ -406,11 +420,10 @@ const lines: Template[] = [
       const from = stored ?? channelHandles(prev)[handle as Exclude<ChannelHandle, "p0" | "p1" | "p2">];
       const [now, then] = [space.pointer(e.x ?? 0, e.y ?? 0), space.pointer(pressed.at.x, pressed.at.y)];
       const to = stored ?? { x: from.x + now.x - then.x, y: from.y + now.y - then.y };
-      // a pointer where the drawing's scale has no price (zero or below for a log one) leaves it as it was
-      if (!Number.isFinite(to.y)) return;
       const next = dragChannel(prev, handle, to);
-      // points that did not move keep their exact values
-      e.overlay.points = next.map((c, i) => (c.x === prev[i].x && c.y === prev[i].y ? d.prev[i] : space.point(c)));
+      // points that did not move keep their exact values; a pointer where the drawing's scale has no
+      // price, or an end pushed to one the axis cannot show, leaves the last channel that could be drawn
+      settle(e, next.map((c, i) => (c.x === prev[i].x && c.y === prev[i].y ? d.prev[i] : space.point(c))));
     },
     createPointFigures: (p) => {
       const [a, b, c] = p.coordinates;

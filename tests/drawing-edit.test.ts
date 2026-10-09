@@ -5,7 +5,10 @@ import {
   channelHandles,
   channelOffset,
   dragBox,
+  dragBoxBy,
   dragChannel,
+  drawable,
+  editedFields,
   extensionOf,
   historyOf,
   record,
@@ -159,5 +162,49 @@ describe("undo history", () => {
   it("records nothing when the state is the same (a click that moved nothing)", () => {
     const h = record(historyOf([{ name: "rect" }]), [{ name: "rect" }]);
     expect(h.past).toEqual([]);
+  });
+});
+
+describe("review fixes", () => {
+  it("shrinks a linear box on a log axis from its edge, though moving the whole box that far would not fit", () => {
+    // corners at 10 and 100; the edge at 100 dragged to 50 on a log axis
+    const prev = [
+      { timestamp: 1 * DAY, value: 10 },
+      { timestamp: 5 * DAY, value: 100 },
+    ];
+    // KLineChart's whole-drawing move would give [-40, 50], which the log axis refuses: the points stay
+    const refused = prev;
+    expect(dragBox(prev, refused, handle("y1"))).toEqual(prev);
+    const next = dragBoxBy(prev, refused, handle("y1"), 100, 50, "linear");
+    expect(next).toEqual([prev[0], { timestamp: 5 * DAY, value: 50 }]);
+    expect(drawable(next, true)).toBe(true);
+    // a log box moves its side by the ratio
+    expect(dragBoxBy(prev, prev, handle("y0"), 10, 20, "log")[0].value).toBe(20);
+  });
+
+  it("refuses a channel end that keeps the width by pushing the other line to zero or below on a log axis", () => {
+    // a linear channel at 100 → 200 with its second line from 50, its first end dragged to 25 (y is the price)
+    const next = dragChannel(
+      [
+        { x: 0, y: 100 },
+        { x: 100, y: 200 },
+        { x: 0, y: 50 },
+      ],
+      "p0",
+      { x: 0, y: 25 },
+    );
+    expect(next[2].y).toBe(-25);
+    const prices = next.map((c) => ({ value: c.y }));
+    expect(drawable(prices, true)).toBe(false);
+    expect(drawable(prices, false)).toBe(true);
+  });
+
+  it("sends back only the dates and prices typed over", () => {
+    const parse = (d: string) => Date.parse(`${d}T00:00:00Z`);
+    // on weekly bars, only the first point's date changed: the second keeps its daily date
+    expect(editedFields(["2026-09-14", "2026-09-24"], ["2026-09-07", "2026-09-24"], parse)).toEqual([parse("2026-09-07"), undefined]);
+    expect(editedFields(["2026-09-14", "2026-09-24"], ["2026-09-14", "2026-09-24"], parse)).toBeUndefined();
+    // a cleared field is no change
+    expect(editedFields(["10.00", "20.00"], ["", "21"], Number)).toEqual([undefined, 21]);
   });
 });

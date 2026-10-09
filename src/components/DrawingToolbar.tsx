@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { PriceScale } from "./drawing-scale";
 import type { LineDash } from "./drawing-style";
-import type { Extension } from "./drawing-edit";
+import { editedFields, type Extension } from "./drawing-edit";
 import { Dialog } from "./Dialog";
 import { DRAW_ICONS, IconAlarm, IconCaret, IconEye, IconGear, IconLineDash, IconLineWidth, IconLock, IconText, IconTrash } from "./chart-icons";
 import { DRAW_TOOLS, SCALED_DRAWINGS, TEXT_DRAWINGS } from "./chart-types";
@@ -31,10 +31,11 @@ export interface DrawingChange {
   dash?: LineDash;
   textSize?: number;
   text?: string;
-  values?: number[];
+  /** The prices typed over; undefined for a point whose price stays */
+  values?: (number | undefined)[];
   scale?: PriceScale;
   /** UTC midnight of each point's date; KChart puts it on the bar that date falls in */
-  timestamps?: number[];
+  timestamps?: (number | undefined)[];
   extend?: Extension;
 }
 
@@ -225,19 +226,16 @@ export function DrawingSettings({ info, precision, onApply, onClose }: { info: D
         className="flex flex-col gap-3 overflow-y-auto p-4 text-sm"
         onSubmit={(e) => {
           e.preventDefault();
-          // only the prices typed over change; the rest keep their full precision
-          const edited = values.some((v, i) => v !== shown[i]);
-          const nums = values.map((v, i) => (v === shown[i] ? info.values[i] : Number(v)));
-          // dates likewise: an untouched one keeps the point exactly where it is
-          const moved = days.some((d, i) => d && d !== shownDays[i]);
-          const times = days.map((d, i) => (d && d !== shownDays[i] ? Date.parse(`${d}T00:00:00Z`) : info.timestamps[i]));
+          // only the prices and dates typed over change; the rest keep their exact values
+          const nums = editedFields(shown, values, Number);
+          const times = editedFields(shownDays, days, (d) => Date.parse(`${d}T00:00:00Z`));
           // a log drawing has no place for a price at zero or below
-          const valid = nums.every((v) => Number.isFinite(v) && (scale !== "log" || v > 0));
+          const valid = nums?.every((v) => v === undefined || (Number.isFinite(v) && (scale !== "log" || v > 0)));
           onApply({
             color,
             ...(isText ? { textSize, text } : { size, dash }),
-            ...(edited && valid ? { values: nums } : {}),
-            ...(moved ? { timestamps: times } : {}),
+            ...(nums && valid ? { values: nums } : {}),
+            ...(times ? { timestamps: times } : {}),
             ...(extend && (extend.left !== info.extend?.left || extend.right !== info.extend?.right) ? { extend } : {}),
             ...(scale !== info.scale ? { scale } : {}),
           });

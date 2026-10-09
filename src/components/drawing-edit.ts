@@ -3,6 +3,7 @@
  * a trend line's extension, and undo / redo. Type-only imports, so it loads without KLineChart.
  */
 import type { Coordinate, Point } from "klinecharts";
+import { movePrices, type PriceScale } from "./drawing-scale";
 
 type P = Partial<Point>;
 type C = Coordinate;
@@ -44,6 +45,20 @@ export function dragBox(prev: P[], moved: P[], h: BoxHandle): P[] {
   if (h.yi !== null) next[h.yi].value = moved[h.yi].value;
   return next;
 }
+
+/**
+ * The box after dragging a handle by the pointer from price `from` to `to`: the handle's side moves
+ * in the drawing's scale (by the ratio in a log one) and to the time in `moved`, where KLineChart's
+ * whole-drawing move put it. Worked out from the pointer, not from that move, which may have been
+ * refused for a side the handle leaves alone.
+ */
+export function dragBoxBy(prev: P[], moved: P[], h: BoxHandle, from: number, to: number, scale: PriceScale): P[] {
+  const value = h.yi === null ? undefined : movePrices([prev[h.yi].value], from, to, scale, false)?.[0];
+  return dragBox(prev, moved.map((p, i) => (i === h.yi ? { ...p, value } : p)), h);
+}
+
+/** Every price can be drawn: a number, and above zero where the drawing or the axis is logarithmic (`positive`). */
+export const drawable = (points: P[], positive: boolean): boolean => points.every((p) => p.value === undefined || (Number.isFinite(p.value) && (!positive || p.value > 0)));
 
 // ---------------------------------------------------------------------------- parallel channel
 
@@ -127,6 +142,17 @@ export function withExtension<T extends P>(points: T[], ext: Extension): { name:
   if (ext.left === ext.right) return { name: ext.left ? "straightLine" : "segment", points };
   const [early, late] = (points[0].timestamp ?? 0) <= (points[1].timestamp ?? 0) ? [points[0], points[1]] : [points[1], points[0]];
   return { name: "rayLine", points: ext.right ? [early, late] : [late, early] };
+}
+
+// ---------------------------------------------------------------------------- settings dialog
+
+/**
+ * The settings dialog's point fields as sent back: the parsed field of each point whose text was
+ * changed, undefined for the rest (they keep their exact value), or undefined when none was.
+ */
+export function editedFields<T>(shown: string[], typed: string[], parse: (text: string) => T): (T | undefined)[] | undefined {
+  const fields = typed.map((text, i) => (text && text !== shown[i] ? parse(text) : undefined));
+  return fields.some((f) => f !== undefined) ? fields : undefined;
 }
 
 // ---------------------------------------------------------------------------- undo / redo

@@ -34,7 +34,7 @@ import { IconAlarm } from "./chart-icons";
 import { registerDrawingTemplates, setOverlayChart, setOverlayTheme, snapToBar, textOf, textSizeOf } from "./chart-overlays";
 import { LOG_AXIS } from "./log-axis";
 import { extensionOf, historyOf, record, redo, TREND_LINES, undo, withExtension, type History } from "./drawing-edit";
-import type { PriceScale } from "./drawing-scale";
+import { drawingOf, specOf, type DrawingFlags } from "./drawing-spec";
 import { dashOf, drawingStyles, lineOf, withAlpha } from "./drawing-style";
 import { COMPARE_COLORS, MONO, OPEN_DRAWINGS, SANS, SCALED_DRAWINGS, TEXT_DRAWINGS, type ChartControl, type IndicatorSpec, type LegendValue } from "./chart-types";
 import { DrawingSettings, DrawingToolbar, TextEditor, type DrawingChange, type DrawingInfo } from "./DrawingToolbar";
@@ -91,13 +91,6 @@ const ALERT_GROUP = "price_alerts";
 const PRICE_LINES = new Set(["horizontalStraightLine", "horizontalRayLine", "crossLine"]);
 /** KLineChart's `currentStep` once a drawing is finished. */
 const DRAW_DONE = -1;
-
-/**
- * Per-drawing lock and hide ("lock all" and "hide all" are UI modes applied on top), the
- * TradingView drawing an imported one came from, and the price scale it was drawn on: kept beside
- * KLineChart, which has no field for them.
- */
-type DrawingFlags = { lock?: boolean; hidden?: boolean; tvId?: string; scale?: PriceScale };
 
 /** The y-axis object behind `getYAxes`; KLineChart keeps these methods off its public type. */
 interface AxisImpl {
@@ -292,24 +285,6 @@ function applyTheme(chart: Chart, style: ChartStyle) {
 /** Points without repeats in a row (two clicks on one spot). */
 function distinctPoints(points: Partial<Point>[]): Partial<Point>[] {
   return points.filter((p, i) => i === 0 || p.timestamp !== points[i - 1].timestamp || p.value !== points[i - 1].value);
-}
-
-/** A finished drawing as saved; null for one without points. */
-function specOf(o: Overlay, flags: Map<string, DrawingFlags>): OverlaySpec | null {
-  const points = o.points
-    .filter((p) => typeof p.timestamp === "number" && typeof p.value === "number")
-    .map((p) => ({ timestamp: p.timestamp!, value: p.value! }));
-  if (points.length === 0) return null;
-  const spec: OverlaySpec = { name: o.name, points };
-  if (o.styles) spec.styles = o.styles;
-  // "lock all" and "hide all" are UI modes, not properties of each drawing
-  const f = flags.get(o.id);
-  if (f?.lock) spec.lock = true;
-  if (f?.hidden) spec.hidden = true;
-  if (o.extendData !== undefined && o.extendData !== null && typeof o.extendData !== "function") spec.extendData = o.extendData;
-  if (f?.tvId) spec.tvId = f.tvId;
-  if (f?.scale) spec.scale = f.scale;
-  return spec;
 }
 
 /** Finished drawings on the main pane; `except` is one being removed right now. */
@@ -560,11 +535,8 @@ export function KChart({
     chart.createOverlay(
       specs.map((o, i) => ({
         id: ids[i],
-        name: o.name,
-        points: o.points,
-        extendData: o.extendData,
+        ...drawingOf(o),
         paneId: CANDLE_PANE,
-        ...(o.styles ? { styles: o.styles as OverlayCreate["styles"] } : {}),
         ...overlayModes({ lock: o.lock, hidden: o.hidden }),
         ...overlayHandlers(),
       })),
