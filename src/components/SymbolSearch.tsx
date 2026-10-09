@@ -357,7 +357,8 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
         {items.map(({ r, section, header }, i) => {
           const isActive = i === active;
           const ticker = tickerOf(r.key);
-          const type = typeLabel(r);
+          // a group named like the type (比价, 加密, 数据) already says it
+          const type = typeLabel(r) === groupOf(r) ? undefined : typeLabel(r);
           return (
             <li key={r.key} role="presentation">
               {header && <div className="px-3 pt-2 pb-1 text-[11px] text-muted">{header}</div>}
