@@ -6,6 +6,7 @@ import {
   init,
   registerIndicator,
   registerOverlay,
+  registerYAxis,
   type Chart,
   type Coordinate,
   type Crosshair,
@@ -31,6 +32,7 @@ import type { CompareEntry, OverlaySpec } from "@/lib/vault";
 import { ChartLegend, createLegendStore, type ChartLegendProps } from "./ChartLegend";
 import { IconAlarm } from "./chart-icons";
 import { registerDrawingTemplates, setOverlayChart, setOverlayTheme, textOf, textSizeOf } from "./chart-overlays";
+import { LOG_AXIS } from "./log-axis";
 import { dashOf, drawingStyles, lineOf, withAlpha } from "./drawing-style";
 import { COMPARE_COLORS, MONO, OPEN_DRAWINGS, SANS, TEXT_DRAWINGS, type ChartControl, type IndicatorSpec, type LegendValue } from "./chart-types";
 import { DrawingSettings, DrawingToolbar, TextEditor, type DrawingChange, type DrawingInfo } from "./DrawingToolbar";
@@ -149,6 +151,8 @@ function registerTemplates() {
   if (registered) return;
   registered = true;
   registerDrawingTemplates();
+  // the built-in log axis turns prices below 1 negative on the way back out of log space
+  registerYAxis(LOG_AXIS);
   // TradingView's alert line: dashed across the pane, ⏰ and the price on the axis (clicking it edits)
   registerOverlay<{ id: string }>({
     name: "priceAlert",
