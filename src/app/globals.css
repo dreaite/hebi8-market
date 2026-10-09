@@ -52,6 +52,8 @@
 body {
   background: var(--bg);
   color: var(--fg);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 .tabular {
@@ -453,9 +455,18 @@ tr[data-drop="into"] > td {
   }
 }
 
-/* The site header's height; the chart page fills the rest. Fullscreen hides the header. */
+/*
+ * The site header's height; the chart page fills the rest. Fullscreen hides the header.
+ * viewport-fit=cover puts the page under the iPhone's status bar, rounded corners and home bar: the
+ * header pads its top by the inset, and whatever ends a page (the footer, the chart, the bottom
+ * sheets) pads its bottom, so nothing sits in the corners.
+ */
 :root {
-  --site-header-h: 49px;
+  --site-header-h: calc(49px + env(safe-area-inset-top));
+  --safe-bottom: env(safe-area-inset-bottom);
+}
+.site-header {
+  padding-top: env(safe-area-inset-top);
 }
 :root:fullscreen {
   --site-header-h: 0px;
@@ -500,6 +511,7 @@ tr[data-drop="into"] > td {
   bottom: 0;
   width: min(380px, 100vw);
   border-left-width: 1px;
+  padding-bottom: var(--safe-bottom);
 }
 /* focused programmatically so its keys stay inside; no frame around the whole drawer */
 .help-panel:focus-visible {

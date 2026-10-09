@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import Link from "next/link";
 import { ErrorCapture } from "@/components/ErrorCapture";
 import { ServiceWorker } from "@/components/ServiceWorker";
@@ -14,6 +14,9 @@ import { getViewer, type Viewer } from "@/lib/viewer";
 import "./globals.css";
 
 export const dynamic = "force-dynamic";
+
+/** The page reaches under the iPhone's rounded corners and home bar; the edges pad themselves by the safe-area insets (globals.css). */
+export const viewport: Viewport = { viewportFit: "cover" };
 
 /** Absolute URLs (social images, canonical links) use the public address, read when the request comes in. */
 export function generateMetadata(): Metadata {

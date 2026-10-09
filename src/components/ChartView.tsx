@@ -680,7 +680,7 @@ export function ChartView({
 
   return (
     <main
-      className="flex w-full flex-col overflow-hidden bg-card"
+      className="flex w-full flex-col overflow-hidden bg-card pb-[var(--safe-bottom)]"
       style={{ height: "calc(100dvh - var(--site-header-h))" }}
     >
       {/* top toolbar: one row, scrolls sideways on narrow screens */}
@@ -1015,7 +1015,7 @@ export function ChartView({
       </div>
 
       {panel && !wide && (
-        <div className="fixed inset-x-0 bottom-0 z-40 h-[60vh] overflow-hidden rounded-t-lg border-t border-line bg-card shadow-[0_-8px_24px_rgb(0_0_0/0.15)]">{panelContent}</div>
+        <div className="fixed inset-x-0 bottom-0 z-40 h-[60vh] overflow-hidden rounded-t-lg pb-[var(--safe-bottom)] border-t border-line bg-card shadow-[0_-8px_24px_rgb(0_0_0/0.15)]">{panelContent}</div>
       )}
 
       {dialog?.kind === "indicators" && (
