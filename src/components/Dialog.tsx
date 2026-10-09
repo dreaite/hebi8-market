@@ -3,14 +3,29 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { IconClose } from "./chart-icons";
 
-/** TradingView-style modal: title bar with ×, closes on backdrop click (Esc is handled by the page). */
+/**
+ * TradingView-style modal: title bar with ×, closes on backdrop click (Esc is handled by the page). The title bar
+ * stays put and the body scrolls on a short screen (a body with its own scrolling list keeps its header too); the
+ * page behind does not scroll while it is open.
+ */
 export function Dialog({ title, onClose, children, className = "max-w-[560px]" }: { title: string; onClose: () => void; children: ReactNode; className?: string }) {
+  useEffect(() => {
+    const html = document.documentElement;
+    const { overflow, scrollbarGutter } = html.style;
+    // keep the scrollbar's room, so the page does not shift sideways
+    if (window.innerWidth > html.clientWidth) html.style.scrollbarGutter = "stable";
+    html.style.overflow = "hidden";
+    return () => {
+      html.style.overflow = overflow;
+      html.style.scrollbarGutter = scrollbarGutter;
+    };
+  }, []);
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-3 pt-[8vh]" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-3 pt-[8dvh]" onMouseDown={onClose}>
       <div
         role="dialog"
         aria-label={title}
-        className={`flex max-h-[84vh] w-full flex-col overflow-hidden rounded-lg border border-line bg-card shadow-xl ${className}`}
+        className={`flex max-h-[84dvh] w-full flex-col overflow-hidden rounded-lg border border-line bg-card shadow-xl ${className}`}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex h-11 shrink-0 items-center justify-between border-b border-line pr-2 pl-4">
@@ -19,7 +34,7 @@ export function Dialog({ title, onClose, children, className = "max-w-[560px]" }
             <IconClose />
           </button>
         </div>
-        {children}
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">{children}</div>
       </div>
     </div>
   );

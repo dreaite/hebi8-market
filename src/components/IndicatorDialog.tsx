@@ -74,7 +74,7 @@ export function IndicatorDialog({ enabled, hasBenchmark, formulas, scope, initia
   }
 
   return (
-    <Dialog title="指标" onClose={onClose} className="max-w-[680px]">
+    <Dialog title="指标" onClose={onClose} className="max-w-[680px] min-h-[min(407px,84dvh)]">
       <div className="flex shrink-0 items-center gap-2 border-b border-line px-4">
         <IconSearch className="text-muted" />
         <input
@@ -107,7 +107,7 @@ export function IndicatorDialog({ enabled, hasBenchmark, formulas, scope, initia
             </button>
           ))}
         </nav>
-        <div className="min-h-[320px] flex-1 overflow-y-auto py-1">
+        <div className="flex-1 overflow-y-auto overscroll-contain py-1">
           {/* narrow screens: categories as a segmented row */}
           {!q && (
             <div className="seg mx-4 my-2 sm:hidden">
