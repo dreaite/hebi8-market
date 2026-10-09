@@ -22,7 +22,7 @@ export default async function Home() {
 
   const symbols = listSymbols();
   const stats = statsFor(viewer.vault, config);
-  // symbols with a current quote show it, their changes recomputed on read
+  // symbols whose price comes from a quote show it, their changes recomputed on read
   const live = liveStats(config.groups.flatMap((g) => g.symbols.map((s) => s.key)), config);
   const firstRun = !hasBars();
   if (firstRun) void syncAll().catch(() => undefined);

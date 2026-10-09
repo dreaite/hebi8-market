@@ -35,7 +35,7 @@ export interface OverviewRow {
   benchLabel: string | null;
   /** From today's bar built from the quote when `quote` is set */
   stats: Stats | null;
-  /** A quote the chart's status strip would show (current for its session); null otherwise */
+  /** The quote the price comes from (newer than the daily sync); its session is set while it is current */
   quote: SymbolStatus | null;
   syncError: string | null;
   /** The viewer's alerts on this symbol, and the whole-watchlist ones where they hold */
@@ -106,15 +106,14 @@ const HINTS = {
   spark: "近两年的周收盘走势",
 };
 
-/** Under or beside a quoted price: its session and how old it is, 「盘后 · 40 分钟前」. */
+/** Under or beside a quoted price: its session while the quote is current and how old it is, 「盘后 · 40 分钟前」 or just 「3 小时前」. */
 function QuoteTag({ quote, className = "" }: { quote: SymbolStatus; className?: string }) {
-  const fromQuote = (quote.quotedAt ?? 0) > (quote.syncedAt ?? 0);
-  const at = fromQuote ? quote.quotedAt : quote.syncedAt;
-  const label = SESSION_LABELS[quote.session!];
-  const how = quote.session === "open" || quote.session === "always" ? "每 5 分钟取一次" : "盘中以外每小时取一次";
+  const session = quote.session && SESSION_LABELS[quote.session];
+  const how = !quote.session ? "有警报的标的盘中每 5 分钟、其余时段每小时取一次" : quote.session === "open" || quote.session === "always" ? "每 5 分钟取一次" : "盘中以外每小时取一次";
   return (
-    <span className={`text-[11px] whitespace-nowrap text-muted ${className}`} title={`${label} · ${fromQuote ? fmtAgo(at, "报价") : fmtAgo(at)}\n${how}，涨跌幅按这个价算`}>
-      {label} · {fmtAgo(at, "")}
+    <span className={`text-[11px] whitespace-nowrap text-muted ${className}`} title={`${session ? `${session} · ` : ""}${fmtAgo(quote.quotedAt, "报价")}\n${how}，涨跌幅按这个价算`}>
+      {session && `${session} · `}
+      {fmtAgo(quote.quotedAt, "")}
     </span>
   );
 }

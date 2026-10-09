@@ -98,13 +98,16 @@ function quoteDay(key: string, q: Pick<Quote, "time" | "session">, timeZone: str
   return localDay(q.time + 7 * 3600, sessionZone);
 }
 
+/** A quote stands for the price until a daily sync after it brings the real bar. */
+const newerThanSync = (quote: QuoteRow | undefined, syncedAt: number | null): quote is QuoteRow => quote !== undefined && (syncedAt === null || quote.fetchedAt > syncedAt);
+
 /**
  * Daily bars with today's unfinished bar from the quote: merged into the last bar when it is the
  * same trading day, appended when it is a new one. A quote older than the last daily sync is
  * ignored, the synced bar is newer. Memory only.
  */
 export function withQuote(bars: Bar[], quote: QuoteRow | undefined, timeZone: string, syncedAt: number | null, seen?: Intraday, kind?: string): Bar[] {
-  if (!quote || (syncedAt !== null && quote.fetchedAt <= syncedAt)) return bars;
+  if (!newerThanSync(quote, syncedAt)) return bars;
   const t = quoteDay(quote.key, quote, timeZone, kind);
   const last = bars.at(-1);
   if (last && t < last.t) return bars;
@@ -216,18 +219,19 @@ export function symbolStatus(key: string, quotes = readQuotes()): SymbolStatus {
 }
 
 /**
- * The overview's rows whose quote is current, as the status strip judges it: stats from today's
- * live bar, so the price and the changes move between syncs. Computed on read, never stored.
+ * The overview's rows whose price comes from a quote, by the same rule as `withQuote` (newer than
+ * the daily sync): stats from today's live bar, so the price and the changes match the chart and
+ * the alerts. `status.session` is only set while the quote is current. Computed on read, never stored.
  */
 export function liveStats(keys: string[], cfg: Config): Record<string, { stats: Stats; status: SymbolStatus }> {
   const quotes = readQuotes();
   const read = liveReader(quotes);
   const out: Record<string, { stats: Stats; status: SymbolStatus }> = {};
   for (const key of keys) {
-    const status = symbolStatus(key, quotes);
-    if (!status.session) continue;
-    const stats = computeStats(loadDaily(key, cfg.prices, cfg, read), { currency: getSymbol(key)?.currency ?? null });
-    if (stats) out[key] = { stats, status };
+    const meta = getSymbol(key);
+    if (!newerThanSync(quotes[key], meta?.syncedAt ?? null)) continue;
+    const stats = computeStats(loadDaily(key, cfg.prices, cfg, read), { currency: meta?.currency ?? null });
+    if (stats) out[key] = { stats, status: symbolStatus(key, quotes) };
   }
   return out;
 }

@@ -451,21 +451,50 @@ describe("quote polling", () => {
       expect(body.symbol).toMatchObject({ session: "always", lastDay: body.bars.at(-1).timestamp });
     });
 
-    it("the overview recomputes stats from a current quote on read, and stores nothing", async () => {
+    it("the overview takes the price from any quote newer than the sync, the session only while it is current", async () => {
       const { quoteRound, liveStats } = await import("@/lib/quotes");
-      const { readAllStats, writeBars, writeQuotes } = await import("@/lib/store");
+      const { getSymbol, readAllStats, writeBars, writeQuotes } = await import("@/lib/store");
+      const GOLD = "tv:TVC:GOLD";
       writeBars(BTC, closes(100, 101), "replace");
       writeBars(SPY, closes(400, 410), "replace");
+      writeBars(GOLD, closes(4000, 4100), "replace");
       const vaults = vaultsWith([{ key: "BTC", cond: "greater", value: 1000 }]);
       await quoteRound(Date.now(), vaults);
-      // SPY's quote is two hours old: the strip no longer shows it, so neither does the overview
-      writeQuotes([{ key: SPY, price: 500, time: 0, session: "post", fetchedAt: Date.now() - 2 * 3600_000 }]);
-      const live = liveStats([BTC, SPY, "tv:TVC:GOLD"], vaults[0].config);
-      expect(Object.keys(live)).toEqual([BTC]);
+      const { getDb } = await import("@/lib/db");
+      getDb().prepare("UPDATE symbols SET synced_at = ? WHERE key = ?").run(Date.now() - 3 * 3600_000, SPY);
+      const day = Math.floor(Date.now() / 1000);
+      const twoHoursAgo = Date.now() - 2 * 3600_000;
+      // SPY's quote is two hours old: still the price (as on the chart and in alerts), but no session
+      writeQuotes([
+        { key: SPY, price: 500, time: day - 7200, session: "post", fetchedAt: twoHoursAgo },
+        // older than GOLD's daily sync: the synced bar wins
+        { key: GOLD, price: 5000, time: day, session: "closed", fetchedAt: getSymbol(GOLD)!.syncedAt! - 1000 },
+      ]);
+      const live = liveStats([BTC, SPY, GOLD, "yahoo:QQQ"], vaults[0].config);
+      expect(Object.keys(live).sort()).toEqual([BTC, SPY].sort());
       expect(live[BTC].status.session).toBe("always");
       expect(live[BTC].stats.last).toBe(105);
       expect(live[BTC].stats.changes["1W"]).toBeCloseTo(105 / 101 - 1);
+      expect(live[SPY].status).toMatchObject({ session: null, quotedAt: twoHoursAgo });
+      expect(live[SPY].stats.last).toBe(500);
       expect(readAllStats("")[BTC]?.last).not.toBe(105);
+    });
+
+    it("a weekly bench stops at the main symbol's last day, leaving out quotes after it", async () => {
+      const { writeBars, writeQuotes } = await import("@/lib/store");
+      const { NextRequest } = await import("next/server");
+      const { GET } = await import("@/app/api/bars/route");
+      // SPY stops on Tuesday Jan 6; BTC has Monday, Tuesday and a quote on Wednesday
+      writeBars(SPY, closes(400, 410), "replace");
+      writeBars(BTC, closes(100, 101), "replace");
+      writeQuotes([{ key: BTC, price: 150, time: T0 + 2 * DAY + 3600, session: "always", fetchedAt: Date.now() }]);
+      vaultsWith([]);
+      fs.appendFileSync(path.join(root, "hebi8.yaml"), `groups:\n  - symbols:\n      - key: ${SPY}\n        bench: BTC\n`);
+      for (const tf of ["D", "W", "M"]) {
+        const res = await GET(new NextRequest(`http://h/api/bars?key=${encodeURIComponent(SPY)}&tf=${tf}`));
+        const body = await res.json();
+        expect(body.bars.at(-1)).toMatchObject({ close: 410, bench: 101 });
+      }
     });
   });
 });

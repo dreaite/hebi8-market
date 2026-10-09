@@ -27,13 +27,17 @@ export function loadSeries(key: string, tf: Timeframe, prices: Prices, cfg: Conf
   return aggregate(loadDaily(key, prices, cfg, read), tf);
 }
 
-/** Other symbols aligned to `bars`, as the columns the formula engine and the chart consume. */
-export function loadRefs(bars: Bar[], keys: string[], tf: Timeframe, prices: Prices, cfg: Config, read: DailyReader = readDaily): Record<string, RefSeries> {
+/**
+ * Other symbols aligned to `bars`, as the columns the formula engine and the chart consume. Their
+ * days after `until` (the main symbol's last daily bar) are cut before aggregating, so a weekly or
+ * longer bucket never takes in a quote the main symbol does not have yet.
+ */
+export function loadRefs(bars: Bar[], keys: string[], tf: Timeframe, prices: Prices, cfg: Config, read: DailyReader = readDaily, until = Infinity): Record<string, RefSeries> {
   const refs: Record<string, RefSeries> = {};
   for (const key of new Set(keys)) {
     let other: Bar[];
     try {
-      other = loadSeries(key, tf, prices, cfg, read);
+      other = aggregate(loadDaily(key, prices, cfg, read).filter((b) => b.t <= until), tf);
     } catch {
       continue;
     }
