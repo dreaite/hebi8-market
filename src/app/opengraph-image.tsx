@@ -15,7 +15,7 @@ export default function Image() {
       <div style={{ display: "flex", alignItems: "center" }}>
         <Logo size={132} />
         <div style={{ display: "flex", flexDirection: "column", marginLeft: 40 }}>
-          <span style={{ fontFamily: "mono", fontSize: 84, lineHeight: 1.1 }}>{BRAND}</span>
+          <span style={{ fontFamily: "mono", fontSize: 84, lineHeight: 1.1 }}>{ogText(BRAND)}</span>
           <span style={{ fontSize: 40, color: DARK.muted, marginTop: 8 }}>{ogText(SLOGAN)}</span>
         </div>
       </div>
@@ -24,7 +24,7 @@ export default function Image() {
         <span style={{ fontSize: 26, color: DARK.muted, marginTop: 12 }}>{ogText(DESCRIPTION.split("。")[1] ?? "")}</span>
       </div>
       <div style={{ display: "flex", justifyContent: "flex-end", borderTop: `1px solid ${DARK.line}`, paddingTop: 22 }}>
-        <span style={{ fontFamily: "mono", fontSize: 24, color: DARK.muted }}>{bareUrl(publicUrl())}</span>
+        <span style={{ fontFamily: "mono", fontSize: 24, color: DARK.muted }}>{ogText(bareUrl(publicUrl()))}</span>
       </div>
     </div>,
   );

@@ -495,10 +495,25 @@ export function ChartView({
   // like TradingView, X gets the link and a line of text: an intent cannot carry a picture
   const postToX = () => window.open(`https://x.com/intent/post?${new URLSearchParams({ text: `${title} · ${BRAND}`, url: shareUrl })}`, "_blank", "noopener");
   const canShareImage = () => typeof navigator.canShare === "function" && navigator.canShare({ files: [new File([], "chart.png", { type: "image/png" })] });
-  const shareImage = () =>
-    void snapshot()
-      .then((blob) => navigator.share({ files: [new File([blob], snapshotFileName(ticker), { type: "image/png" })], title, text: `${title} · ${BRAND} ${shareUrl}` }))
-      .catch((err: Error) => err.name !== "AbortError" && snapshotFailed(err));
+  // Making the picture can use up the click's user activation, and the share sheet then refuses it:
+  // the picture is kept and the next click shares it at once.
+  const pendingShare = useRef<File | null>(null);
+  const shareImage = () => {
+    const share = (file: File) => navigator.share({ files: [file], title, text: `${title} · ${BRAND} ${shareUrl}` });
+    const kept = pendingShare.current;
+    pendingShare.current = null;
+    const shared = kept
+      ? share(kept)
+      : snapshot().then((blob) => {
+          const file = new File([blob], snapshotFileName(ticker), { type: "image/png" });
+          return share(file).catch((err: Error) => {
+            if (err.name !== "NotAllowedError") throw err;
+            pendingShare.current = file;
+            toast("图片已生成，再点一次分享");
+          });
+        });
+    void shared.catch((err: Error) => err.name !== "AbortError" && snapshotFailed(err));
+  };
 
   // TradingView hotkeys; the latest closure is kept in a ref so the listener is attached once
   const onKeyRef = useRef<(e: KeyboardEvent) => void>(() => undefined);

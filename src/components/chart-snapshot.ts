@@ -3,7 +3,7 @@
 /**
  * 拍快照 (design §5.2): the chart laid out like TradingView's snapshot and signed hebi8/market.
  * A bar on top names the symbol and gives the last bar's OHLC and change (it stands in for the
- * legend's symbol row); the chart keeps its drawings and the legend rows of indicators and
+ * legend's symbol row, and grows by a line wherever it has to wrap); the chart keeps its drawings and the legend rows of indicators and
  * compares; a strip at the bottom carries the logo, the name and the public address. Colors are
  * read from the page, so the picture follows the color scheme and the up/down convention. Only
  * the picture is signed, never the chart on the page.
@@ -14,7 +14,6 @@ import type { Timeframe } from "@/lib/symbols";
 import type { CompareEntry } from "@/lib/vault";
 import { MONO, SANS, type ChartCapture, type LegendIndicator } from "./chart-types";
 
-const HEADER = 56;
 const FOOTER = 34;
 const PAD = 12;
 const ROW = 20;
@@ -43,24 +42,27 @@ export async function renderSnapshot(capture: ChartCapture, info: SnapshotInfo):
   const [chart, logo] = await Promise.all([loadImage(capture.url), loadImage("/icon.svg")]);
   const scale = chart.naturalWidth / capture.width;
   const width = capture.width;
-  const height = HEADER + capture.height + FOOTER;
   const canvas = document.createElement("canvas");
-  canvas.width = Math.round(width * scale);
-  canvas.height = Math.round(height * scale);
   const ctx = canvas.getContext("2d")!;
-  ctx.scale(scale, scale);
   const style = getComputedStyle(document.documentElement);
   const c = Object.fromEntries(["card", "fg", "muted", "line", "up", "down"].map((k) => [k, style.getPropertyValue(`--${k}`).trim()])) as Colors;
+  // the info bar grows by the lines it wraps into and pushes the chart down
+  const header = headerLayout(ctx, info, c, width);
+  const top = header.height;
+  const height = top + capture.height + FOOTER;
+  canvas.width = Math.round(width * scale);
+  canvas.height = Math.round(height * scale);
+  ctx.scale(scale, scale);
 
   ctx.fillStyle = c.card;
   ctx.fillRect(0, 0, width, height);
-  ctx.drawImage(chart, 0, HEADER, capture.width, capture.height);
-  drawLegend(ctx, capture, info, c);
-  drawHeader(ctx, info, c, width);
+  ctx.drawImage(chart, 0, top, capture.width, capture.height);
+  drawLegend(ctx, capture, info, c, top);
+  header.draw();
   drawFooter(ctx, logo, info.url, c, width, height);
   ctx.fillStyle = c.line;
-  ctx.fillRect(0, HEADER - 1, width, 1);
-  ctx.fillRect(0, HEADER + capture.height, width, 1);
+  ctx.fillRect(0, top - 1, width, 1);
+  ctx.fillRect(0, top + capture.height, width, 1);
   return new Promise((resolve, reject) => canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("生成图片失败"))), "image/png"));
 }
 
@@ -102,57 +104,117 @@ function barDate(timestamp: number, tf: Timeframe): string {
   return iso.slice(0, 10);
 }
 
-function drawHeader(ctx: CanvasRenderingContext2D, info: SnapshotInfo, c: Colors, width: number) {
-  const { last } = info;
-  const date = last ? barDate(last.timestamp, info.tf) : "";
-  const dateFont = `12px ${MONO}`;
-  const dateWidth = measure(ctx, date, dateFont);
-  put(ctx, date, width - PAD - dateWidth, 23, dateFont, c.muted);
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(0, 0, width - PAD - dateWidth - 16, HEADER);
-  ctx.clip();
-  let x = put(ctx, info.title, PAD, 23, `600 15px ${SANS}`, c.fg);
-  if (info.ticker !== info.title) x = put(ctx, info.ticker, x + 8, 23, `12px ${MONO}`, c.muted);
-  put(ctx, info.subtitle.join(" · "), x + 10, 23, `12px ${SANS}`, c.muted);
-  ctx.restore();
-
-  if (!last) return;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(0, 0, width - PAD, HEADER);
-  ctx.clip();
-  const tone = (v: number) => (v > 0 ? c.up : v < 0 ? c.down : c.muted);
-  const px = (v: number) => fmtPrice(v, info.pricePrecision);
-  x = PAD;
-  for (const [label, value] of [["开", last.open], ["高", last.high], ["低", last.low], ["收", last.close]] as const) {
-    x = put(ctx, label, x, 44, `12px ${SANS}`, c.muted);
-    x = put(ctx, px(value), x + 3, 44, `12px ${MONO}`, tone(last.close - last.open)) + 10;
-  }
-  if (info.prevClose) {
-    const change = last.close - info.prevClose;
-    const sign = change > 0 ? "+" : change < 0 ? "−" : "";
-    const pct = fmtPct(last.close / info.prevClose - 1, 2);
-    const full = `${sign}${px(Math.abs(change))} (${pct})`;
-    // a narrow picture keeps the percentage
-    put(ctx, x + measure(ctx, full, `12px ${MONO}`) <= width - PAD ? full : pct, x, 44, `12px ${MONO}`, tone(change));
-  }
-  ctx.restore();
+/** A run of text that wraps as one piece, like a nowrap span in the page's flex-wrap rows; `gap` is the space before it on a line. */
+interface Token {
+  pieces: { text: string; font: string; color: string; pad?: number }[];
+  gap: number;
 }
 
-/** The legend's indicator and compare rows where the page shows them; the symbol row is the header now. */
-function drawLegend(ctx: CanvasRenderingContext2D, capture: ChartCapture, info: SnapshotInfo, c: Colors) {
+function tokenWidth(ctx: CanvasRenderingContext2D, token: Token): number {
+  return token.pieces.reduce((w, p) => w + (p.pad ?? 0) + measure(ctx, p.text, p.font), 0);
+}
+
+/** Tokens in lines no wider than `room(line)`; a token wider than a whole line gets one to itself. */
+function wrap(ctx: CanvasRenderingContext2D, tokens: Token[], room: (line: number) => number): Token[][] {
+  const lines: Token[][] = [];
+  let used = 0;
+  for (const token of tokens) {
+    const w = tokenWidth(ctx, token);
+    const line = lines.at(-1);
+    if (line && used + token.gap + w <= room(lines.length - 1)) {
+      line.push(token);
+      used += token.gap + w;
+    } else {
+      lines.push([token]);
+      used = w;
+    }
+  }
+  return lines;
+}
+
+function drawLine(ctx: CanvasRenderingContext2D, line: Token[], x: number, y: number) {
+  line.forEach((token, i) => {
+    if (i) x += token.gap;
+    for (const p of token.pieces) x = put(ctx, p.text, x + (p.pad ?? 0), y, p.font, p.color);
+  });
+}
+
+/**
+ * The info bar: name · ticker · interval · source · currency · benchmark (the date of the last bar
+ * on the right), then OHLC and the change. Nothing is cut: what does not fit wraps onto the next
+ * line, the change (amount and percentage together) first.
+ */
+function headerLayout(ctx: CanvasRenderingContext2D, info: SnapshotInfo, c: Colors, width: number) {
+  const { last } = info;
+  const small = `12px ${SANS}`;
+  const mono = `12px ${MONO}`;
+  const date = last ? barDate(last.timestamp, info.tf) : "";
+  const dateWidth = measure(ctx, date, mono);
+  const full = width - 2 * PAD;
+
+  const names: Token[] = [{ pieces: [{ text: info.title, font: `600 15px ${SANS}`, color: c.fg }], gap: 0 }];
+  if (info.ticker !== info.title) names.push({ pieces: [{ text: info.ticker, font: mono, color: c.muted }], gap: 8 });
+  info.subtitle.forEach((part, i) => {
+    const sep = i < info.subtitle.length - 1 ? " ·" : "";
+    names.push({ pieces: [{ text: part + sep, font: small, color: c.muted }], gap: i ? 4 : 10 });
+  });
+  const nameLines = wrap(ctx, names, (line) => (line === 0 ? full - dateWidth - 16 : full));
+
+  const prices: Token[] = [];
+  if (last) {
+    const tone = (v: number) => (v > 0 ? c.up : v < 0 ? c.down : c.muted);
+    const px = (v: number) => fmtPrice(v, info.pricePrecision);
+    for (const [label, value] of [["开", last.open], ["高", last.high], ["低", last.low], ["收", last.close]] as const) {
+      prices.push({ pieces: [{ text: label, font: small, color: c.muted }, { text: px(value), font: mono, color: tone(last.close - last.open), pad: 3 }], gap: 10 });
+    }
+    if (info.prevClose) {
+      const change = last.close - info.prevClose;
+      const sign = change > 0 ? "+" : change < 0 ? "−" : "";
+      prices.push({ pieces: [{ text: `${sign}${px(Math.abs(change))} (${fmtPct(last.close / info.prevClose - 1, 2)})`, font: mono, color: tone(change) }], gap: 10 });
+    }
+  }
+  const priceLines = wrap(ctx, prices, () => full);
+
+  // baselines: the name line, 20px per wrapped line, the prices 21px under the names
+  const nameYs = nameLines.map((_, i) => 23 + i * 20);
+  const priceYs = priceLines.map((_, i) => nameYs[nameYs.length - 1] + 21 + i * 20);
+  const height = (priceYs.at(-1) ?? nameYs[nameYs.length - 1]) + 12;
+  return {
+    height,
+    draw: () => {
+      put(ctx, date, width - PAD - dateWidth, 23, mono, c.muted);
+      nameLines.forEach((line, i) => drawLine(ctx, line, PAD, nameYs[i]));
+      priceLines.forEach((line, i) => drawLine(ctx, line, PAD, priceYs[i]));
+    },
+  };
+}
+
+/**
+ * The legend's indicator and compare rows where the page shows them (the symbol row is the info bar
+ * now), wrapped like the page's rows: no wider than the plot minus 5rem, so never over the price axis.
+ */
+function drawLegend(ctx: CanvasRenderingContext2D, capture: ChartCapture, info: SnapshotInfo, c: Colors, top: number) {
   const snap = capture.legend;
-  const left = snap.left + 10;
+  const left = snap.left + 6;
+  // the page's rows: max-width calc(100% - 5rem), 4px padding on each side
+  const box = capture.width - 80;
+  const font = `12px ${SANS}`;
+  const mono = `12px ${MONO}`;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, top, left + box, capture.height);
+  ctx.clip();
+  /** Draws one legend row at `y` (its top) and returns the y under it */
   const row = (y: number, title: string, color: string, params: string, values: [string, string][]) => {
-    let x = put(ctx, title, left, y + 14, `12px ${SANS}`, color);
-    if (params) x = put(ctx, params, x + 4, y + 14, `12px ${SANS}`, c.muted);
-    for (const [text, tone] of values) x = put(ctx, text, x + 6, y + 14, `12px ${MONO}`, tone);
+    const head: Token = { pieces: [{ text: title, font, color }], gap: 0 };
+    if (params) head.pieces.push({ text: params, font, color: c.muted, pad: 4 });
+    const lines = wrap(ctx, [head, ...values.map(([text, tone]) => ({ pieces: [{ text, font: mono, color: tone }], gap: 6 }))], () => box - 8);
+    lines.forEach((line, i) => drawLine(ctx, line, left + 4, y + 14 + i * ROW));
+    return y + lines.length * ROW;
   };
   const indicatorRow = (ind: LegendIndicator, y: number) => {
     const hidden = info.hiddenIndicators.includes(ind.name);
-    row(y, info.labels[ind.name] ?? ind.name, hidden ? c.muted : c.fg, ind.params.join(" "), hidden ? [] : ind.values.map((v) => [v.text, v.color]));
+    return row(y, info.labels[ind.name] ?? ind.name, hidden ? c.muted : c.fg, ind.params.join(" "), hidden ? [] : ind.values.map((v) => [v.text, v.color]));
   };
   const compareRow = (slot: number, y: number) => {
     const entry = info.compare[slot];
@@ -160,35 +222,25 @@ function drawLegend(ctx: CanvasRenderingContext2D, capture: ChartCapture, info: 
     const values: [string, string][] = [];
     if (!entry.hidden && live?.value != null) values.push([fmtPrice(live.value), entry.color]);
     if (!entry.hidden && live?.pct != null) values.push([fmtPct(live.pct, 2), live.pct > 0 ? c.up : live.pct < 0 ? c.down : c.muted]);
-    row(y, info.names[entry.key] ?? entry.key, entry.hidden ? c.muted : entry.color, "", values);
+    return row(y, info.names[entry.key] ?? entry.key, entry.hidden ? c.muted : entry.color, "", values);
   };
 
   // the main pane's rows, unless folded away under the legend's arrow
   if (localStorage.getItem("hebi8:chart:legend-collapsed") !== "true") {
-    let y = HEADER + 4;
+    let y = top + 4;
     info.compare.forEach((entry, slot) => {
-      if (entry.mode !== "percent") return;
-      compareRow(slot, y);
-      y += ROW;
+      if (entry.mode === "percent") y = compareRow(slot, y);
     });
-    for (const ind of snap.indicators.filter((i) => i.paneId === CANDLE_PANE)) {
-      indicatorRow(ind, y);
-      y += ROW;
-    }
+    for (const ind of snap.indicators.filter((i) => i.paneId === CANDLE_PANE)) y = indicatorRow(ind, y);
   }
-  for (const [paneId, top] of Object.entries(snap.paneTops)) {
+  for (const [paneId, paneTop] of Object.entries(snap.paneTops)) {
     if (paneId === CANDLE_PANE) continue;
-    let y = HEADER + top + 2;
+    let y = top + paneTop + 2;
     const slot = /^pane_cmp_(\d+)$/.exec(paneId)?.[1];
-    if (slot !== undefined && info.compare[Number(slot)]) {
-      compareRow(Number(slot), y);
-      y += ROW;
-    }
-    for (const ind of snap.indicators.filter((i) => i.paneId === paneId)) {
-      indicatorRow(ind, y);
-      y += ROW;
-    }
+    if (slot !== undefined && info.compare[Number(slot)]) y = compareRow(Number(slot), y);
+    for (const ind of snap.indicators.filter((i) => i.paneId === paneId)) y = indicatorRow(ind, y);
   }
+  ctx.restore();
 }
 
 /** Logo, name and slogan on the left, the address on the right; a narrow picture drops the slogan, then the path. */

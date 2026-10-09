@@ -566,9 +566,10 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 **拍快照**（TV 顶栏的相机按钮，在刷新和全屏之间）：菜单是「下载图片 · 复制图片 · 复制链接 · 在 X 上分享」，系统支持带文件分享时（手机）多一项「分享…」（`navigator.share` 带 PNG）。快捷键照 TV：`Ctrl/Cmd+Alt+S` 保存图片，`Ctrl/Cmd+Shift+S` 复制图片，`Alt+S` 复制链接（TV 的 Alt+S 是拍快照并把快照链接放进剪贴板；这里没有托管快照，复制的是图表页的公开地址）。
 
-- **图片**（`chart-snapshot.ts`）：KLineChart 的 `getConvertPictureUrl(true, "png", 卡片底色)` 给出全部窗格、坐标轴和画线（overlay 画布里的十字线、警报线也在）；React 图例不在画布上，按图例的快照（`LegendSnapshot`：各窗格顶部、指标值、对比值）在原位置重画指标和对比行，主图图例折叠时不画主图那几行。上面加一条 56px 信息栏代替图例的商品行：名称 · 代码 · 周期 · 源 · 币种 · 基准，右侧最后一根 K 线的日期（周线写「YYYY-MM-DD 当周」、月线 YYYY-MM、季线 YYYY Qn），第二行开高低收和相对上一根收盘的涨跌（放不下时只留百分比）；下面一条 34px：icon.svg 的蜡烛 logo +「hebi8/market」等宽字 + 标语，右侧这张图的公开地址（key 解码后显示；放不下先去标语，再只留域名）。颜色从页面的 CSS 变量取，所以跟着明暗主题和 `data-updown`。按设备像素比输出 PNG，文件名照 TV：`<代码>_<YYYY-MM-DD_HH-mm-ss>.png`。水印只在导出的图片里，页面上的图表不加。
+- **图片**（`chart-snapshot.ts`）：KLineChart 的 `getConvertPictureUrl(true, "png", 卡片底色)` 给出全部窗格、坐标轴和画线（overlay 画布里的十字线、警报线也在）；React 图例不在画布上，按图例的快照（`LegendSnapshot`：各窗格顶部、指标值、对比值）在原位置重画指标和对比行，和页面一样按宽度换行（每行最宽为图宽减 5rem，所以不会压到价格轴），主图图例折叠时不画主图那几行。上面一条信息栏代替图例的商品行：名称 · 代码 · 周期 · 源 · 币种 · 基准，右侧最后一根 K 线的日期（周线写「YYYY-MM-DD 当周」、月线 YYYY-MM、季线 YYYY Qn），下一行开高低收和相对上一根收盘的涨跌（金额和百分比连在一起）。什么都不截断：一行放不下就折行（涨跌先折到下一行），信息栏按行数长高（一行名称一行价格时 56px），图表往下挪；下面一条 34px：icon.svg 的蜡烛 logo +「hebi8/market」等宽字 + 标语，右侧这张图的公开地址（key 解码后显示；放不下先去标语，再只留域名）。颜色从页面的 CSS 变量取，所以跟着明暗主题和 `data-updown`。按设备像素比输出 PNG，文件名照 TV：`<代码>_<YYYY-MM-DD_HH-mm-ss>.png`。水印只在导出的图片里，页面上的图表不加。
 - **复制图片**用 `navigator.clipboard.write` + `ClipboardItem`（把生成中的 Promise 直接放进 ClipboardItem，Safari 只允许在点击里写）。异步剪贴板只在安全上下文里有：经隧道的 https 和 localhost 能用，Tailscale 直连是 http，菜单项置灰并说明，快捷键弹 toast 让用下载。复制链接走隐藏 textarea + `execCommand("copy")`（`src/lib/copy-text.ts`，http 下也能用）。
 - **链接**一律是公开地址（`HEBI8_PUBLIC_URL`，默认 `https://market-hebi8.dreaife.tokyo`，`app-info.ts` 的 `publicUrl()`）+ `/chart/<编码的 key>`，在 Tailscale 上打开的页面也一样。未登录的人打开看到的是根 vault 的这张图（§1.6），不是分享者自己 vault 里的画线。
+- **系统分享**：生成图片可能耗掉点击带来的用户激活，`navigator.share` 因此抛 `NotAllowedError` 时，留着这次生成的文件，提示「图片已生成，再点一次分享」，下一次点直接分享它。
 - **在 X 上分享**打开 `https://x.com/intent/post?text=<标题 · hebi8/market>&url=<链接>`；intent 带不了图片，和 TV 一样只分享链接，链接展开时的卡片见 §5.9。
 - 标签页标题跟着周期变（`chartTitle`：「英伟达 NVDA · 周线 · hebi8/market」），服务端的 `generateMetadata` 只知道 yaml 里存的周期。
 
@@ -693,7 +694,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 ### 5.6 自动保存（笔记与复盘日志）
 
-`useAutosave`：输入停止 1s 后保存（Server Action）；`Ctrl/Cmd+S` 立即保存；保存中又有输入则保存完再发最新的；dirty 时 `beforeunload` 拦截；状态文字用 muted 色：「已保存 12:03」/「保存中…」/「未保存」/「保存失败：…」。localStorage 草稿兜底：key 含文件名（`hebi8:draft:notes/<fileKey>.md`、`hebi8:draft:journal/<week>.md`），每次输入写入，保存成功即清；打开时若有草稿、内容与文件不同且比文件的 mtime 新，横幅提示「有 12:03 的未保存草稿 · 恢复 / 丢弃」。笔记面板保留「编辑 / 完成」切换，没有保存按钮。
+`useAutosave`：输入停止 1s 后保存（Server Action）；`Ctrl/Cmd+S` 立即保存（只认不带 Shift、Alt 的，那两种是图表的拍快照键）；保存中又有输入则保存完再发最新的；dirty 时 `beforeunload` 拦截；状态文字用 muted 色：「已保存 12:03」/「保存中…」/「未保存」/「保存失败：…」。localStorage 草稿兜底：key 含文件名（`hebi8:draft:notes/<fileKey>.md`、`hebi8:draft:journal/<week>.md`），每次输入写入，保存成功即清；打开时若有草稿、内容与文件不同且比文件的 mtime 新，横幅提示「有 12:03 的未保存草稿 · 恢复 / 丢弃」。笔记面板保留「编辑 / 完成」切换，没有保存按钮。
 
 ### 5.7 视觉规范（客观项）
 
@@ -812,8 +813,8 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 - **图标**：`icon.svg`（带 `width`/`height`，canvas 和 Firefox 才能画它）、`apple-icon.tsx`（180px PNG，icon.svg 铺满深色方块，iOS 自己切圆角）、`manifest.ts`（standalone，深色底，两个图标）。
 - **分享卡片**（`opengraph-image.tsx`，next/og，1200×630，深色主题，`force-dynamic`）：站点卡片是大 logo +「hebi8/market」+ 标语 + 一句话介绍 + 公开域名；图表卡片（`/chart/[key]/opengraph-image`）是名称和代码、源 · 币种 · 近半年涨跌、最新收盘和日涨跌 + 日期、近 130 根日线收盘的折线和渐变填充（涨跌色看半年涨跌），底部是和导出图片同样的 logo +「hebi8/market」+ 地址。涨跌色取根 yaml 的 `updown`。
 - **卡片不泄露个人内容**：抓取方没有会话，卡片也不读 cookie：名字、配色、合成表达式的别名只从根 vault 的 yaml 读（未登录访客本来就看这个），K 线只从公共缓存读，不碰任何 `users/<login>/`、画线、笔记、警报。没缓存的 key 显示「暂无缓存的日线」，读取不会触发同步。
-- **字体不走网络**：next/og 遇到自带字体里没有的字（中文、emoji）会去 Google Fonts 下载，违反「读取不碰网络」。所以 `src/lib/og.tsx` 只用本机字体：`HEBI8_OG_FONT` 或常见路径下的 Noto Sans CJK SC `.otf`（satori 读不了 `.ttc`）、DejaVu Sans Mono 一类的等宽字体；找不到中文字体时用 next/og 自带的 Geist，文字只保留拉丁字符；emoji 一律去掉。字体数组整个进程只建一次，satori 按引用缓存解析结果（第一次约 0.4s，之后十几毫秒）。
-- **`robots.txt`**：允许 `/`，禁止 `/settings`、`/usage`、`/review`、`/api/`，指向 `sitemap.xml`。**`sitemap.xml`**：首页 + 根 vault 自选里每个标的的图表页（`lastModified` 是同步时间）。两个都 `force-dynamic`，地址和自选在请求时读。
+- **字体不走网络**：next/og 遇到已加载字体里没有的字会去 Google Fonts 下载、遇到 emoji 会去拉 twemoji，违反「读取不碰网络」。所以 `src/lib/og.tsx` 只用本机字体：`HEBI8_OG_FONT` 或常见路径下的 Noto Sans CJK SC `.otf`（satori 读不了 `.ttc`）、DejaVu Sans Mono 一类的等宽字体，找不到中文字体时用 next/og 自带的 Geist；图上画的每一段文字（名称、代码、说明、价格、空态文案、地址）都过 `ogText`：按字素切开，含 emoji 成分的整段去掉（国旗、ZWJ 组合、keycap、变体选择符），再去掉任何已加载字体的 cmap 里都没有的字（`src/lib/font-coverage.ts`），所以没有中文字体时中文也一起去掉。字体数组整个进程只建一次，satori 按引用缓存解析结果（第一次约 0.4s，之后十几毫秒）。
+- **`robots.txt`**：只禁止 `/api/`，指向 `sitemap.xml`。设置、复盘、使用情况不在 Disallow 里：它们靠页面上的 noindex 不被收录，而爬虫只有能抓取才读得到 noindex（被 Disallow 的地址反而可能只以链接的形式进索引）。首页有 canonical 指向公开地址的根路径。**`sitemap.xml`**：首页 + 根 vault 自选里每个标的的图表页（`lastModified` 是同步时间）。两个都 `force-dynamic`，地址和自选在请求时读。
 - 这些元数据文件（图标、manifest、分享卡片、robots、sitemap）不计入流量（proxy 的 matcher 排除，§1.7）。
 
 ---

@@ -118,10 +118,10 @@ export function useAutosave({ storageKey, initial, savedAt, save, delay = 1000 }
     [storageKey, delay, flush],
   );
 
-  // Ctrl/Cmd+S saves now; leaving the page while dirty asks first
+  // Ctrl/Cmd+S saves now (with Shift or Alt it is the chart's snapshot keys); leaving the page while dirty asks first
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "s") {
         e.preventDefault();
         void flush();
       }

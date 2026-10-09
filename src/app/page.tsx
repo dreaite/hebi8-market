@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
 import { Overview, type OverviewData, type OverviewRow } from "@/components/Overview";
 import { alertBadges, alertViews } from "@/lib/alert-view";
@@ -9,6 +10,7 @@ import { listJournals, readConfigSafe } from "@/lib/vault";
 import { getViewer } from "@/lib/viewer";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { alternates: { canonical: "/" } };
 
 const daysAgo = (ms: number) => Math.floor((Date.now() - ms) / 86400000);
 
