@@ -12,6 +12,7 @@ import {
   type Coordinate,
   type Overlay,
   type OverlayCreateFiguresCallbackParams,
+  type OverlayEvent,
   type OverlayFigure,
   type OverlayPerformEventParams,
   type OverlayTemplate,
@@ -20,6 +21,7 @@ import {
 import { SCALED_DRAWINGS } from "./chart-types";
 import { bendLine, bendPolygon, fitLine, levelPrice, makeWarp, movePrices, toSpace, type PriceScale, type Warp } from "./drawing-scale";
 import { lineOf, withAlpha } from "./drawing-style";
+import { BOX_HANDLES, boxHandleAt, channelHandles, dragBox, dragChannel, yAt, type ChannelHandle } from "./drawing-edit";
 
 type Params = OverlayCreateFiguresCallbackParams<unknown>;
 type Figures = OverlayFigure[];
@@ -62,11 +64,6 @@ const both = (a: C, b: C): C[] => [far(b, a), far(a, b)];
 const add = (a: C, d: C): C => ({ x: a.x + d.x, y: a.y + d.y });
 const mid = (a: C, b: C): C => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 const line = (coordinates: C[], styles?: object, ignoreEvent?: boolean): OverlayFigure => ({ type: "line", attrs: { coordinates }, styles, ignoreEvent });
-
-/** y on the line through a and b at x (a's y when the line is vertical). */
-function yAt(a: C, b: C, x: number): number {
-  return a.x === b.x ? a.y : a.y + ((b.y - a.y) * (x - a.x)) / (b.x - a.x);
-}
 
 function quadratic(a: C, control: C, b: C, steps = 48): C[] {
   return Array.from({ length: steps + 1 }, (_, i) => {
@@ -243,6 +240,55 @@ function priceChange(p: Params, from: number, to: number): string {
   return `${signed(to - from, fmt(p.chart, to - from))} (${signed(to - from, pct(from, to).toFixed(2))}%)`;
 }
 
+// ---------------------------------------------------------------------------- handles
+
+/**
+ * Handles besides the stored points, drawn like KLineChart's own point handles and, like them,
+ * only while the drawing is hovered or selected. Dragging one moves the whole drawing at first
+ * (KLineChart knows no other figure drags); the template's `onPressedMoving` then puts the points
+ * where that handle says.
+ */
+function handleFigures(p: Params, at: { key: string; c: C }[]): Figures {
+  const store = storeOf(p.chart);
+  const hover = store.getHoverOverlayInfo();
+  const click = store.getClickOverlayInfo();
+  const on = (info: { overlay: Overlay | null; figureType: string }) => info.overlay?.id === p.overlay.id && info.figureType !== "none";
+  if (!on(hover) && !on(click)) return [];
+  const s = { ...p.chart.getStyles().overlay.point, ...(p.overlay.styles?.point ?? {}) };
+  return at.flatMap(({ key, c }) => {
+    const active = hover.overlay?.id === p.overlay.id && hover.figure?.key === key;
+    const [r, color, border, borderSize] = active ? [s.activeRadius, s.activeColor, s.activeBorderColor, s.activeBorderSize] : [s.radius, s.color, s.borderColor, s.borderSize];
+    return [
+      { key, type: "circle", attrs: { x: c.x, y: c.y, r: r + borderSize }, styles: { style: "fill", color: border } },
+      { type: "circle", attrs: { x: c.x, y: c.y, r }, styles: { style: "fill", color }, ignoreEvent: true },
+    ];
+  });
+}
+
+/** The drawing's points and the pointer when a drag began, for the handles' `onPressedMoving`. */
+let pressed: { id: string; points: Partial<Point>[]; at: C } | null = null;
+const onPress = (e: OverlayEvent<unknown>) => {
+  pressed = { id: e.overlay.id, points: e.overlay.points.map((pt) => ({ ...pt })), at: { x: e.x ?? 0, y: e.y ?? 0 } };
+};
+/** The handle being dragged (a stored point's own handle is `p0`, `p1`…), with the points when the drag began. */
+function dragged(e: OverlayEvent<unknown>): { key: string; prev: Partial<Point>[] } | null {
+  const key = e.figure?.key ?? "";
+  if (pressed?.id !== e.overlay.id) return null;
+  const point = /point_(\d+)$/.exec(key);
+  return { key: point ? `p${point[1]}` : key, prev: pressed.points };
+}
+
+/** TradingView's eight box handles: the two stored corners, the other two and the middle of each side. */
+const boxHandles = {
+  onPressedMoveStart: onPress,
+  onPressedMoving: (e: OverlayEvent<unknown>) => {
+    const d = dragged(e);
+    const h = BOX_HANDLES.find((b) => b.key === d?.key);
+    if (d && h) e.overlay.points = dragBox(d.prev, e.overlay.points, h);
+  },
+} satisfies Partial<Template>;
+const boxHandleFigures = (p: Params): Figures => handleFigures(p, BOX_HANDLES.map((h) => ({ key: h.key, c: boxHandleAt(p.coordinates, h) })));
+
 // ---------------------------------------------------------------------------- templates
 
 type Template = OverlayTemplate<unknown>;
@@ -323,6 +369,30 @@ const lines: Template[] = [
     name: "parallelChannel",
     totalStep: 4,
     ...base,
+    // the third click sets the width; the point then sits at the start of the second line, like TradingView's
+    performEventMoveForDrawing: ({ points, performPointIndex }) => {
+      const [a, , c] = points;
+      if (performPointIndex === 2 && activeChart && c && a?.timestamp !== undefined && c.timestamp !== undefined) {
+        const [pa, pb, pc] = activeChart.convertToPixel(points, { paneId: "candle_pane" }) as C[];
+        points[2] = { timestamp: a.timestamp, value: (activeChart.convertFromPixel([{ y: pa.y + pc.y - yAt(pa, pb, pc.x) }], { paneId: "candle_pane" }) as Partial<Point>[])[0].value };
+      }
+    },
+    onPressedMoveStart: onPress,
+    onPressedMoving: (e) => {
+      const d = dragged(e);
+      if (!d || !["p0", "p1", "p2", "a2", "b2", "mid1", "mid2"].includes(d.key)) return;
+      const handle = d.key as ChannelHandle;
+      const filter = { paneId: e.overlay.paneId };
+      const prev = e.chart.convertToPixel(d.prev, filter) as C[];
+      // a stored point is where KLineChart put it (magnet included); the others moved with the pointer
+      const travel = { x: (e.x ?? 0) - (pressed?.at.x ?? 0), y: (e.y ?? 0) - (pressed?.at.y ?? 0) };
+      const stored = /^p\d$/.test(handle) ? (e.chart.convertToPixel(e.overlay.points[Number(handle[1])], filter) as C) : null;
+      const from = stored ?? channelHandles(prev)[handle as Exclude<ChannelHandle, "p0" | "p1" | "p2">];
+      const to = stored ?? { x: from.x + travel.x, y: from.y + travel.y };
+      const next = dragChannel(prev, handle, to);
+      // points that did not move keep their exact values
+      e.overlay.points = next.map((c, i) => (c.x === prev[i].x && c.y === prev[i].y ? d.prev[i] : (e.chart.convertFromPixel([c], filter) as Partial<Point>[])[0]));
+    },
     createPointFigures: (p) => {
       const [a, b, c] = p.coordinates;
       if (!b) return [];
@@ -330,11 +400,19 @@ const lines: Template[] = [
       const d = { x: 0, y: c.y - yAt(a, b, c.x) };
       const a2 = add(a, d);
       const b2 = add(b, d);
+      const h = channelHandles(p.coordinates);
       return [
         { type: "polygon", attrs: { coordinates: [a, b, b2, a2] }, styles: fillOnly(fill(p, 0.1)) },
         line([a, b]),
         line([a2, b2]),
         line([mid(a, a2), mid(b, b2)], DASHED, true),
+        // a channel saved before the third point was pinned to the second line's start shows that start too
+        ...handleFigures(p, [
+          ...(c.x !== a.x ? [{ key: "a2", c: h.a2 }] : []),
+          { key: "b2", c: h.b2 },
+          { key: "mid1", c: h.mid1 },
+          { key: "mid2", c: h.mid2 },
+        ]),
       ];
     },
   },
@@ -558,6 +636,7 @@ const fib: Template[] = [
     name: "gannBox",
     totalStep: 3,
     ...base,
+    ...boxHandles,
     createPointFigures: (p) => {
       const [a, b] = p.coordinates;
       if (!b) return [];
@@ -570,6 +649,7 @@ const fib: Template[] = [
           const y = y0 + (y1 - y0) * l;
           return [line([{ x, y: y0 }, { x, y: y1 }]), line([{ x: x0, y }, { x: x1, y }]), plain(p, x, y1 + 2, `${l}`, "center", "top"), plain(p, x0 - 2, y, `${l}`, "right", "middle")];
         }),
+        ...boxHandleFigures(p),
       ];
     },
   },
@@ -736,6 +816,7 @@ const measure: Template[] = [
     name: "priceRange",
     totalStep: 3,
     ...base,
+    ...boxHandles,
     createPointFigures: (p) => {
       const [a, b] = p.coordinates;
       if (!b) return [];
@@ -751,6 +832,7 @@ const measure: Template[] = [
         line([{ x: cx, y: a.y }, head]),
         line(arrowHead({ x: cx, y: a.y }, head, 8)),
         ...infoBox(p, cx, b.y < a.y ? b.y - 30 : b.y + 8, [priceChange(p, pa.value ?? 0, pb.value ?? 0)]),
+        ...boxHandleFigures(p),
       ];
     },
   },
@@ -758,6 +840,7 @@ const measure: Template[] = [
     name: "dateRange",
     totalStep: 3,
     ...base,
+    ...boxHandles,
     createPointFigures: (p) => {
       const [a, b] = p.coordinates;
       if (!b) return [];
@@ -773,6 +856,7 @@ const measure: Template[] = [
         line([{ x: a.x, y: cy }, head]),
         line(arrowHead({ x: a.x, y: cy }, head, 8)),
         ...infoBox(p, (a.x + b.x) / 2, y1 + 8, [span(p, pa, pb)]),
+        ...boxHandleFigures(p),
       ];
     },
   },
@@ -780,6 +864,7 @@ const measure: Template[] = [
     name: "datePriceRange",
     totalStep: 3,
     ...base,
+    ...boxHandles,
     createPointFigures: (p) => {
       const [a, b] = p.coordinates;
       if (!b) return [];
@@ -793,6 +878,7 @@ const measure: Template[] = [
         line([{ x: a.x, y: cy }, { x: b.x, y: cy }]),
         line(arrowHead({ x: a.x, y: cy }, { x: b.x, y: cy }, 8)),
         ...infoBox(p, cx, Math.max(a.y, b.y) + 8, [priceChange(p, pa.value ?? 0, pb.value ?? 0), span(p, pa, pb)]),
+        ...boxHandleFigures(p),
       ];
     },
   },
@@ -808,10 +894,11 @@ const shapes: Template[] = [
     name: "rect",
     totalStep: 3,
     ...base,
+    ...boxHandles,
     createPointFigures: (p) => {
       const [a, b] = p.coordinates;
       if (!b) return [];
-      return [{ type: "rect", attrs: { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) }, styles: shapeStyles(p) }];
+      return [{ type: "rect", attrs: { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) }, styles: shapeStyles(p) }, ...boxHandleFigures(p)];
     },
   },
   {
@@ -828,6 +915,7 @@ const shapes: Template[] = [
     name: "ellipse",
     totalStep: 3,
     ...base,
+    ...boxHandles,
     createPointFigures: (p) => {
       const [a, b] = p.coordinates;
       if (!b) return [];
@@ -835,7 +923,7 @@ const shapes: Template[] = [
       const rx = Math.abs(b.x - a.x) / 2;
       const ry = Math.abs(b.y - a.y) / 2;
       const coordinates = Array.from({ length: 72 }, (_, i) => ({ x: c.x + rx * Math.cos((i / 72) * 2 * Math.PI), y: c.y + ry * Math.sin((i / 72) * 2 * Math.PI) }));
-      return [{ type: "polygon", attrs: { coordinates }, styles: shapeStyles(p) }];
+      return [{ type: "polygon", attrs: { coordinates }, styles: shapeStyles(p) }, ...boxHandleFigures(p)];
     },
   },
   {
