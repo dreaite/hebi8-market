@@ -656,7 +656,8 @@ export function KChart({
     }));
     let name = o.name;
     if (change.extend && TREND_LINES.has(o.name)) ({ name, points } = withExtension(points, change.extend));
-    const moved = Boolean(change.values || change.timestamps || change.extend);
+    // another scale moves a regression's points onto its fit there: KLineChart re-snaps them when it is given points
+    const moved = Boolean(change.values || change.timestamps || change.extend || change.scale);
     if (name === o.name) {
       chart.overrideOverlay({ id, styles, ...(change.text !== undefined ? { extendData: change.text } : {}), ...(moved ? { points } : {}) });
       persistOverlays();

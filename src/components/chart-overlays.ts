@@ -277,11 +277,13 @@ const onPress = (e: OverlayEvent<unknown>) => {
 };
 /**
  * A handle's result goes on the drawing when every price of it can be drawn (above zero where the
- * drawing or the axis is log); otherwise the drawing stays where the handle last put it.
+ * drawing or the axis is log), with `derived` the prices it implies without storing them (a
+ * channel's second line ends where its width says); otherwise the drawing stays where the handle
+ * last put it.
  */
-function settle(e: OverlayEvent<unknown>, next: Partial<Point>[]) {
+function settle(e: OverlayEvent<unknown>, next: Partial<Point>[], derived: Partial<Point>[] = []) {
   if (!pressed) return;
-  if (drawable(next, spaceById(e.overlay.id) === "log" || mainScale() === "log")) pressed.last = next;
+  if (drawable([...next, ...derived], spaceById(e.overlay.id) === "log" || mainScale() === "log")) pressed.last = next;
   e.overlay.points = pressed.last.map((pt) => ({ ...pt }));
 }
 /** The handle being dragged (a stored point's own handle is `p0`, `p1`…), with the points when the drag began. */
@@ -423,7 +425,11 @@ const lines: Template[] = [
       const next = dragChannel(prev, handle, to);
       // points that did not move keep their exact values; a pointer where the drawing's scale has no
       // price, or an end pushed to one the axis cannot show, leaves the last channel that could be drawn
-      settle(e, next.map((c, i) => (c.x === prev[i].x && c.y === prev[i].y ? d.prev[i] : space.point(c))));
+      settle(
+        e,
+        next.map((c, i) => (c.x === prev[i].x && c.y === prev[i].y ? d.prev[i] : space.point(c))),
+        [space.point(channelHandles(next).b2)],
+      );
     },
     createPointFigures: (p) => {
       const [a, b, c] = p.coordinates;

@@ -207,4 +207,22 @@ describe("review fixes", () => {
     // a cleared field is no change
     expect(editedFields(["10.00", "20.00"], ["", "21"], Number)).toEqual([undefined, 21]);
   });
+
+  it("refuses a channel whose second line would end at zero or below, though its stored points can be drawn", () => {
+    // a linear channel 100 → 100 with its second line at 50; the first line's end dragged to 25
+    const next = dragChannel(
+      [
+        { x: 0, y: 100 },
+        { x: 100, y: 100 },
+        { x: 0, y: 50 },
+      ],
+      "p1",
+      { x: 100, y: 25 },
+    );
+    const stored = next.map((c) => ({ value: c.y }));
+    expect(drawable(stored, true)).toBe(true);
+    const end2 = channelHandles(next).b2;
+    expect(end2.y).toBe(-25);
+    expect(drawable([...stored, { value: end2.y }], true)).toBe(false);
+  });
 });
