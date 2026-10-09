@@ -326,10 +326,13 @@ export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWr
               <input className="input" placeholder="https://www.tradingview.com/chart/AbCd1234/" value={layout} onChange={(e) => setLayout(e.target.value)} />
             </label>
           )}
-          <p className="text-[11px] leading-relaxed text-muted">
-            两个 cookie 在已登录 tradingview.com 的浏览器里找：开发者工具 → Application（应用）→ Cookies → https://www.tradingview.com。「获取布局」列出这个账号的所有布局，最近修改的在前；别人分享的布局选「手填链接或
-            ID」。cookie 只随请求发到本服务器，再由服务器发给 tradingview.com，不保存、不写日志，取画线时就从这里清掉。会取这个布局里所有图表的画线（含开了同步画线的 _shared），以及在所有布局间全局同步的画线。
-          </p>
+          <ol className="list-decimal space-y-0.5 pl-5 text-[11px] leading-relaxed text-muted">
+            <li>在已登录 tradingview.com 的浏览器里打开开发者工具 → Application（应用）→ Cookies → https://www.tradingview.com。</li>
+            <li>把 sessionid 和 sessionid_sign 两个 cookie 的值填到上面。</li>
+            <li>点「获取布局」，列出这个账号的所有布局，最近修改的在前；别人分享的布局选「手填链接或 ID」。</li>
+            <li>点「取画线并预览」：取这个布局里所有图表的画线（含开了同步画线的 _shared），以及在所有布局间全局同步的画线。</li>
+          </ol>
+          <p className="text-[11px] leading-relaxed text-muted">cookie 只随请求发到本服务器，再由服务器发给 tradingview.com，不保存、不写日志，取画线时就从这里清掉。</p>
         </div>
       ) : (
         <div className="flex flex-col gap-2">

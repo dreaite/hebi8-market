@@ -471,6 +471,17 @@ tr[data-drop="into"] > td {
   display: none;
 }
 
+/* Settings on a phone: 14px text and bold 14px section titles, set over the page's small text sizes. */
+@media (max-width: 639px) {
+  .settings-page :is(.text-xs, .text-\[11px\], .btn, .input, .seg > button) {
+    font-size: 14px;
+  }
+  .settings-page h2 {
+    font-size: 14px;
+    font-weight: 600;
+  }
+}
+
 /* Help drawer: a right-side panel, a bottom sheet on narrow screens. */
 .help-panel {
   top: 0;

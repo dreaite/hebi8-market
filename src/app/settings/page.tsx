@@ -24,7 +24,7 @@ export default async function SettingsPage() {
   const watched = config.groups.map((g) => ({ name: g.name, keys: g.symbols.map((s) => s.key) }));
 
   return (
-    <main className="mx-auto flex w-full max-w-[960px] flex-col gap-5 px-5 py-5">
+    <main className="settings-page mx-auto flex w-full max-w-[960px] flex-col gap-5 px-5 py-5">
       <h1 className="text-sm font-medium">设置</h1>
 
       <section className={card}>
