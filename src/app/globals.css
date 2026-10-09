@@ -385,9 +385,9 @@ input:focus-visible {
 }
 
 /*
- * Overview columns that only fit on wide screens. A hidden <col> still takes its width in a fixed
- * layout and a display:none cell shifts the following cells into the wrong columns, so these
- * columns are sized to 0 and their cells stay in the row, clipped, until xl.
+ * Overview columns that only fit on wide screens. A display:none cell shifts the following cells
+ * into the wrong columns, so these columns are sized to 0 and their cells stay in the row, empty,
+ * until xl.
  */
 :root {
   --col-spark: 0px;
@@ -398,9 +398,11 @@ input:focus-visible {
   overflow: hidden;
   white-space: nowrap;
 }
-/* hidden, so a clipped header is not reached by Tab */
-.wide-col > * {
-  visibility: hidden;
+/* gone rather than clipped: no width of their own, and a header Tab does not reach */
+@media (max-width: 1279px) {
+  .wide-col > * {
+    display: none;
+  }
 }
 @media (min-width: 1280px) {
   :root {
@@ -409,9 +411,6 @@ input:focus-visible {
   .wide-col {
     padding-left: 0.5rem;
     padding-right: 0.5rem;
-  }
-  .wide-col > * {
-    visibility: visible;
   }
 }
 

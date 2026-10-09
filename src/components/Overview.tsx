@@ -78,10 +78,11 @@ function sortRows(rows: OverviewRow[], sort: Sort): OverviewRow[] {
 }
 
 /**
- * Column widths shared by every group, so the price column sits at the same x everywhere.
- * The sparkline only fits from xl (1280px) up; below md the table becomes a list.
+ * Column widths shared by every group, so the price column sits at the same x everywhere. The name
+ * takes what is left (at least 140px) and the alerts as much as their badges need: up to two side by
+ * side, one below 900px. The sparkline only fits from xl (1280px) up; below md the table becomes a list.
  */
-const COL = { price: 112, period: 72, high: 96, conditions: 220, menu: 28 }; // spark 200 comes from a CSS variable
+const COL = { price: 112, period: 72, high: 96, menu: 28 }; // spark 200 comes from a CSS variable
 
 /** What each change column is measured against (stats.ts: the close on or before that day). */
 const SINCE: Record<ChangePeriod, string> = {
@@ -377,7 +378,7 @@ export function Overview({ data }: { data: OverviewData }) {
       {sort && !readOnly && <p className="mb-2 text-[11px] text-muted">按列排序时不能拖动；再点表头直到恢复默认顺序，就可以拖动调整了。</p>}
 
       <div className="overflow-x-auto">
-        <table className="hidden w-full table-fixed border-separate border-spacing-0 text-xs md:table">
+        <table className="hidden w-full border-separate border-spacing-0 text-xs md:table">
           <colgroup>
             <col />
             <col style={{ width: COL.price }} />
@@ -385,7 +386,8 @@ export function Overview({ data }: { data: OverviewData }) {
               <col key={p.key} style={{ width: COL.period }} />
             ))}
             <col style={{ width: COL.high }} />
-            <col style={{ width: COL.conditions }} />
+            {/* as narrow as the badges allow */}
+            <col style={{ width: 1 }} />
             <col style={{ width: "var(--col-spark)" }} />
             <col style={{ width: COL.menu }} />
           </colgroup>
@@ -397,7 +399,7 @@ export function Overview({ data }: { data: OverviewData }) {
                 <Th key={p.key} label={p.label} hint={`${p.label}涨跌：最新价相对 ${SINCE[p.key]}收盘的涨跌幅`} sortKey={p.key} sort={sort} onSort={onSort} className="text-right" />
               ))}
               <Th label="距高点" hint={HINTS.high} sortKey="ddAth" sort={sort} onSort={onSort} className="text-right" />
-              <th className="p-0 text-[11px] font-normal text-muted">
+              <th className="min-w-16 p-0 text-[11px] font-normal text-muted">
                 <AlertLegend readOnly={readOnly} />
               </th>
               <Th label="两年" hint={HINTS.spark} sort={sort} onSort={onSort} className="wide-col" />
@@ -563,7 +565,7 @@ function GroupRows({
               className="group cursor-pointer bg-card hover:bg-bg/60"
             >
               <td className={`${cell} rounded-l-md`}>
-                <div className="flex min-w-0 items-center gap-1">
+                <div className="flex w-[140px] min-w-full items-center gap-1">
                   {!wl.readOnly && (
                     <DragHandle
                       label={row.name}
@@ -598,7 +600,9 @@ function GroupRows({
                 {s?.pos52 != null && <Range52 pos={s.pos52} />}
               </td>
               <td className={cell}>
-                <AlertBadgeList badges={row.badges} onOpen={(id) => openAlert(row, id)} />
+                <div className="w-max max-w-[120px] min-[900px]:max-w-[204px]">
+                  <AlertBadgeList badges={row.badges} onOpen={(id) => openAlert(row, id)} />
+                </div>
               </td>
               <td className={`${cell} wide-col py-1`}>{s && <Sparkline values={s.spark} width={180} height={26} className="w-[180px]" />}</td>
               <td className="rounded-r-md border-t border-line py-1.5 text-right">
