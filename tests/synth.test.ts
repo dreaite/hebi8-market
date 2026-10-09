@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Bar } from "@/lib/series";
-import { evalSynth, lexSynth, parseSynth, synthName, synthOperand } from "@/lib/synth";
+import { canonicalSynth, evalSynth, lexSynth, parseSynth, synthName, synthOperand } from "@/lib/synth";
 
 const day = (iso: string) => Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 1000;
 const bar = (iso: string, o: number, h: number, l: number, c: number): Bar => ({ t: day(iso), o, h, l, c, v: 1, adj: 1 });
@@ -51,6 +51,18 @@ describe("synthOperand / synthName", () => {
     expect(synthName("=2*(yahoo:SPY-yahoo:QQQ)")).toBe("2*(SPY-QQQ)");
     expect(synthName('=binance:BTCUSDT/tv:TVC:GOLD+"data:gpu/4090-xianyu"')).toBe("BTCUSDT/GOLD+4090-xianyu");
     expect(synthName("=BTC / GOLD")).toBe("BTC/GOLD");
+  });
+});
+
+describe("canonicalSynth", () => {
+  it("writes aliases as full keys and drops spaces", () => {
+    expect(canonicalSynth("=BTC / GOLD", aliases)).toBe("=binance:BTCUSDT/tv:TVC:GOLD");
+    expect(canonicalSynth('=2*("yahoo:SPY" - "yahoo:BRK-B")', aliases)).toBe('=2*(yahoo:SPY-"yahoo:BRK-B")');
+    expect(canonicalSynth("=binance:BTCUSDT/tv:TVC:GOLD", aliases)).toBe("=binance:BTCUSDT/tv:TVC:GOLD");
+  });
+  it("returns what it cannot read as is", () => {
+    expect(canonicalSynth("=BTC/NOPE", aliases)).toBe("=BTC/NOPE");
+    expect(canonicalSynth("=BTC % 2", aliases)).toBe("=BTC % 2");
   });
 });
 

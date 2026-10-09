@@ -13,6 +13,7 @@ import {
   needsTv,
   rankExternal,
   resolveOperand,
+  sameSpread,
   suggestGroup,
   type SearchContext,
 } from "@/lib/search";
@@ -319,6 +320,18 @@ describe("analyzeExpression", () => {
     expect(analyzeExpression("腾讯/AAPL", 0, {}).error).toBe("「腾讯」要从搜索结果里选一个标的");
     expect(analyzeExpression("AAPL/MSFT %", 0, {}).error).toBe("无法识别的字符「%」");
     expect(analyzeExpression("AAPL/MSFT", 0, {}).error).toBeNull();
+  });
+});
+
+describe("sameSpread", () => {
+  it("finds a watched spread written with aliases", () => {
+    const typed = analyzeExpression("btc/gold", 0, ctx.aliases).key!;
+    expect(typed).toBe("=binance:BTCUSDT/tv:TVC:GOLD");
+    const keys = ctx.watchlist.map((w) => w.key);
+    expect(sameSpread(typed, keys, ctx.aliases)).toBe("=BTC/GOLD");
+    expect(sameSpread("=BTC/GOLD", keys, ctx.aliases)).toBe("=BTC/GOLD");
+    expect(sameSpread("=GOLD/BTC", keys, ctx.aliases)).toBeUndefined();
+    expect(sameSpread(typed, ["binance:BTCUSDT"], ctx.aliases)).toBeUndefined();
   });
 });
 

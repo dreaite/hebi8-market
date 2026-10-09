@@ -105,6 +105,22 @@ function tokenize(src: string, aliases: Record<string, string>): Token[] {
 /** A key as an operand: bare when it reads back as one word, quoted otherwise. */
 export const synthOperand = (key: string) => (WORD.exec(key)?.[0] === key ? key : `"${key}"`);
 
+/**
+ * A synthetic key in the form the search box writes, every operand a full key and no spaces:
+ * `=BTC / GOLD` → `=binance:BTCUSDT/tv:TVC:GOLD`. A key that does not parse is returned as is.
+ */
+export function canonicalSynth(key: string, aliases: Record<string, string>): string {
+  try {
+    const parts = lexSynth(key.slice(1)).map((t) => {
+      if (t.type === "bad") throw new Error(t.message);
+      return t.type === "ref" ? synthOperand(refKey(t, aliases)) : t.text;
+    });
+    return `=${parts.join("")}`;
+  } catch {
+    return key;
+  }
+}
+
 /** What a chart calls a key: `AAPL/MSFT` for `=yahoo:AAPL/yahoo:MSFT`, `GOLD` for `tv:TVC:GOLD`. */
 function shortTicker(key: string): string {
   const { source, ticker } = parseKey(key);

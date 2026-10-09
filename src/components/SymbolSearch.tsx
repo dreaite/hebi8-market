@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { analyzeExpression, directKey, isCJK, isExpression, localSearch, mergeResults, suggestGroup, type SearchContext, type SearchResult } from "@/lib/search";
+import { analyzeExpression, directKey, isCJK, isExpression, localSearch, mergeResults, sameSpread, suggestGroup, type SearchContext, type SearchResult } from "@/lib/search";
 import { isSynthetic, tickerOf } from "@/lib/symbols";
 import { synthOperand } from "@/lib/synth";
 import { displayName } from "@/lib/wellknown";
@@ -83,9 +83,12 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
     const skip = new Set(exclude);
     if (!expr) return merged.filter((r) => !skip.has(r.key));
     const operands = merged.filter((r) => r.source !== "key" && !isSynthetic(r.key));
-    if (!expr.key || skip.has(expr.key)) return operands;
-    const w = ctx.watchlist.find((x) => x.key === expr.key);
-    const row: SearchResult = { key: expr.key, name: w?.name ?? displayName(expr.key), source: "key", inWatchlist: w?.group, suggestedGroup: w?.group ?? suggestGroup(expr.key, undefined, ctx.groups) };
+    if (!expr.key || sameSpread(expr.key, exclude, ctx.aliases)) return operands;
+    // a spread already watched under another spelling (`=BTC/GOLD`) is that entry, not a new one
+    const watchedKey = sameSpread(expr.key, ctx.watchlist.map((x) => x.key), ctx.aliases);
+    const w = ctx.watchlist.find((x) => x.key === watchedKey);
+    const key = w?.key ?? expr.key;
+    const row: SearchResult = { key, name: w?.name ?? displayName(key), source: "key", inWatchlist: w?.group, suggestedGroup: w?.group ?? suggestGroup(key, undefined, ctx.groups) };
     return [row, ...operands];
   }, [local, external, term, exclude, expr, ctx]);
   const items = useMemo(

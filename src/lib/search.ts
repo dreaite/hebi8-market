@@ -5,7 +5,7 @@
  */
 import type { SearchHit } from "./sources/types";
 import { isSynthetic, isValidKey, parseKey, SOURCES, tickerOf, type Source } from "./symbols";
-import { lexSynth, parseSynth, synthOperand } from "./synth";
+import { canonicalSynth, lexSynth, parseSynth, synthOperand } from "./synth";
 import { displayName, WELLKNOWN, wellKnown, wellKnownName } from "./wellknown";
 
 export type SearchSource = "key" | "watchlist" | "alias" | "wellknown" | Source;
@@ -99,6 +99,12 @@ export function resolveOperand(text: string, quoted: boolean, aliases: Record<st
   if (/^[A-Za-z0-9_]+:[A-Za-z0-9_.!]+$/.test(text)) return canonicalKey(`tv:${text.toUpperCase()}`);
   if (!/^\^?[A-Za-z0-9][A-Za-z0-9.=!]*$/.test(text)) return null;
   return /USDT$/i.test(text) ? `binance:${text.toUpperCase()}` : `yahoo:${text.toUpperCase()}`;
+}
+
+/** The key in `keys` that is the same spread as `key`, written either way (`=BTC/GOLD` for `=binance:BTCUSDT/tv:TVC:GOLD`). */
+export function sameSpread(key: string, keys: string[], aliases: Record<string, string>): string | undefined {
+  const canon = canonicalSynth(key, aliases);
+  return keys.find((k) => isSynthetic(k) && canonicalSynth(k, aliases) === canon);
 }
 
 export interface ExprOperand {
