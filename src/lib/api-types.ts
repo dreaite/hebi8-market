@@ -1,4 +1,5 @@
 import type { RefSeries } from "@/indicators/formula";
+import type { QuoteSession } from "./sources/types";
 import type { Source } from "./symbols";
 
 export type { SearchHit } from "./sources/types";
@@ -21,9 +22,14 @@ export interface BarsSymbol {
   source: Source | "expr";
   ticker: string;
   currency: string | null;
+  exchange: string | null;
   bench: string | null;
   syncedAt: number | null;
   syncError: string | null;
+  /** The 5-minute quote (alert symbols only) when it is newer than the last sync */
+  quote: { session: QuoteSession; fetchedAt: number } | null;
+  /** The last daily bar's day (ms, UTC midnight); weekly and longer bars carry their bucket's start */
+  lastDay: number;
 }
 
 export interface BarsResponse {

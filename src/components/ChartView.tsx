@@ -8,13 +8,14 @@ import { addSymbol, deleteIndicator, loadSymbol, removeSymbol, saveChartState, s
 import type { AlertView } from "@/lib/alert-view";
 import { INDICATORS } from "@/indicators/catalog";
 import { compileFormula, formulaIndicatorName, formulaTemplate, isFormulaIndicator } from "@/indicators/formula-indicators";
-import type { BarsResponse } from "@/lib/api-types";
+import type { BarsResponse, BarsSymbol } from "@/lib/api-types";
 import { BRAND } from "@/lib/brand";
 import { CHART_STYLES, type ChartPrefs, type ChartStyle, type FormulaDef, type ParamOverrides } from "@/lib/config";
 import { copyText } from "@/lib/copy-text";
 import { fmtAgo } from "@/lib/format";
 import { setChartContext } from "@/lib/page-context";
 import type { Prices } from "@/lib/series";
+import type { QuoteSession } from "@/lib/sources/types";
 import { SOURCE_LABELS, TF_LABELS, TIMEFRAMES, chartTitle, isSynthetic, tickerOf, type Timeframe } from "@/lib/symbols";
 import { synthName } from "@/lib/synth";
 import { useLocalStorage } from "@/lib/use-local-storage";
@@ -74,6 +75,23 @@ type DialogState =
   /** 新建警报 at a price, or 编辑警报 */
   | { kind: "alert"; alert: AlertView | null; price: number | null }
   | null;
+
+/** The quote's session in the status strip; round-the-clock markets say nothing */
+const SESSION_LABELS: Record<QuoteSession, string | null> = { open: "盘中", pre: "盘前", post: "盘后", closed: "休市", always: null };
+
+/** The status strip's line: the exchange (or 按需合成), the quote's session, the last day, how fresh. */
+function statusLine(meta: BarsSymbol): string {
+  const synth = meta.source === "expr";
+  const day = new Date(meta.lastDay);
+  return [
+    synth ? "按需合成" : meta.exchange,
+    meta.quote && SESSION_LABELS[meta.quote.session],
+    `最新 ${day.getUTCMonth() + 1}/${day.getUTCDate()}`,
+    synth ? null : meta.syncError ? "同步失败" : meta.quote ? fmtAgo(meta.quote.fetchedAt, "报价") : fmtAgo(meta.syncedAt),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
 
 const DEFAULT_DRAWING: DrawingModes = { magnet: false, locked: false, hidden: false };
 
@@ -442,6 +460,7 @@ export function ChartView({
   const ticker = meta?.ticker ?? (isSynthetic(symbolKey) ? synthName(symbolKey) : tickerOf(symbolKey));
   const sourceLabel = meta ? (meta.source === "expr" ? "合成" : SOURCE_LABELS[meta.source]) : null;
   const syncText = meta ? (meta.source === "expr" ? "按需合成" : fmtAgo(meta.syncedAt)) : "";
+  const status = meta ? statusLine(meta) : "";
   const subtitle = [
     TF_LABELS[dataTf],
     ...(sourceLabel ? [sourceLabel] : []),
@@ -680,7 +699,7 @@ export function ChartView({
 
   return (
     <main
-      className="flex w-full flex-col overflow-hidden bg-card pb-[var(--safe-bottom)]"
+      className="flex w-full flex-col overflow-hidden bg-card"
       style={{ height: "calc(100dvh - var(--site-header-h))" }}
     >
       {/* top toolbar: one row, scrolls sideways on narrow screens */}
@@ -1012,6 +1031,11 @@ export function ChartView({
             <IconAlarm />
           </button>
         </div>
+      </div>
+
+      {/* status strip: as high as the iPhone's home bar inset, so 0 (hidden) elsewhere; clear of the rounded corners */}
+      <div className={`h-[var(--safe-bottom)] shrink-0 overflow-hidden px-8 text-center text-[11px] leading-5 ${meta?.syncError ? "text-down" : "text-muted"}`} title={meta?.syncError ?? undefined}>
+        <span className="block truncate">{status}</span>
       </div>
 
       {panel && !wide && (
