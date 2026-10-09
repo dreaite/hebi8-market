@@ -64,7 +64,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
   const caretTo = useRef<number | null>(null);
   const [external, setExternal] = useState<{ query: string; rows: SearchResult[] }>({ query: "", rows: [] });
   const [fetching, setFetching] = useState<string | null>(null);
-  // the highlight resets whenever the query changes, without an effect
+  // the highlight resets whenever the list changes (query, or the operand searched), without an effect
   const [activeFor, setActiveFor] = useState<{ query: string; index: number }>({ query: "", index: 0 });
   const [groupChoice, setGroupChoice] = useState<Record<string, string>>({});
   const [newGroup, setNewGroup] = useState<{ key: string; name: string } | null>(null);
@@ -74,15 +74,17 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
   // what the sources are asked: the whole query, or the operand at the caret
   const term = expr ? (expr.active?.text ?? "") : trimmed;
   const searching = fetching === term;
-  const active = activeFor.query === trimmed ? activeFor.index : 0;
+  const listFor = `${trimmed}\n${term}`;
+  const active = activeFor.query === listFor ? activeFor.index : 0;
   const setActive = (index: number | ((i: number) => number)) =>
-    setActiveFor({ query: trimmed, index: typeof index === "function" ? index(active) : index });
+    setActiveFor({ query: listFor, index: typeof index === "function" ? index(active) : index });
   const local = useMemo(() => localSearch(term, ctx), [term, ctx]);
   const rows = useMemo(() => {
     const merged = mergeResults(local, external.query === term ? external.rows : []);
     const skip = new Set(exclude);
     if (!expr) return merged.filter((r) => !skip.has(r.key));
-    const operands = merged.filter((r) => r.source !== "key" && !isSynthetic(r.key));
+    // an operand typed as an alias or key keeps its own row, so it can be chosen again
+    const operands = merged.filter((r) => !isSynthetic(r.key));
     if (!expr.key || sameSpread(expr.key, exclude, ctx.aliases)) return operands;
     // a spread already watched under another spelling (`=BTC/GOLD`) is that entry, not a new one
     const watchedKey = sameSpread(expr.key, ctx.watchlist.map((x) => x.key), ctx.aliases);
@@ -143,7 +145,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
   const replace = (r: SearchResult) => {
     const op = expr?.active;
     if (!op) return;
-    const text = synthOperand(r.key);
+    const text = synthOperand(r.key, ctx.aliases);
     caretTo.current = op.start + text.length;
     setQuery(query.slice(0, op.start) + text + query.slice(op.end));
     setCaret(caretTo.current);
@@ -264,7 +266,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
                 className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 ${isActive ? "bg-bg" : ""}`}
               >
                 <span className="min-w-0 flex-1 truncate">
-                  {r.source === "key" && <span className="mr-1 text-muted">使用</span>}
+                  {r.source === "key" && !replaces(r) && <span className="mr-1 text-muted">使用</span>}
                   <span className="text-sm" title={r.name}>
                     {r.name}
                   </span>

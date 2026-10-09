@@ -4,8 +4,8 @@
  * and ranked here after the route handler has fetched it.
  */
 import type { SearchHit } from "./sources/types";
-import { isSynthetic, isValidKey, parseKey, SOURCES, tickerOf, type Source } from "./symbols";
-import { canonicalSynth, lexSynth, parseSynth, synthOperand } from "./synth";
+import { isSource, isSynthetic, isValidKey, parseKey, SOURCES, tickerOf, type Source } from "./symbols";
+import { canonicalSynth, lexSynth, writeSynth, type SynthToken } from "./synth";
 import { displayName, WELLKNOWN, wellKnown, wellKnownName } from "./wellknown";
 
 export type SearchSource = "key" | "watchlist" | "alias" | "wellknown" | Source;
@@ -95,11 +95,14 @@ export function resolveOperand(text: string, quoted: boolean, aliases: Record<st
   // codes and names only: pinyin initials like `bp` are real tickers too
   const dict = WELLKNOWN.find((e) => e.zh === text || e.en?.toLowerCase() === lower || bareCodes(e.key).includes(lower));
   if (dict) return dict.key;
-  // TradingView's own spelling, `NASDAQ:AAPL`, moves to the preferred source like a TV search hit
-  if (/^[A-Za-z0-9_]+:[A-Za-z0-9_.!]+$/.test(text)) return canonicalKey(`tv:${text.toUpperCase()}`);
+  // TradingView's own spelling, `NASDAQ:AAPL`, moves to the preferred source like a TV search hit;
+  // `data:gpu` is half a key whose rest the lexer split off, not an exchange
+  if (/^[A-Za-z0-9_]+:[A-Za-z0-9_.!]+$/.test(text) && !hasSourcePrefix(text)) return canonicalKey(`tv:${text.toUpperCase()}`);
   if (!/^\^?[A-Za-z0-9][A-Za-z0-9.=!]*$/.test(text)) return null;
   return /USDT$/i.test(text) ? `binance:${text.toUpperCase()}` : `yahoo:${text.toUpperCase()}`;
 }
+
+const hasSourcePrefix = (text: string) => text.includes(":") && isSource(text.slice(0, text.indexOf(":")).toLowerCase());
 
 /** The key in `keys` that is the same spread as `key`, written either way (`=BTC/GOLD` for `=binance:BTCUSDT/tv:TVC:GOLD`). */
 export function sameSpread(key: string, keys: string[], aliases: Record<string, string>): string | undefined {
@@ -130,22 +133,18 @@ export function analyzeExpression(query: string, caret: number, aliases: Record<
   const tokens = lexSynth(query.replace(/^(\s*)=/, "$1 "));
   const operands: ExprOperand[] = tokens.flatMap((t) => (t.type === "ref" ? [{ text: t.text, start: t.start, end: t.end, key: resolveOperand(t.text, t.quoted, aliases) }] : []));
   const active = operands.find((o) => o.start <= caret && caret <= o.end) ?? null;
-  const parts: string[] = [];
+  const keys = new Map<SynthToken, string>();
   let ref = 0;
   for (const t of tokens) {
     if (t.type === "bad") return { operands, active, key: null, error: t.message };
-    if (t.type !== "ref") {
-      parts.push(t.text);
-      continue;
-    }
+    if (t.type !== "ref") continue;
     const { text, key } = operands[ref++];
-    if (!key) return { operands, active, key: null, error: `「${text}」要从搜索结果里选一个标的` };
-    parts.push(synthOperand(key));
+    if (key) keys.set(t, key);
+    else if (hasSourcePrefix(text)) return { operands, active, key: null, error: `「${text}」不是完整的 key；代码里有 - 或 / 时整个 key 要加引号，如 "data:gpu/4090-xianyu"` };
+    else return { operands, active, key: null, error: `「${text}」要从搜索结果里选一个标的` };
   }
-  const expr = parts.join("");
   try {
-    parseSynth(expr, {});
-    return { operands, active, key: `=${expr}`, error: null };
+    return { operands, active, key: writeSynth(tokens, (t) => keys.get(t)!, aliases), error: null };
   } catch (err) {
     return { operands, active, key: null, error: err instanceof Error ? err.message : String(err) };
   }

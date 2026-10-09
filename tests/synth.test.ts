@@ -38,12 +38,14 @@ describe("lexSynth", () => {
 
 describe("synthOperand / synthName", () => {
   it("leaves a key bare only when it reads back as one operand", () => {
-    expect(synthOperand("yahoo:AAPL")).toBe("yahoo:AAPL");
-    expect(synthOperand("yahoo:^GSPC")).toBe("yahoo:^GSPC");
-    expect(synthOperand("tv:TVC:GOLD")).toBe("tv:TVC:GOLD");
-    expect(synthOperand("yahoo:EURUSD=X")).toBe("yahoo:EURUSD=X");
-    expect(synthOperand("yahoo:BRK-B")).toBe('"yahoo:BRK-B"');
-    expect(synthOperand("data:gpu/4090-xianyu")).toBe('"data:gpu/4090-xianyu"');
+    expect(synthOperand("yahoo:AAPL", {})).toBe("yahoo:AAPL");
+    expect(synthOperand("yahoo:^GSPC", {})).toBe("yahoo:^GSPC");
+    expect(synthOperand("tv:TVC:GOLD", {})).toBe("tv:TVC:GOLD");
+    expect(synthOperand("yahoo:EURUSD=X", {})).toBe("yahoo:EURUSD=X");
+    expect(synthOperand("yahoo:BRK-B", {})).toBe('"yahoo:BRK-B"');
+    expect(synthOperand("data:gpu/4090-xianyu", {})).toBe('"data:gpu/4090-xianyu"');
+    // a bare name is an alias first, so a key that is also an alias name keeps its quotes
+    expect(synthOperand("yahoo:SPY", { "yahoo:SPY": "yahoo:QQQ" })).toBe('"yahoo:SPY"');
   });
 
   it("shows operands by ticker, like a TradingView spread", () => {
@@ -60,7 +62,14 @@ describe("canonicalSynth", () => {
     expect(canonicalSynth('=2*("yahoo:SPY" - "yahoo:BRK-B")', aliases)).toBe('=2*(yahoo:SPY-"yahoo:BRK-B")');
     expect(canonicalSynth("=binance:BTCUSDT/tv:TVC:GOLD", aliases)).toBe("=binance:BTCUSDT/tv:TVC:GOLD");
   });
+  it("keeps the meaning of a quoted key that is also an alias name", () => {
+    const tricky = { "yahoo:SPY": "yahoo:QQQ" };
+    const canon = canonicalSynth('="yahoo:SPY"/"yahoo:QQQ"', tricky);
+    expect(canon).toBe('="yahoo:SPY"/yahoo:QQQ');
+    expect(parseSynth(canon.slice(1), tricky).keys).toEqual(["yahoo:SPY", "yahoo:QQQ"]);
+  });
   it("returns what it cannot read as is", () => {
+    expect(canonicalSynth("=BTC/1 2", aliases)).toBe("=BTC/1 2");
     expect(canonicalSynth("=BTC/NOPE", aliases)).toBe("=BTC/NOPE");
     expect(canonicalSynth("=BTC % 2", aliases)).toBe("=BTC % 2");
   });

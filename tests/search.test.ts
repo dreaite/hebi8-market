@@ -285,6 +285,8 @@ describe("resolveOperand", () => {
     // TradingView ids move to the preferred source
     expect(resolveOperand("NASDAQ:AAPL", false, {})).toBe("yahoo:AAPL");
     expect(resolveOperand("TVC:DXY", false, {})).toBe("tv:TVC:DXY");
+    expect(resolveOperand("data:gpu", false, {})).toBeNull();
+    expect(resolveOperand("yahoo:", false, {})).toBeNull();
     // the rest on its default source; NVDA is watched, which changes nothing
     expect(resolveOperand("nvda", false, ctx.aliases)).toBe("yahoo:NVDA");
     expect(resolveOperand("^n225", false, {})).toBe("yahoo:^N225");
@@ -299,6 +301,10 @@ describe("resolveOperand", () => {
 });
 
 describe("analyzeExpression", () => {
+  it("keeps the quotes of a key that is also an alias name", () => {
+    expect(analyzeExpression('"yahoo:SPY"/"yahoo:QQQ"', 0, { "yahoo:SPY": "yahoo:QQQ" }).key).toBe('="yahoo:SPY"/yahoo:QQQ');
+  });
+
   it("normalizes operands to full keys", () => {
     expect(analyzeExpression("AAPL/MSFT", 9, {}).key).toBe("=yahoo:AAPL/yahoo:MSFT");
     expect(analyzeExpression("= 2 * (SPY - QQQ)", 0, ctx.aliases).key).toBe("=2*(yahoo:SPY-yahoo:QQQ)");
@@ -320,6 +326,12 @@ describe("analyzeExpression", () => {
     expect(analyzeExpression("腾讯/AAPL", 0, {}).error).toBe("「腾讯」要从搜索结果里选一个标的");
     expect(analyzeExpression("AAPL/MSFT %", 0, {}).error).toBe("无法识别的字符「%」");
     expect(analyzeExpression("AAPL/MSFT", 0, {}).error).toBeNull();
+    // checked as typed: removing the space must not turn `1 2` into `12`
+    expect(analyzeExpression("AAPL/1 2", 0, {})).toMatchObject({ key: null, error: "表达式多了内容" });
+    expect(analyzeExpression("SPY/1e+3 2", 0, {})).toMatchObject({ key: null, error: "表达式多了内容" });
+    // an unquoted dataset key is split at `/` and `-`; its first half is no TradingView id
+    expect(analyzeExpression("=data:gpu/4090-xianyu", 0, {})).toMatchObject({ key: null, error: expect.stringContaining("要加引号") });
+    expect(analyzeExpression('="data:gpu/4090-xianyu"/USDCNH', 0, {}).key).toBe('="data:gpu/4090-xianyu"/tv:FX_IDC:USDCNH');
   });
 });
 

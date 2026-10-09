@@ -26,7 +26,8 @@ export type SynthToken =
   | { type: "num"; text: string; start: number; end: number }
   | { type: "op"; text: string; start: number; end: number }
   | { type: "ref"; text: string; quoted: boolean; start: number; end: number }
-  | { type: "bad"; message: string; start: number; end: number };
+  | { type: "bad"; text: string; message: string; start: number; end: number };
+type RefToken = Extract<SynthToken, { type: "ref" }>;
 
 /** Letters (any script), digits, `_ . ! =`, and `:` with an optional `^` after it (`yahoo:^GSPC`). */
 const WORD = /^(?:[\p{L}\p{N}_.!=]|:\^?)+/u;
@@ -53,7 +54,7 @@ export function lexSynth(src: string): SynthToken[] {
     if (ch === '"') {
       const end = src.indexOf('"', i + 1);
       if (end < 0) {
-        tokens.push({ type: "bad", message: "引号没有闭合", start: i, end: src.length });
+        tokens.push({ type: "bad", text: src.slice(i), message: "引号没有闭合", start: i, end: src.length });
         break;
       }
       tokens.push({ type: "ref", text: src.slice(i + 1, end), quoted: true, start: i, end: end + 1 });
@@ -76,7 +77,7 @@ export function lexSynth(src: string): SynthToken[] {
       tokens.push({ type: "op", text: ch, start: i, end: i + 1 });
       i++;
     } else {
-      tokens.push({ type: "bad", message: `无法识别的字符「${ch}」`, start: i, end: i + 1 });
+      tokens.push({ type: "bad", text: ch, message: `无法识别的字符「${ch}」`, start: i, end: i + 1 });
       i++;
     }
   }
@@ -84,7 +85,7 @@ export function lexSynth(src: string): SynthToken[] {
 }
 
 /** An alias, else a full key (`source:` prefix or quoted). */
-function refKey(t: Extract<SynthToken, { type: "ref" }>, aliases: Record<string, string>): string {
+function refKey(t: RefToken, aliases: Record<string, string>): string {
   if (!t.quoted && aliases[t.text]) return aliases[t.text];
   if (!t.quoted && !t.text.includes(":")) throw new Error(`未知别名「${t.text}」`);
   if (isSynthetic(t.text) || !isValidKey(t.text)) throw new Error(`无效的标的 key「${t.text}」`);
@@ -93,17 +94,30 @@ function refKey(t: Extract<SynthToken, { type: "ref" }>, aliases: Record<string,
 
 type Token = { type: "num"; value: number } | { type: "sym"; key: string } | { type: "op"; value: string };
 
-function tokenize(src: string, aliases: Record<string, string>): Token[] {
-  return lexSynth(src).map((t): Token => {
+function tokenize(tokens: SynthToken[], keyOf: (t: RefToken) => string): Token[] {
+  return tokens.map((t): Token => {
     if (t.type === "bad") throw new Error(t.message);
     if (t.type === "num") return { type: "num", value: Number(t.text) };
     if (t.type === "op") return { type: "op", value: t.text };
-    return { type: "sym", key: refKey(t, aliases) };
+    return { type: "sym", key: keyOf(t) };
   });
 }
 
-/** A key as an operand: bare when it reads back as one word, quoted otherwise. */
-export const synthOperand = (key: string) => (WORD.exec(key)?.[0] === key ? key : `"${key}"`);
+/**
+ * A key as an operand: bare when it reads back as one word, quoted otherwise, and also when an
+ * alias has the key's name (a bare name is an alias first).
+ */
+export const synthOperand = (key: string, aliases: Record<string, string>) => (WORD.exec(key)?.[0] === key && !aliases[key] ? key : `"${key}"`);
+
+/**
+ * Lexed tokens written back as a synthetic key, every operand the key `keyOf` gives it and no
+ * spaces. They are parsed as they are first, so `1 2` is an error rather than `12`; throws like
+ * `parseSynth`.
+ */
+export function writeSynth(tokens: SynthToken[], keyOf: (t: RefToken) => string, aliases: Record<string, string>): string {
+  parseTokens(tokens, keyOf);
+  return `=${tokens.map((t) => (t.type === "ref" ? synthOperand(keyOf(t), aliases) : t.text)).join("")}`;
+}
 
 /**
  * A synthetic key in the form the search box writes, every operand a full key and no spaces:
@@ -111,11 +125,7 @@ export const synthOperand = (key: string) => (WORD.exec(key)?.[0] === key ? key 
  */
 export function canonicalSynth(key: string, aliases: Record<string, string>): string {
   try {
-    const parts = lexSynth(key.slice(1)).map((t) => {
-      if (t.type === "bad") throw new Error(t.message);
-      return t.type === "ref" ? synthOperand(refKey(t, aliases)) : t.text;
-    });
-    return `=${parts.join("")}`;
+    return writeSynth(lexSynth(key.slice(1)), (t) => refKey(t, aliases), aliases);
   } catch {
     return key;
   }
@@ -201,7 +211,11 @@ class Parser {
 
 /** Parse the part after `=`; throws on unknown aliases or bad syntax. */
 export function parseSynth(expr: string, aliases: Record<string, string>): Synth {
-  const tokens = tokenize(expr, aliases);
+  return parseTokens(lexSynth(expr), (t) => refKey(t, aliases));
+}
+
+function parseTokens(lexed: SynthToken[], keyOf: (t: RefToken) => string): Synth {
+  const tokens = tokenize(lexed, keyOf);
   const keys = [...new Set(tokens.flatMap((t) => (t.type === "sym" ? [t.key] : [])))];
   if (keys.length === 0) throw new Error("合成表达式至少要引用一个标的");
   return { keys, node: new Parser(tokens).parse() };

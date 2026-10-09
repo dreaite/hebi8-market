@@ -441,7 +441,7 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 ### 3.3 对齐与合成标的
 
 - `align(target: Bar[], other: Bar[])`：按 target 的交易日取 other 当天或之前最近一根的值（前向填充），开头没有数据的位置为 `null`。v1 的 `alignCloses` 泛化成返回整根 bar。
-- 合成标的 `=表达式`：操作数是别名或完整 key（`=binance:BTCUSDT/tv:TVC:GOLD`、`=2*(yahoo:SPY-yahoo:QQQ)`），支持 `+ - * / ^`、数字、括号。词法（`lexSynth`）：字母（含中文）、数字和 `_ . ! =` 连成一个操作数，`:` 后面可以跟 `^`（`yahoo:^GSPC`）；数字后面紧跟字母或点的是代码（`0700.HK`），否则是常数；`^` 出现在该有操作数的位置（开头、运算符或左括号后）是代码的一部分（`^GSPC`），跟在操作数后是乘方；`-` 永远是减号。所以代码里有 `-`、`/` 或空格的 key 要加引号：`="yahoo:BRK-B"/yahoo:SPY`、`="data:gpu/4090-xianyu"/USDCNH`。写回时（`synthOperand`）能原样读回的 key 不加引号，否则加。**逐字段计算**（o=oA/oB，h=hA/hB，l=lA/lB，c=cA/cB，v=null），这正是 TradingView spread 的做法。交易日取第一个操作数的交易日，其余前向填充；任一操作数尚无数据的前导区间丢掉。合成标的不入 `bars` 表，按需计算；其 `stats` 同普通标的。
+- 合成标的 `=表达式`：操作数是别名或完整 key（`=binance:BTCUSDT/tv:TVC:GOLD`、`=2*(yahoo:SPY-yahoo:QQQ)`），支持 `+ - * / ^`、数字、括号。词法（`lexSynth`）：字母（含中文）、数字和 `_ . ! =` 连成一个操作数，`:` 后面可以跟 `^`（`yahoo:^GSPC`）；数字后面紧跟字母或点的是代码（`0700.HK`），否则是常数；`^` 出现在该有操作数的位置（开头、运算符或左括号后）是代码的一部分（`^GSPC`），跟在操作数后是乘方；`-` 永远是减号。所以代码里有 `-`、`/` 或空格的 key 要加引号：`="yahoo:BRK-B"/yahoo:SPY`、`="data:gpu/4090-xianyu"/USDCNH`。写回时（`synthOperand`）能原样读回的 key 不加引号，否则加；key 恰好也是某个别名的名字时保留引号（不带引号的词先查别名）。写回按原输入的 token 先解析再拼（`writeSynth`），所以 `1 2` 是错误，不会拼成 `12`。**逐字段计算**（o=oA/oB，h=hA/hB，l=lA/lB，c=cA/cB，v=null），这正是 TradingView spread 的做法。交易日取第一个操作数的交易日，其余前向填充；任一操作数尚无数据的前导区间丢掉。合成标的不入 `bars` 表，按需计算；其 `stats` 同普通标的。
 - 显示名（`synthName`，没有 yaml `name` 时用）照 TV：操作数只写代码，`=yahoo:AAPL/yahoo:MSFT` 显示 `AAPL/MSFT`，`tv:TVC:GOLD` 显示 `GOLD`，`data:` 显示序列 id。
 - 搜索框里的输入规则见 §5.4。
 
@@ -586,8 +586,8 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 4. 「搜索」：外部结果，300ms 防抖（ASCII ≥2 字符，CJK ≥1）；状态「搜索中…」/「无结果，可直接输入 source:ticker 或 AAPL/MSFT 这样的表达式」；已在自选的行尾标「已在自选 · 分组」。
 
 **合成表达式（照 TV 的 spread 输入）**：输入以 `=` 开头，或含运算符（`AAPL/MSFT`、`2*(SPY-QQQ)`、`^GSPC/^DJI`、`SPY^2`）时按表达式处理（`isExpression`）。例外：只有不带空格的 `-`、没有别的运算符和数字时仍是一个代码（`BRK-B`、`BTC-USD`），想做减法就加空格（`SPY - QQQ`）或写 `=`；`data:` 开头不带空格的是数据集 key。词法同 §3.3，只是不认识的词不报错。
-- 本地和外部搜索都只查光标所在的操作数（光标在运算符后面时不查），结果里选一行 = 把这个操作数换成那个 key（`synthOperand`，必要时加引号），搜索框不关，光标停在换上的 key 后面；行尾显示「替换」。
-- 每个操作数按固定规则解析成完整 key（`resolveOperand`），**不看自选列表**：别名（不区分大小写）或完整 key → 内置字典的代码和中英文名（`GOLD`、`BTC`、`黄金`；不认拼音缩写，`BP` 是真代码）→ TradingView 写法 `NASDAQ:AAPL`（按 `canonicalKey` 转成首选源，`yahoo:AAPL`）→ 其余 ASCII 代码落到默认源：`…USDT` 是 `binance:`，别的是 `yahoo:`（大写）。中文名之类要搜的词解析不了，要从结果里选。
+- 本地和外部搜索都只查光标所在的操作数（光标在运算符后面时不查），结果里选一行 = 把这个操作数换成那个 key（`synthOperand`，必要时加引号），搜索框不关，光标停在换上的 key 后面；行尾显示「替换」。操作数本身是别名或完整 key 时，它自己那一行也留着；高亮在搜索的操作数变化时回到第一行。
+- 每个操作数按固定规则解析成完整 key（`resolveOperand`），**不看自选列表**：别名（不区分大小写）或完整 key → 内置字典的代码和中英文名（`GOLD`、`BTC`、`黄金`；不认拼音缩写，`BP` 是真代码）→ TradingView 写法 `NASDAQ:AAPL`（按 `canonicalKey` 转成首选源，`yahoo:AAPL`）→ 其余 ASCII 代码落到默认源：`…USDT` 是 `binance:`，别的是 `yahoo:`（大写）。中文名之类要搜的词解析不了，要从结果里选；`data:gpu` 这种已知源前缀的半截 key 不当成交易所，提示整个 key 加引号。
 - 全部操作数能解析且 `parseSynth` 通过时，第一行是「使用 <短名>」（代码列显示完整 key），key 规范化成去掉空格、操作数都是完整 key 的形式：`AAPL/MSFT` → `=yahoo:AAPL/yahoo:MSFT`，`= 2 * (spy - qqq)` → `=2*(yahoo:SPY-yahoo:QQQ)`，`btc/"yahoo:BRK-B"` → `=binance:BTCUSDT/"yahoo:BRK-B"`。这一行和普通标的一样：Enter 打开、Shift+Enter 加入自选（分组推断为「比价」）、`pick` 模式加入对比；不会把表达式记成别名。解析不了时底部显示「表达式：<原因>」（`parseSynth` 的中文报错，或「「腾讯」要从搜索结果里选一个标的」）。
 
 **打开和加入是两个动作（照 TV）**。`navigate` 模式（页头搜索框、`/`、图表页敲字母、商品按钮）：Enter / 点击 = 打开图表，**不改自选**（不在自选的标的由图表页按需拉数据，§2.3）；加入自选是行尾的「+」按钮或 Shift+Enter。`add` 模式（总览「+ 添加」、图表页自选面板的「+」，对应 TV 自选列表的「添加商品」）：Enter / 点击 = 加入自选，已在自选的行只标「已在自选」。两种模式加入后搜索框都不关，可以接着加，行尾随即变成「已在自选 · 分组」（按当前 yaml 判断，不看搜索时的结果）。访客选不在列表里的行无效，底部提示登录。
