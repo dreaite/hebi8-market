@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
   const refKeys = [...withKeys, ...(bench && bench !== key ? [bench] : [])];
 
   const bars = aggregate(daily, tf);
-  const refs = loadRefs(bars, refKeys, tf, prices, config, read, daily[daily.length - 1].t);
+  const refs = loadRefs(bars, refKeys, tf, prices, config, read);
   const benchCloses = bench ? refs[bench]?.c : undefined;
 
   const body: BarsResponse = {

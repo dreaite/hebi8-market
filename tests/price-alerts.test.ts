@@ -493,7 +493,7 @@ describe("quote polling", () => {
       expect(liveReader()(SPY).at(-1)?.c).toBe(120);
     });
 
-    it("a weekly bench stops at the main symbol's last day, leaving out quotes after it", async () => {
+    it("an unfinished weekly bar closes at each symbol's own latest price; a daily one aligns to the main symbol's days", async () => {
       const { writeBars, writeQuotes } = await import("@/lib/store");
       const { NextRequest } = await import("next/server");
       const { GET } = await import("@/app/api/bars/route");
@@ -503,11 +503,10 @@ describe("quote polling", () => {
       writeQuotes([{ key: BTC, price: 150, time: T0 + 2 * DAY + 3600, session: "always", fetchedAt: Date.now() }]);
       vaultsWith([]);
       fs.appendFileSync(path.join(root, "hebi8.yaml"), `groups:\n  - symbols:\n      - key: ${SPY}\n        bench: BTC\n`);
-      for (const tf of ["D", "W", "M"]) {
-        const res = await GET(new NextRequest(`http://h/api/bars?key=${encodeURIComponent(SPY)}&tf=${tf}`));
-        const body = await res.json();
-        expect(body.bars.at(-1)).toMatchObject({ close: 410, bench: 101 });
-      }
+      const last = async (tf: string) => (await (await GET(new NextRequest(`http://h/api/bars?key=${encodeURIComponent(SPY)}&tf=${tf}`))).json()).bars.at(-1);
+      expect(await last("D")).toMatchObject({ close: 410, bench: 101 });
+      expect(await last("W")).toMatchObject({ close: 410, bench: 150 });
+      expect(await last("M")).toMatchObject({ close: 410, bench: 150 });
     });
   });
 });
