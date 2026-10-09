@@ -225,6 +225,37 @@ describe("delivery", () => {
     expect(pushPayload(title, text, [btc, { ...btc, rule: "r3" }]).url).toBe("/chart/binance%3ABTCUSDT");
   });
 
+  it("stays within a push message's 3993 bytes, cutting whole lines from the end and saying how many", async () => {
+    const { formatDigest, pushPayload } = await import("@/lib/notify");
+    const events = Array.from({ length: 50 }, (_, i): AlertEvent => ({ ...btc, rule: `r${i}`, key: `tv:SSE:6000${i}`, name: `上海浦东发展银行股份有限公司${i}`, label: `周线收盘站上二十周均线并且放量突破前高${i}` }));
+    const { title, text } = formatDigest(events, ORIGIN);
+    const payload = pushPayload(title, text, events);
+    expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThanOrEqual(3993);
+    const lines = payload.body.split("\n");
+    const kept = lines.length - 1;
+    expect(kept).toBeGreaterThan(10);
+    expect(lines.at(-1)).toBe(`…还有 ${50 - kept} 条`);
+    expect(lines[kept - 1]).toBe(`• ${events[kept - 1].name}：${events[kept - 1].label}（日线）  收 102.00`);
+    // one line more would not have fitted
+    expect(Buffer.byteLength(JSON.stringify({ ...payload, body: [...lines.slice(0, kept), `• ${events[kept].name}：${events[kept].label}（日线）  收 102.00`, `…还有 ${49 - kept} 条`].join("\n") }))).toBeGreaterThan(3993);
+  });
+
+  it("names the repo as the VAPID contact when the public address is not https", async () => {
+    const { addPushDevice, channelsFor, deliver } = await import("@/lib/notify");
+    const { REPO_URL } = await import("@/lib/app-info");
+    const subject = () => JSON.parse(Buffer.from(/^vapid t=([^,]+),/.exec(String(pushed.at(-1)!.headers.authorization))![1].split(".")[1], "base64url").toString()).sub;
+    addPushDevice("alice", browser("phone").device);
+    expect((await deliver(channelsFor("alice", "Owner").config, "t", "t\n\nx", [btc])).sent).toEqual(["push"]);
+    expect(subject()).toBe(ORIGIN);
+    process.env.HEBI8_PUBLIC_URL = "http://localhost:3000";
+    try {
+      expect(await deliver(channelsFor("alice", "Owner").config, "t", "t\n\nx", [btc])).toEqual({ sent: ["push"], failed: [] });
+      expect(subject()).toBe(REPO_URL);
+    } finally {
+      process.env.HEBI8_PUBLIC_URL = ORIGIN;
+    }
+  });
+
   it("removes a device the push service no longer knows; the channel counts as sent while one device got it", async () => {
     const { addPushDevice, channelsFor, deliver, readNotifyUsers } = await import("@/lib/notify");
     for (const name of ["kept", "gone", "missing"]) addPushDevice("alice", browser(name).device);

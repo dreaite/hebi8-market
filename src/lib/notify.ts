@@ -58,6 +58,8 @@ const NOTIFY_FILE = "notify.json";
 const TELEGRAM_API = "https://api.telegram.org";
 /** Telegram rejects messages over 4096 characters. */
 const MAX_TEXT = 4000;
+/** RFC 8291 leaves 3993 bytes of plaintext in a 4096-byte push message; Apple refuses more with 413 */
+const MAX_PUSH = 3993;
 
 const obj = (v: unknown): Record<string, unknown> | null =>
   v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -265,14 +267,13 @@ export const channelNames = (cfg: NotifyConfig): string[] =>
 
 export const chartLink = (base: string, key: string) => `${base}/chart/${encodeURIComponent(key)}`;
 
+/** An event as the digest lists it, in Telegram and in a notification alike. */
+const eventLine = (e: AlertEvent) => `• ${e.name}：${e.label}（${TF_LABELS[e.tf]}线）${e.close === null ? "" : `  收 ${fmtPrice(e.close)}`}`;
+
 /** One plain-text digest for every event of a sync. */
 export function formatDigest(events: AlertEvent[], link?: string): { title: string; text: string } {
   const title = `hebi8/market · ${events.length} 条新提醒`;
-  const lines = events.flatMap((e) => {
-    const close = e.close === null ? "" : `  收 ${fmtPrice(e.close)}`;
-    const head = `• ${e.name}：${e.label}（${TF_LABELS[e.tf]}线）${close}`;
-    return link ? [head, `  ${chartLink(link, e.key)}`] : [head];
-  });
+  const lines = events.flatMap((e) => (link ? [eventLine(e), `  ${chartLink(link, e.key)}`] : [eventLine(e)]));
   let text = [title, "", ...lines].join("\n");
   if (text.length > MAX_TEXT) text = `${text.slice(0, MAX_TEXT - 2)}\n…`;
   return { title, text };
@@ -315,17 +316,28 @@ async function sendWebhook(cfg: NonNullable<NotifyConfig["webhook"]>, title: str
 }
 
 /**
- * The notification for a digest: Telegram's text without its title line and the links, which
- * the tap replaces: one symbol opens its chart, several open the overview.
+ * The notification for a digest: Telegram's lines without the links, which the tap replaces: one
+ * symbol opens its chart, several open the overview. A message without events (usage limits) is
+ * its text without the title line. Too long for a push message, it loses whole lines from the
+ * end and says how many.
  */
 export function pushPayload(title: string, text: string, events: AlertEvent[]): PushPayload {
-  const body = text
-    .split("\n")
-    .slice(1)
-    .filter((l) => l.trim() && !/^\s*https?:\/\/\S+$/.test(l))
-    .join("\n");
+  // from the events, not the text: Telegram's text may already be cut at 4000 characters
+  const lines = events.length
+    ? events.map(eventLine)
+    : text
+        .split("\n")
+        .slice(1)
+        .filter((l) => l.trim() && !/^\s*https?:\/\/\S+$/.test(l));
   const keys = [...new Set(events.map((e) => e.key))];
-  return { title, body, url: keys.length === 1 ? `/chart/${encodeURIComponent(keys[0])}` : "/" };
+  const url = keys.length === 1 ? `/chart/${encodeURIComponent(keys[0])}` : "/";
+  const make = (kept: number): PushPayload => {
+    const cut = lines.length - kept;
+    return { title, body: [...lines.slice(0, kept), ...(cut ? [`…还有 ${cut} 条`] : [])].join("\n"), url };
+  };
+  let kept = lines.length;
+  while (Buffer.byteLength(JSON.stringify(make(kept))) > MAX_PUSH) kept--;
+  return make(kept);
 }
 
 /** Every device at once; ones the push service no longer knows are removed. Fails only when none got it. */

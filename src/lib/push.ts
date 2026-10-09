@@ -5,7 +5,7 @@
  * Which devices someone has is in notify-users.json, kept by `notify.ts`.
  */
 import webpush from "web-push";
-import { publicUrl } from "./app-info";
+import { REPO_URL, publicUrl } from "./app-info";
 import { readJson, writeJson } from "./secrets";
 
 export interface PushDevice {
@@ -37,12 +37,17 @@ export function vapidKeys(): { publicKey: string; privateKey: string } {
   return keys;
 }
 
+/** Who push services contact about this sender: an https: URL (Apple and web-push refuse http:), so the repo when the public address is not one. */
+export function vapidSubject(): string {
+  const url = publicUrl();
+  return url.startsWith("https:") ? url : REPO_URL;
+}
+
 /** "gone": the push service says the subscription no longer exists (404/410), so it can be dropped. */
 export async function sendPush(device: PushDevice, payload: PushPayload): Promise<"sent" | "gone"> {
   const { publicKey, privateKey } = vapidKeys();
   const req = webpush.generateRequestDetails({ endpoint: device.endpoint, keys: device.keys }, JSON.stringify(payload), {
-    // push services contact this address about misbehaving senders; Apple requires https: or mailto:
-    vapidDetails: { subject: publicUrl(), publicKey, privateKey },
+    vapidDetails: { subject: vapidSubject(), publicKey, privateKey },
     TTL,
     urgency: "high",
   });
