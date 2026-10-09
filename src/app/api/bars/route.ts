@@ -4,7 +4,7 @@ import { loadDaily, loadRefs, synthNoData } from "@/lib/bars";
 import { findItem } from "@/lib/config";
 import { aggregate } from "@/lib/series";
 import { pricePrecision } from "@/lib/stats";
-import { symbolStatus } from "@/lib/quotes";
+import { liveReader, symbolStatus } from "@/lib/quotes";
 import { getSymbol } from "@/lib/store";
 import { isSynthetic, isTimeframe, isValidKey, parseKey } from "@/lib/symbols";
 import { synthName } from "@/lib/synth";
@@ -38,9 +38,11 @@ export async function GET(request: NextRequest) {
   const bench = item?.bench ?? null;
   const row = isSynthetic(key) ? null : getSymbol(key);
 
+  // today's bar from the latest quote, as the status strip and the alerts see it
+  const read = liveReader();
   let daily;
   try {
-    daily = loadDaily(key, prices, config);
+    daily = loadDaily(key, prices, config, read);
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 400 });
   }
@@ -52,7 +54,7 @@ export async function GET(request: NextRequest) {
   const refKeys = [...withKeys, ...(bench && bench !== key ? [bench] : [])];
 
   const bars = aggregate(daily, tf);
-  const refs = loadRefs(bars, refKeys, tf, prices, config);
+  const refs = loadRefs(bars, refKeys, tf, prices, config, read);
   const benchCloses = bench ? refs[bench]?.c : undefined;
 
   const body: BarsResponse = {

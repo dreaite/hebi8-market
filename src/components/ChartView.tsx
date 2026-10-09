@@ -12,10 +12,9 @@ import type { BarsResponse, BarsSymbol, SymbolStatus } from "@/lib/api-types";
 import { BRAND } from "@/lib/brand";
 import { CHART_STYLES, type ChartPrefs, type ChartStyle, type FormulaDef, type ParamOverrides } from "@/lib/config";
 import { copyText } from "@/lib/copy-text";
-import { fmtAgo } from "@/lib/format";
+import { SESSION_LABELS, fmtAgo } from "@/lib/format";
 import { setChartContext } from "@/lib/page-context";
 import type { Prices } from "@/lib/series";
-import type { QuoteSession } from "@/lib/sources/types";
 import { SOURCE_LABELS, TF_LABELS, TIMEFRAMES, chartTitle, isSynthetic, tickerOf, type Timeframe } from "@/lib/symbols";
 import { synthName } from "@/lib/synth";
 import { useLocalStorage } from "@/lib/use-local-storage";
@@ -76,8 +75,6 @@ type DialogState =
   | { kind: "alert"; alert: AlertView | null; price: number | null }
   | null;
 
-/** The quote's session in the status strip */
-const SESSION_LABELS: Record<QuoteSession, string> = { open: "盘中", pre: "盘前", post: "盘后", closed: "休市", always: "24h" };
 /** src/lib/quotes.ts polls alert symbols every 5 minutes; the strip reads again just after a round */
 const QUOTE_ROUND_MS = 5 * 60_000;
 

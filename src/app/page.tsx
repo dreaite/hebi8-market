@@ -3,6 +3,7 @@ import { ConfigErrorView } from "@/components/ConfigErrorView";
 import { Overview, type OverviewData, type OverviewRow } from "@/components/Overview";
 import { alertBadges, alertViews } from "@/lib/alert-view";
 import { benchLabel, nameOf } from "@/lib/names";
+import { liveStats } from "@/lib/quotes";
 import { hasBars, listSymbols, maxSyncedAt } from "@/lib/store";
 import { isSynthetic, parseKey, tickerOf } from "@/lib/symbols";
 import { statsFor, syncAll } from "@/lib/sync";
@@ -21,6 +22,8 @@ export default async function Home() {
 
   const symbols = listSymbols();
   const stats = statsFor(viewer.vault, config);
+  // symbols with a current quote show it, their changes recomputed on read
+  const live = liveStats(config.groups.flatMap((g) => g.symbols.map((s) => s.key)), config);
   const firstRun = !hasBars();
   if (firstRun) void syncAll().catch(() => undefined);
   // alerts are personal like notes: a visitor sees none
@@ -39,7 +42,8 @@ export default async function Home() {
         currency: row?.currency ?? stats[item.key]?.currency ?? null,
         bench: item.bench,
         benchLabel: item.bench ? benchLabel(config, item.bench, symbols[item.bench]?.name) : null,
-        stats: stats[item.key] ?? null,
+        stats: live[item.key]?.stats ?? stats[item.key] ?? null,
+        quote: live[item.key]?.status ?? null,
         syncError: row?.syncError ?? null,
         badges: badges[item.key] ?? [],
       };

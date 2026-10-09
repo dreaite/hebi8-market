@@ -7,10 +7,12 @@
 import { compile } from "@/indicators/formula";
 import type { SymbolStatus } from "./api-types";
 import { runAlerts } from "./alerts";
+import { loadDaily } from "./bars";
 import { findItem, type Config } from "./config";
 import type { Bar } from "./series";
 import { adapters } from "./sources";
 import type { Quote, QuoteSession } from "./sources/types";
+import { computeStats, type Stats } from "./stats";
 import { getSymbol, readDaily, readQuotes, writeQuotes, type QuoteRow } from "./store";
 import { isSynthetic, isValidKey, parseKey, type Source } from "./symbols";
 import { parseSynth } from "./synth";
@@ -114,9 +116,8 @@ export function withQuote(bars: Bar[], quote: QuoteRow | undefined, timeZone: st
   return same ? [...bars.slice(0, -1), bar] : [...bars, bar];
 }
 
-/** The daily reader for judging alerts between syncs. */
-export function liveReader(): (key: string) => Bar[] {
-  const quotes = readQuotes();
+/** The daily reader for judging alerts between syncs, and for the chart and the overview. */
+export function liveReader(quotes = readQuotes()): (key: string) => Bar[] {
   return (key) => {
     const meta = getSymbol(key);
     return withQuote(readDaily(key), quotes[key], meta?.timezone ?? "UTC", meta?.syncedAt ?? null, state.intraday.get(key), meta?.kind ?? undefined);
@@ -207,9 +208,26 @@ export function resetQuotes(): void {
 }
 
 /** The chart's status strip: sync time and error, the last quote, and its session until the round after next is overdue. */
-export function symbolStatus(key: string): SymbolStatus {
+export function symbolStatus(key: string, quotes = readQuotes()): SymbolStatus {
   const row = getSymbol(key);
-  const quote = readQuotes()[key];
+  const quote = quotes[key];
   const current = quote && Date.now() - quote.fetchedAt < (FAST.includes(quote.session) ? 3 * ROUND_MS : SLOW_MS + 2 * ROUND_MS);
   return { syncedAt: row?.syncedAt ?? null, syncError: row?.syncError ?? null, quotedAt: quote?.fetchedAt ?? null, session: current ? quote.session : null };
+}
+
+/**
+ * The overview's rows whose quote is current, as the status strip judges it: stats from today's
+ * live bar, so the price and the changes move between syncs. Computed on read, never stored.
+ */
+export function liveStats(keys: string[], cfg: Config): Record<string, { stats: Stats; status: SymbolStatus }> {
+  const quotes = readQuotes();
+  const read = liveReader(quotes);
+  const out: Record<string, { stats: Stats; status: SymbolStatus }> = {};
+  for (const key of keys) {
+    const status = symbolStatus(key, quotes);
+    if (!status.session) continue;
+    const stats = computeStats(loadDaily(key, cfg.prices, cfg, read), { currency: getSymbol(key)?.currency ?? null });
+    if (stats) out[key] = { stats, status };
+  }
+  return out;
 }

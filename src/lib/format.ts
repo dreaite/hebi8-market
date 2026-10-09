@@ -1,3 +1,4 @@
+import type { QuoteSession } from "./sources/types";
 import { pricePrecision } from "./stats";
 
 export function fmtPrice(value: number, precision = pricePrecision(value)): string {
@@ -24,6 +25,9 @@ export function fmtAgo(ms: number | null, what = "同步"): string {
   if (hours < 48) return `${hours} 小时前${what}`;
   return `${Math.round(hours / 24)} 天前${what}`;
 }
+
+/** A quote's session, in the chart's status strip and next to the overview's price */
+export const SESSION_LABELS: Record<QuoteSession, string> = { open: "盘中", pre: "盘前", post: "盘后", closed: "休市", always: "24h" };
 
 /** Tailwind text color for a signed change. */
 export function changeColor(value: number | null | undefined): string {

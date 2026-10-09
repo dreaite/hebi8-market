@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { addSymbol, refresh, removeSymbol, renameSymbol, setBench, setPeriods, setUpdown } from "@/app/actions";
 import type { AlertBadge, AlertView } from "@/lib/alert-view";
+import type { SymbolStatus } from "@/lib/api-types";
 import type { UpDown } from "@/lib/config";
-import { changeColor, fmtAgo, fmtPct, fmtPrice } from "@/lib/format";
+import { SESSION_LABELS, changeColor, fmtAgo, fmtPct, fmtPrice } from "@/lib/format";
 import { CHANGE_PERIODS, MAX_PERIODS, type ChangePeriod } from "@/lib/periods";
 import { pricePrecision, type Stats } from "@/lib/stats";
 import { SOURCE_LABELS, type Source } from "@/lib/symbols";
@@ -32,7 +33,10 @@ export interface OverviewRow {
   currency: string | null;
   bench: string | null;
   benchLabel: string | null;
+  /** From today's bar built from the quote when `quote` is set */
   stats: Stats | null;
+  /** A quote the chart's status strip would show (current for its session); null otherwise */
+  quote: SymbolStatus | null;
   syncError: string | null;
   /** The viewer's alerts on this symbol, and the whole-watchlist ones where they hold */
   badges: AlertBadge[];
@@ -97,10 +101,23 @@ const SINCE: Record<ChangePeriod, string> = {
 
 const HINTS = {
   name: "标的名称，下一行是代码 · 数据源 · 币种。拖动行或分组标题调整顺序，顺序写回 hebi8.yaml",
-  last: "最新价：最近一根日线的收盘价",
+  last: "最新价：最近一根日线的收盘价。\n有警报的标的另取报价（盘中每 5 分钟，盘前、盘后、休市每小时），价格下面标着时段和多久前取的，涨跌幅也按这个价算",
   high: "距高点：最新价比历史最高收盘低多少，0% 就是在历史高点。\n下面的短条是 52 周区间位置：最左是近 52 周最低价，最右是最高价，竖线是现在的价格",
   spark: "近两年的周收盘走势",
 };
+
+/** Under or beside a quoted price: its session and how old it is, 「盘后 · 40 分钟前」. */
+function QuoteTag({ quote, className = "" }: { quote: SymbolStatus; className?: string }) {
+  const fromQuote = (quote.quotedAt ?? 0) > (quote.syncedAt ?? 0);
+  const at = fromQuote ? quote.quotedAt : quote.syncedAt;
+  const label = SESSION_LABELS[quote.session!];
+  const how = quote.session === "open" || quote.session === "always" ? "每 5 分钟取一次" : "盘中以外每小时取一次";
+  return (
+    <span className={`text-[11px] whitespace-nowrap text-muted ${className}`} title={`${label} · ${fromQuote ? fmtAgo(at, "报价") : fmtAgo(at)}\n${how}，涨跌幅按这个价算`}>
+      {label} · {fmtAgo(at, "")}
+    </span>
+  );
+}
 
 /** Where the last close sits between the 52-week low (left) and high (right). */
 function Range52({ pos }: { pos: number }) {
@@ -450,7 +467,10 @@ export function Overview({ data }: { data: OverviewData }) {
                       <Link href={chartHref(row.key)} className="block min-w-0 flex-1 px-3 py-2 text-xs">
                         <div className="flex items-baseline justify-between gap-3">
                           <span className="truncate text-sm">{row.name}</span>
-                          <span className="tabular shrink-0 text-sm">{row.stats ? fmtPrice(row.stats.last) : "—"}</span>
+                          <span className="flex shrink-0 items-baseline gap-2">
+                            {row.quote && <QuoteTag quote={row.quote} />}
+                            <span className="tabular text-sm">{row.stats ? fmtPrice(row.stats.last) : "—"}</span>
+                          </span>
                         </div>
                         <div className="mt-0.5 flex flex-wrap gap-x-3 font-mono text-[11px]">
                           <span className="text-muted">{row.ticker}</span>
@@ -589,7 +609,10 @@ function GroupRows({
                   </Link>
                 </div>
               </td>
-              <td className={`tabular ${cell} text-right text-sm`}>{s ? fmtPrice(s.last) : "—"}</td>
+              <td className={`${cell} text-right`}>
+                <div className="tabular text-sm">{s ? fmtPrice(s.last) : "—"}</div>
+                {row.quote && <QuoteTag quote={row.quote} className="block truncate" />}
+              </td>
               {shownPeriods.map((p) => (
                 <td key={p.key} className={`tabular ${cell} text-right ${changeColor(s?.changes[p.key])}`}>
                   {fmtPct(s?.changes[p.key])}

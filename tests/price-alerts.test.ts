@@ -433,5 +433,39 @@ describe("quote polling", () => {
       expect(readDaily(BTC)).toHaveLength(2);
       logs.mockRestore();
     });
+
+    it("the chart's last bar is today's live one, with the bench aligned to it", async () => {
+      const { quoteRound } = await import("@/lib/quotes");
+      const { writeBars } = await import("@/lib/store");
+      const { NextRequest } = await import("next/server");
+      const { GET } = await import("@/app/api/bars/route");
+      writeBars(BTC, closes(100, 101), "replace");
+      writeBars(SPY, closes(400, 410), "replace");
+      const vaults = vaultsWith([{ key: "BTC", cond: "greater", value: 1000 }]);
+      fs.appendFileSync(path.join(root, "hebi8.yaml"), `groups:\n  - symbols:\n      - key: BTC\n        bench: ${SPY}\n`);
+      await quoteRound(Date.now(), vaults);
+      const res = await GET(new NextRequest(`http://h/api/bars?key=${encodeURIComponent(BTC)}&tf=D`));
+      const body = await res.json();
+      expect(body.bars).toHaveLength(3);
+      expect(body.bars.at(-1)).toMatchObject({ open: 105, close: 105, bench: 410 });
+      expect(body.symbol).toMatchObject({ session: "always", lastDay: body.bars.at(-1).timestamp });
+    });
+
+    it("the overview recomputes stats from a current quote on read, and stores nothing", async () => {
+      const { quoteRound, liveStats } = await import("@/lib/quotes");
+      const { readAllStats, writeBars, writeQuotes } = await import("@/lib/store");
+      writeBars(BTC, closes(100, 101), "replace");
+      writeBars(SPY, closes(400, 410), "replace");
+      const vaults = vaultsWith([{ key: "BTC", cond: "greater", value: 1000 }]);
+      await quoteRound(Date.now(), vaults);
+      // SPY's quote is two hours old: the strip no longer shows it, so neither does the overview
+      writeQuotes([{ key: SPY, price: 500, time: 0, session: "post", fetchedAt: Date.now() - 2 * 3600_000 }]);
+      const live = liveStats([BTC, SPY, "tv:TVC:GOLD"], vaults[0].config);
+      expect(Object.keys(live)).toEqual([BTC]);
+      expect(live[BTC].status.session).toBe("always");
+      expect(live[BTC].stats.last).toBe(105);
+      expect(live[BTC].stats.changes["1W"]).toBeCloseTo(105 / 101 - 1);
+      expect(readAllStats("")[BTC]?.last).not.toBe(105);
+    });
   });
 });
