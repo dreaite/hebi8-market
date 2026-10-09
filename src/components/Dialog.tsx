@@ -3,6 +3,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { IconClose } from "./chart-icons";
 
+/** Dialogs open now: the first one locks the page's scroll, the last one closed puts back what it found. */
+let openDialogs = 0;
+let pageStyle = { overflow: "", scrollbarGutter: "" };
+
 /**
  * TradingView-style modal: title bar with ×, closes on backdrop click (Esc is handled by the page). The title bar
  * stays put and the body scrolls on a short screen (a body with its own scrolling list keeps its header too); the
@@ -11,13 +15,16 @@ import { IconClose } from "./chart-icons";
 export function Dialog({ title, onClose, children, className = "max-w-[560px]" }: { title: string; onClose: () => void; children: ReactNode; className?: string }) {
   useEffect(() => {
     const html = document.documentElement;
-    const { overflow, scrollbarGutter } = html.style;
-    // keep the scrollbar's room, so the page does not shift sideways
-    if (window.innerWidth > html.clientWidth) html.style.scrollbarGutter = "stable";
-    html.style.overflow = "hidden";
+    if (openDialogs++ === 0) {
+      pageStyle = { overflow: html.style.overflow, scrollbarGutter: html.style.scrollbarGutter };
+      // keep the scrollbar's room, so the page does not shift sideways
+      if (window.innerWidth > html.clientWidth) html.style.scrollbarGutter = "stable";
+      html.style.overflow = "hidden";
+    }
     return () => {
-      html.style.overflow = overflow;
-      html.style.scrollbarGutter = scrollbarGutter;
+      if (--openDialogs > 0) return;
+      html.style.overflow = pageStyle.overflow;
+      html.style.scrollbarGutter = pageStyle.scrollbarGutter;
     };
   }, []);
   return (
