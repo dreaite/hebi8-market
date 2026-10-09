@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
@@ -284,5 +284,42 @@ describe("TradingView drawings", () => {
     expect(result.ok && result.failed).toEqual([{ symbol: "TVC:DXY", error: "not found" }]);
     expect(result.ok && result.symbols.map((s) => s.symbol)).toEqual(["NASDAQ:NVDA", "BINANCE:BTCUSDT"]);
     expect(read()).not.toContain("DXY");
+  });
+});
+
+describe("listTvLayouts", () => {
+  let fetched: { url: string; cookie: string }[] = [];
+  const stub = (res: () => Response) =>
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      fetched.push({ url, cookie: (init.headers as Record<string, string>).cookie });
+      return res();
+    });
+  beforeEach(() => {
+    fetched = [];
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("lists the account's layouts with the cookies of this request", async () => {
+    const { listTvLayouts } = await import("@/app/tv-actions");
+    stub(() => new Response(JSON.stringify([{ id: 7, image_url: "AbCd1234", name: "宏观", short_symbol: "DXY", interval: "1D", modified: 1760000000 }]), { status: 200 }));
+    expect(await listTvLayouts({ sessionid: " SESS ", sign: "SIGN" })).toEqual({ ok: true, layouts: [{ id: "AbCd1234", name: "宏观", symbol: "DXY", interval: "1D", modified: 1760000000 }] });
+    expect(fetched).toEqual([{ url: "https://www.tradingview.com/my-charts/", cookie: "sessionid=SESS;sessionid_sign=SIGN" }]);
+  });
+
+  it("asks for both cookies, and keeps them out of the error", async () => {
+    const { listTvLayouts } = await import("@/app/tv-actions");
+    stub(() => new Response("{}", { status: 403 }));
+    expect(await listTvLayouts({ sessionid: "SESS", sign: " " })).toEqual({ ok: false, error: "sessionid 和 sessionid_sign 都要填" });
+    expect(fetched).toEqual([]);
+    const result = await listTvLayouts({ sessionid: "SESS", sign: "SIGN" });
+    expect(result).toEqual({ ok: false, error: "TradingView 不认这组 sessionid / sessionid_sign（不对或已过期）" });
+  });
+
+  it("needs a viewer who may write", async () => {
+    const { listTvLayouts } = await import("@/app/tv-actions");
+    stub(() => new Response("[]", { status: 200 }));
+    fs.writeFileSync(yamlFile, `owner: someone\n${YAML}`);
+    expect(await listTvLayouts({ sessionid: "SESS", sign: "SIGN" })).toEqual({ ok: false, error: "请先登录" });
+    expect(fetched).toEqual([]);
   });
 });

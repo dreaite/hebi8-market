@@ -83,7 +83,7 @@ export default function PrivacyPage() {
 
       <Section title="从 TradingView 导入">
         <p>
-          在「设置」里从 TradingView 布局导入画线时，你填的 sessionid 和 sessionid_sign 两个 Cookie 只随这一次请求发到服务器，由服务器转发给 tradingview.com 取画线，不保存、不写日志，也不出现在错误信息里。导入的自选和画线和你自己加的一样，存在你的目录里。
+          在「设置」里从 TradingView 布局导入画线时，你填的 sessionid 和 sessionid_sign 两个 Cookie 只随「获取布局」和「取画线」这两次请求发到服务器，由服务器转发给 tradingview.com 列出你的布局、取画线，不保存、不写日志，也不出现在错误信息里。导入的自选和画线和你自己加的一样，存在你的目录里。
         </p>
       </Section>
 

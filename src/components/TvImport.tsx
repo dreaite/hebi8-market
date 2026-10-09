@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { useMemo, useState, useTransition } from "react";
-import { importTvDrawings, importTvList, previewTvDrawings, type DrawingsPreview, type DrawingsImported } from "@/app/tv-actions";
+import { importTvDrawings, importTvList, listTvLayouts, previewTvDrawings, type DrawingsPreview, type DrawingsImported } from "@/app/tv-actions";
+import { fmtAgo } from "@/lib/format";
 import { parseTvSources } from "@/lib/tv-drawings";
 import { parseTvList, planTvImport, type ExportResult, type ImportMode } from "@/lib/tv-import";
+import type { TvLayout } from "@/lib/tv-layout";
 import { chartHref } from "./UiProvider";
 
 const body = "flex flex-col gap-3 px-4 py-3 text-xs";
@@ -183,15 +185,21 @@ export function TvExport({ text, count, skipped }: Pick<ExportResult, "text" | "
 type Source = "layout" | "json";
 const SKIP = "";
 const NEW_GROUP = "TradingView";
+/** The layout picker's entry for a link or id typed by hand (someone else's shared layout) */
+const MANUAL = "";
+
+const layoutLabel = (l: TvLayout) => [l.name || l.id, l.symbol, l.interval, l.modified ? fmtAgo(l.modified * 1000, "修改") : ""].filter(Boolean).join(" · ");
 
 const reasons = (skipped: Record<string, number>) =>
   Object.entries(skipped)
     .map(([reason, n]) => `${reason} ×${n}`)
     .join("；");
 
-/** Fetch a layout's drawings (or read pasted JSON), show what goes where, then append them. */
+/** List the account's layouts and fetch one's drawings (or read pasted JSON), show what goes where, then append them. */
 export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWrite: boolean }) {
   const [source, setSource] = useState<Source>("layout");
+  const [layouts, setLayouts] = useState<TvLayout[] | null>(null);
+  const [chosen, setChosen] = useState(MANUAL);
   const [layout, setLayout] = useState("");
   const [sessionid, setSessionid] = useState("");
   const [sign, setSign] = useState("");
@@ -205,6 +213,22 @@ export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWr
   /** A rejected request (over the size limit, the server gone) never reaches the action; shown here, not thrown at React. */
   const failure = (err: unknown) => setError(err instanceof Error ? err.message : String(err));
 
+  const list = () =>
+    startTransition(async () => {
+      setError(null);
+      let result;
+      try {
+        result = await listTvLayouts({ sessionid, sign });
+      } catch (err) {
+        return failure(err);
+      }
+      if (!result.ok) return setError(result.error);
+      setLayouts(result.layouts);
+      setChosen(result.layouts[0]?.id ?? MANUAL);
+    });
+
+  const target = chosen === MANUAL ? layout : chosen;
+
   const load = () =>
     startTransition(async () => {
       setError(null);
@@ -212,10 +236,10 @@ export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWr
       let result;
       try {
         if (source === "layout") {
-          // the cookies are not kept any longer than this one request
+          // the cookies are not kept any longer than the request for the drawings
           setSessionid("");
           setSign("");
-          result = await previewTvDrawings({ layout, sessionid, sign });
+          result = await previewTvDrawings({ layout: target, sessionid, sign });
         } else result = await previewTvDrawings({ drawings: parseTvSources(json) });
       } catch (err) {
         return failure(err);
@@ -258,10 +282,6 @@ export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWr
 
       {source === "layout" ? (
         <div className="flex flex-col gap-2">
-          <label className="flex flex-col gap-1">
-            <span className="text-muted">布局链接或 ID</span>
-            <input className="input" placeholder="https://www.tradingview.com/chart/AbCd1234/" value={layout} onChange={(e) => setLayout(e.target.value)} />
-          </label>
           <div className="grid gap-2 sm:grid-cols-2">
             <label className="flex flex-col gap-1">
               <span className="text-muted">sessionid</span>
@@ -272,9 +292,34 @@ export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWr
               <input className="input font-mono" type="password" autoComplete="off" value={sign} onChange={(e) => setSign(e.target.value)} />
             </label>
           </div>
+          <div className="flex items-center gap-3">
+            <button type="button" className="btn btn-secondary" disabled={!canWrite || pending || !sessionid.trim() || !sign.trim()} onClick={list}>
+              获取布局
+            </button>
+            {layouts && !layouts.length && <span className="text-muted">这个账号下没有布局</span>}
+          </div>
+          {layouts && layouts.length > 0 && (
+            <label className="flex flex-col gap-1">
+              <span className="text-muted">布局</span>
+              <select className="input" value={chosen} onChange={(e) => setChosen(e.target.value)}>
+                {layouts.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {layoutLabel(l)}
+                  </option>
+                ))}
+                <option value={MANUAL}>手填链接或 ID…</option>
+              </select>
+            </label>
+          )}
+          {chosen === MANUAL && (
+            <label className="flex flex-col gap-1">
+              <span className="text-muted">布局链接或 ID</span>
+              <input className="input" placeholder="https://www.tradingview.com/chart/AbCd1234/" value={layout} onChange={(e) => setLayout(e.target.value)} />
+            </label>
+          )}
           <p className="text-[11px] leading-relaxed text-muted">
-            两个 cookie 在已登录 tradingview.com 的浏览器里找：开发者工具 → Application（应用）→ Cookies → https://www.tradingview.com。它们只随这一次请求发到本服务器，再由服务器发给
-            tradingview.com，不保存、不写日志，取完就从这里清掉。会取这个布局里所有图表的画线（含开了同步画线的 _shared），以及在所有布局间全局同步的画线。
+            两个 cookie 在已登录 tradingview.com 的浏览器里找：开发者工具 → Application（应用）→ Cookies → https://www.tradingview.com。「获取布局」列出这个账号的所有布局，最近修改的在前；别人分享的布局选「手填链接或
+            ID」。cookie 只随请求发到本服务器，再由服务器发给 tradingview.com，不保存、不写日志，取画线时就从这里清掉。会取这个布局里所有图表的画线（含开了同步画线的 _shared），以及在所有布局间全局同步的画线。
           </p>
         </div>
       ) : (
@@ -288,7 +333,7 @@ export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWr
       )}
 
       <div className="flex items-center gap-3">
-        <button type="button" className="btn btn-secondary" disabled={!canWrite || pending || (source === "layout" ? !layout.trim() || !sessionid.trim() || !sign.trim() : !json.trim())} onClick={load}>
+        <button type="button" className="btn btn-secondary" disabled={!canWrite || pending || (source === "layout" ? !target.trim() || !sessionid.trim() || !sign.trim() : !json.trim())} onClick={load}>
           {source === "layout" ? "取画线并预览" : "预览"}
         </button>
         <span className="text-muted">{pending ? "处理中…" : error && <span className="text-down">{error}</span>}</span>

@@ -1,13 +1,15 @@
 /**
- * A TradingView layout's drawings, fetched with the user's `sessionid` / `sessionid_sign` cookies
- * the way TradingView's own chart page loads them (design §5.5). The cookies only live for this
- * call: they are passed straight to tradingview.com, never stored, logged or put into an error message.
+ * The account's layouts and a layout's drawings, fetched with the user's `sessionid` /
+ * `sessionid_sign` cookies the way TradingView's own pages load them (design §5.5). The cookies
+ * only live for this call: they are passed straight to tradingview.com, never stored, logged or
+ * put into an error message.
  */
 import TradingView from "@mathieuc/tradingview";
-import { normalizeDrawing, type TvDrawing } from "./tv-drawings";
+import { layoutId, normalizeDrawing, type TvDrawing } from "./tv-drawings";
 
 const STORAGE = "https://charts-storage.tradingview.com/charts-storage";
 const MARKETS = "https://www.tradingview.com/markets/";
+const MY_CHARTS = "https://www.tradingview.com/my-charts/";
 const BROWSER = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36";
 const BAD_COOKIES = "TradingView 不认这组 sessionid / sessionid_sign（不对或已过期）";
 /** Symbols fetched at once */
@@ -44,6 +46,55 @@ async function userId(cookie: string): Promise<string> {
   const id = /var user = \{"id":(\d+)/.exec(html)?.[1];
   if (!id) throw new Error("tradingview.com 的页面里没找到账号 id");
   return id;
+}
+
+/** A layout of the account, as the 「打开布局」 dialog lists it. */
+export interface TvLayout {
+  /** The short id in `/chart/<id>/`, what `fetchLayoutDrawings` takes */
+  id: string;
+  /** Empty when the listing does not say */
+  name: string;
+  symbol: string;
+  interval: string;
+  /** Unix seconds; null when the listing does not say */
+  modified: number | null;
+}
+
+const text = (...values: unknown[]) => String(values.find((v) => typeof v === "string" || typeof v === "number") ?? "");
+
+/** Unix seconds from seconds, milliseconds or an ISO string. */
+function seconds(value: unknown): number | null {
+  if (typeof value === "number") return value > 1e11 ? Math.round(value / 1000) : value;
+  const t = typeof value === "string" ? Date.parse(value) : NaN;
+  return Number.isNaN(t) ? null : t / 1000;
+}
+
+/**
+ * The layouts of the account, last modified first, from the `/my-charts/` listing the 「打开布局」
+ * dialog reads. Only the short id is relied on (`image_url`, else the chart link in `url`); name,
+ * symbol, interval and time are shown when the listing has them. Not following redirects for the
+ * same reason as `userId`.
+ */
+export async function fetchLayouts(session: string, signature: string): Promise<TvLayout[]> {
+  const res = await fetch(MY_CHARTS, { headers: { cookie: cookieOf(session, signature), "user-agent": BROWSER, accept: "application/json" }, redirect: "manual", signal: AbortSignal.timeout(15_000) });
+  if (res.status === 401 || res.status === 403) throw new Error(BAD_COOKIES);
+  if (res.status !== 200) throw new Error(`连不上 tradingview.com 取布局列表（HTTP ${res.status}）`);
+  let list: unknown;
+  try {
+    list = JSON.parse(await res.text());
+  } catch {
+    // a page instead of the listing: not logged in
+    throw new Error(BAD_COOKIES);
+  }
+  if (!Array.isArray(list)) throw new Error(`tradingview.com 回的布局列表不是数组（${list === null ? "null" : typeof list === "object" ? `字段：${Object.keys(list).slice(0, 8).join(", ")}` : typeof list}）`);
+  const items = list.filter((item): item is Record<string, unknown> => !!item && typeof item === "object");
+  const layouts = items.flatMap((item): TvLayout[] => {
+    const id = layoutId(text(item.image_url)) ?? layoutId(text(item.url));
+    if (!id) return [];
+    return [{ id, name: text(item.name), symbol: text(item.short_symbol, item.symbol), interval: text(item.interval, item.resolution), modified: seconds(item.modified ?? item.created) }];
+  });
+  if (items.length && !layouts.length) throw new Error(`tradingview.com 的布局列表里认不出布局 ID（字段：${Object.keys(items[0]).slice(0, 12).join(", ")}）`);
+  return layouts.sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0));
 }
 
 /** One charts-storage request; every one needs the cookies as well as the token. */

@@ -115,3 +115,56 @@ describe("fetchLayoutDrawings", () => {
     expect((err as Error).message).not.toMatch(/SESS|SIGN/);
   });
 });
+
+describe("fetchLayouts", () => {
+  const listing = (body: unknown, status = 200) => () => new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
+  let myCharts: () => Response = listing([]);
+  beforeEach(() => {
+    myCharts = listing([]);
+    const storage = fetch;
+    vi.stubGlobal("fetch", async (input: string, init: RequestInit) => {
+      if (input !== "https://www.tradingview.com/my-charts/") return storage(input, init);
+      requests.push({ url: new URL(input), init });
+      return myCharts();
+    });
+  });
+
+  it("lists the layouts last modified first, with whatever the listing says about each", async () => {
+    const { fetchLayouts } = await import("@/lib/tv-layout");
+    myCharts = listing([
+      { id: 1, image_url: "OldOne12", name: "旧的", short_symbol: "GLD", symbol: "AMEX:GLD", interval: "1W", modified: 1700000000 },
+      { id: 2, image_url: "NewOne34", name: "新的", symbol: "NASDAQ:NVDA", resolution: "D", modified: 1760000000000 },
+      { id: 3, url: "https://www.tradingview.com/chart/ByUrl567/" },
+      { id: 4, name: "没有 id" },
+      { id: 5, image_url: "Created8", created: "2025-01-01T00:00:00Z" },
+    ]);
+    expect(await fetchLayouts("SESS", "SIGN")).toEqual([
+      { id: "NewOne34", name: "新的", symbol: "NASDAQ:NVDA", interval: "D", modified: 1760000000 },
+      { id: "Created8", name: "", symbol: "", interval: "", modified: Date.UTC(2025, 0, 1) / 1000 },
+      { id: "OldOne12", name: "旧的", symbol: "GLD", interval: "1W", modified: 1700000000 },
+      { id: "ByUrl567", name: "", symbol: "", interval: "", modified: null },
+    ]);
+    const req = requests.at(-1)!;
+    expect(req.init.redirect).toBe("manual");
+    expect((req.init.headers as Record<string, string>).cookie).toBe(COOKIE);
+  });
+
+  it("says when the cookies are not logged in, or the listing is not what it should be, without the cookies", async () => {
+    const { fetchLayouts } = await import("@/lib/tv-layout");
+    const BAD = "TradingView 不认这组 sessionid / sessionid_sign（不对或已过期）";
+    myCharts = listing({ detail: "Authentication credentials were not provided." }, 403);
+    await expect(fetchLayouts("SESS", "SIGN")).rejects.toThrow(BAD);
+    myCharts = listing("<html>sign in</html>");
+    await expect(fetchLayouts("SESS", "SIGN")).rejects.toThrow(BAD);
+    myCharts = () => new Response("", { status: 302, headers: { location: "https://cn.tradingview.com/my-charts/" } });
+    await expect(fetchLayouts("SESS", "SIGN")).rejects.toThrow("连不上 tradingview.com 取布局列表（HTTP 302）");
+    myCharts = listing({ results: [] });
+    await expect(fetchLayouts("SESS", "SIGN")).rejects.toThrow("tradingview.com 回的布局列表不是数组（字段：results）");
+    myCharts = listing([{ id: 1, title: "x" }]);
+    const err = (await fetchLayouts("SESS", "SIGN").catch((e: Error) => e)) as Error;
+    expect(err.message).toBe("tradingview.com 的布局列表里认不出布局 ID（字段：id, title）");
+    expect(err.message).not.toMatch(/SESS|SIGN/);
+    myCharts = listing([]);
+    expect(await fetchLayouts("SESS", "SIGN")).toEqual([]);
+  });
+});

@@ -11,7 +11,7 @@ import { getSymbol, readDaily } from "@/lib/store";
 import { recomputeStats, syncAll, syncOne } from "@/lib/sync";
 import { convertDrawings, importedIds, layoutId, sessionMinutes, tickOf, normalizeDrawing, type DrawingContext, type TvDrawing } from "@/lib/tv-drawings";
 import { isTvSymbol, parseTvList, planTvImport, tvIdentity, tvKey, watchedByIdentity, type ImportMode } from "@/lib/tv-import";
-import { fetchLayoutDrawings, type DrawingOrigin } from "@/lib/tv-layout";
+import { fetchLayoutDrawings, fetchLayouts, type DrawingOrigin, type TvLayout } from "@/lib/tv-layout";
 import { entryKey, flowNode, groupNode, readChartState, readConfig, seqOf, updateConfig, writeChartState } from "@/lib/vault";
 import { getViewer, requireWriter, type Viewer } from "@/lib/viewer";
 import { wellKnownName } from "@/lib/wellknown";
@@ -167,6 +167,22 @@ function summarize(dir: string, cfg: Config, drawings: TvDrawing[]): SymbolDrawi
   });
 }
 
+/** The two cookies as typed, for this request only. */
+function sessionOf(input: { sessionid: string; sign: string }) {
+  const session = String(input.sessionid ?? "").trim();
+  const sign = String(input.sign ?? "").trim();
+  if (!session || !sign) throw new Error("sessionid 和 sessionid_sign 都要填");
+  return { session, sign };
+}
+
+/** The account's layouts, last modified first, to pick the one to fetch; the cookies are used for this request only. */
+export async function listTvLayouts(input: { sessionid: string; sign: string }): Promise<TvResult<{ layouts: TvLayout[] }>> {
+  return run(async () => {
+    const { session, sign } = sessionOf(input);
+    return { layouts: await fetchLayouts(session, sign) };
+  });
+}
+
 const normalizeAll = (list: unknown[]) => (Array.isArray(list) ? list : []).map(normalizeDrawing).filter((d): d is TvDrawing => d !== null);
 
 /**
@@ -180,9 +196,7 @@ export async function previewTvDrawings(source: DrawingsSource): Promise<TvResul
     if ("layout" in source) {
       const layout = layoutId(String(source.layout ?? ""));
       if (!layout) throw new Error("看不出布局 ID：填 https://www.tradingview.com/chart/<ID>/ 或 ID 本身");
-      const session = String(source.sessionid ?? "").trim();
-      const sign = String(source.sign ?? "").trim();
-      if (!session || !sign) throw new Error("sessionid 和 sessionid_sign 都要填");
+      const { session, sign } = sessionOf(source);
       ({ drawings, origins } = await fetchLayoutDrawings(layout, session, sign));
     } else drawings = normalizeAll(source.drawings);
     if (!drawings.length) throw new Error("没有找到画线");
