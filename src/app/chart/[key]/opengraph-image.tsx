@@ -8,6 +8,7 @@ import type { Bar } from "@/lib/series";
 import { pricePrecision } from "@/lib/stats";
 import { listSymbols } from "@/lib/store";
 import { SOURCE_LABELS, decodeChartKey, isSynthetic, isValidKey, tickerOf } from "@/lib/symbols";
+import { synthName } from "@/lib/synth";
 import { readConfigSafe, vaultDir } from "@/lib/vault";
 import { displayName } from "@/lib/wellknown";
 
@@ -44,7 +45,7 @@ export default async function Image({ params }: { params: Promise<{ key: string 
   const last = bars.at(-1);
   const prev = bars.at(-2);
   const px = (v: number) => fmtPrice(v, pricePrecision(last?.c ?? v));
-  const ticker = isValidKey(key) ? tickerOf(key) : key;
+  const ticker = !isValidKey(key) ? key : isSynthetic(key) ? synthName(key) : tickerOf(key);
   const source = isSynthetic(key) ? "合成" : (symbols[key] && SOURCE_LABELS[symbols[key].source]);
   const span = bars.length > 1 ? bars[bars.length - 1].c / bars[0].c - 1 : null;
   const meta = ogText([source, symbols[key]?.currency, bars.length > 1 && `近半年日线 ${fmtPct(span, 1)}`].filter(Boolean).join(" · "));

@@ -104,15 +104,23 @@ function barDate(timestamp: number, tf: Timeframe): string {
   return iso.slice(0, 10);
 }
 
-/** A run of text that wraps as one piece, like a nowrap span in the page's flex-wrap rows; `gap` is the space before it on a line. */
+type Piece = { text: string; font: string; color: string; pad?: number };
+
+/**
+ * A run of text that wraps as one piece, like a nowrap span in the page's flex-wrap rows. `gap` is
+ * the space before it and `lead` a separator in front of it (` · `), both only when something
+ * precedes it on the line, so a wrapped line never ends or starts with a lone separator.
+ */
 interface Token {
-  pieces: { text: string; font: string; color: string; pad?: number }[];
+  pieces: Piece[];
   gap: number;
+  lead?: Piece;
 }
 
-function tokenWidth(ctx: CanvasRenderingContext2D, token: Token): number {
-  return token.pieces.reduce((w, p) => w + (p.pad ?? 0) + measure(ctx, p.text, p.font), 0);
-}
+const piecesWidth = (ctx: CanvasRenderingContext2D, pieces: Piece[]) => pieces.reduce((w, p) => w + (p.pad ?? 0) + measure(ctx, p.text, p.font), 0);
+const tokenWidth = (ctx: CanvasRenderingContext2D, token: Token) => piecesWidth(ctx, token.pieces);
+/** What the token adds after something else on its line */
+const joinedWidth = (ctx: CanvasRenderingContext2D, token: Token) => token.gap + (token.lead ? piecesWidth(ctx, [token.lead]) : 0) + tokenWidth(ctx, token);
 
 /** Tokens in lines no wider than `room(line)`; a token wider than a whole line gets one to itself. */
 function wrap(ctx: CanvasRenderingContext2D, tokens: Token[], room: (line: number) => number): Token[][] {
@@ -121,9 +129,10 @@ function wrap(ctx: CanvasRenderingContext2D, tokens: Token[], room: (line: numbe
   for (const token of tokens) {
     const w = tokenWidth(ctx, token);
     const line = lines.at(-1);
-    if (line && used + token.gap + w <= room(lines.length - 1)) {
+    const joined = joinedWidth(ctx, token);
+    if (line && used + joined <= room(lines.length - 1)) {
       line.push(token);
-      used += token.gap + w;
+      used += joined;
     } else {
       lines.push([token]);
       used = w;
@@ -134,8 +143,9 @@ function wrap(ctx: CanvasRenderingContext2D, tokens: Token[], room: (line: numbe
 
 function drawLine(ctx: CanvasRenderingContext2D, line: Token[], x: number, y: number) {
   line.forEach((token, i) => {
+    const pieces = i && token.lead ? [token.lead, ...token.pieces] : token.pieces;
     if (i) x += token.gap;
-    for (const p of token.pieces) x = put(ctx, p.text, x + (p.pad ?? 0), y, p.font, p.color);
+    for (const p of pieces) x = put(ctx, p.text, x + (p.pad ?? 0), y, p.font, p.color);
   });
 }
 
@@ -155,8 +165,7 @@ function headerLayout(ctx: CanvasRenderingContext2D, info: SnapshotInfo, c: Colo
   const names: Token[] = [{ pieces: [{ text: info.title, font: `600 15px ${SANS}`, color: c.fg }], gap: 0 }];
   if (info.ticker !== info.title) names.push({ pieces: [{ text: info.ticker, font: mono, color: c.muted }], gap: 8 });
   info.subtitle.forEach((part, i) => {
-    const sep = i < info.subtitle.length - 1 ? " ·" : "";
-    names.push({ pieces: [{ text: part + sep, font: small, color: c.muted }], gap: i ? 4 : 10 });
+    names.push({ pieces: [{ text: part, font: small, color: c.muted }], gap: i ? 0 : 10, lead: i ? { text: " · ", font: small, color: c.muted } : undefined });
   });
   const nameLines = wrap(ctx, names, (line) => (line === 0 ? full - dateWidth - 16 : full));
 

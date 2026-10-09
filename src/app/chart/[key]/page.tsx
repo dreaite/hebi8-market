@@ -9,7 +9,8 @@ import { renderMarkdown } from "@/lib/markdown";
 import { benchLabel, nameOf } from "@/lib/names";
 import { CHANGE_PERIODS } from "@/lib/periods";
 import { listSymbols } from "@/lib/store";
-import { chartTitle, decodeChartKey, isValidKey, tickerOf } from "@/lib/symbols";
+import { chartTitle, decodeChartKey, isSynthetic, isValidKey, tickerOf } from "@/lib/symbols";
+import { synthName } from "@/lib/synth";
 import { noteMtime, readChartState, readConfigSafe, readNote } from "@/lib/vault";
 import { statsFor } from "@/lib/sync";
 import { getViewer } from "@/lib/viewer";
@@ -22,7 +23,7 @@ export async function generateMetadata({ params }: { params: Promise<{ key: stri
   const { config } = readConfigSafe((await getViewer()).dir);
   if (!config || !isValidKey(key)) return { title: key };
   const name = nameOf(config, key, listSymbols()[key]?.name);
-  const title = chartTitle(name, tickerOf(key), config.chart.tf);
+  const title = chartTitle(name, isSynthetic(key) ? synthName(key) : tickerOf(key), config.chart.tf);
   const description = `${name}（${key}）的长期 K 线、指标与对比，在 ${BRAND} 上做周度复盘。`;
   const url = `/chart/${encodeURIComponent(key)}`;
   return {
