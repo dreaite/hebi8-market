@@ -1,18 +1,38 @@
+import type { Metadata } from "next";
 import { ChartView } from "@/components/ChartView";
 import { alertViews, latestPrice } from "@/lib/alert-view";
 import { publicUrl } from "@/lib/app-info";
+import { BRAND } from "@/lib/brand";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
 import { allItems, findItem } from "@/lib/config";
 import { renderMarkdown } from "@/lib/markdown";
 import { benchLabel, nameOf } from "@/lib/names";
 import { CHANGE_PERIODS } from "@/lib/periods";
 import { listSymbols } from "@/lib/store";
-import { decodeChartKey, isValidKey } from "@/lib/symbols";
+import { chartTitle, decodeChartKey, isValidKey, tickerOf } from "@/lib/symbols";
 import { noteMtime, readChartState, readConfigSafe, readNote } from "@/lib/vault";
 import { statsFor } from "@/lib/sync";
 import { getViewer } from "@/lib/viewer";
 
 export const dynamic = "force-dynamic";
+
+/** 「英伟达 NVDA · 周线」 in the viewer's names and timeframe; the card a link unfurls into is opengraph-image.tsx. */
+export async function generateMetadata({ params }: { params: Promise<{ key: string }> }): Promise<Metadata> {
+  const key = decodeChartKey((await params).key);
+  const { config } = readConfigSafe((await getViewer()).dir);
+  if (!config || !isValidKey(key)) return { title: key };
+  const name = nameOf(config, key, listSymbols()[key]?.name);
+  const title = chartTitle(name, tickerOf(key), config.chart.tf);
+  const description = `${name}（${key}）的长期 K 线、指标与对比，在 ${BRAND} 上做周度复盘。`;
+  const url = `/chart/${encodeURIComponent(key)}`;
+  return {
+    title,
+    description,
+    alternates: { canonical: url },
+    openGraph: { type: "website", siteName: BRAND, locale: "zh_CN", title: `${title} · ${BRAND}`, description, url },
+    twitter: { card: "summary_large_image", title: `${title} · ${BRAND}`, description },
+  };
+}
 
 export default async function ChartPage({ params }: { params: Promise<{ key: string }> }) {
   const key = decodeChartKey((await params).key);

@@ -6,7 +6,7 @@ import { readConfigSafe, vaultDir } from "@/lib/vault";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "隐私说明 · hebi8/market" };
+export const metadata: Metadata = { title: "隐私说明" };
 
 /** Updated whenever what the instance collects changes (design §1.7). */
 const UPDATED = "2026-10-09";

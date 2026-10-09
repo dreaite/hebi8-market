@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
 import { TvExport, TvDrawingsImport, TvListImport } from "@/components/TvImport";
 import { listSymbols } from "@/lib/store";
@@ -6,6 +7,8 @@ import { readConfigSafe } from "@/lib/vault";
 import { getViewer } from "@/lib/viewer";
 
 export const dynamic = "force-dynamic";
+// a person's own page: not for search engines (robots.ts keeps crawlers out as well)
+export const metadata: Metadata = { title: "设置", robots: { index: false, follow: false } };
 
 const card = "rounded-lg border border-line bg-card";
 const head = "border-b border-line px-4 py-2.5";

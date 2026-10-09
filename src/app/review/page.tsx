@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { Badge } from "@/components/Badge";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
@@ -13,6 +14,8 @@ import { getViewer } from "@/lib/viewer";
 import { currentWeekId, shiftWeek } from "@/lib/week";
 
 export const dynamic = "force-dynamic";
+// a person's own page: not for search engines (robots.ts keeps crawlers out as well)
+export const metadata: Metadata = { title: "复盘", robots: { index: false, follow: false } };
 
 export default async function ReviewPage() {
   const viewer = await getViewer();

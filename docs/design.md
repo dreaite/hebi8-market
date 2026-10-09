@@ -240,7 +240,7 @@ CREATE TABLE usage_alerts (kind TEXT NOT NULL, day INTEGER NOT NULL, PRIMARY KEY
 
 公开以后先做到「看得见」：谁在用、用了多少、上游被问了多少次。**不限流、不封禁、不加访问控制**；人多了再决定策略。
 
-- **记录挂在 proxy**（`src/proxy.ts`）。这版 Next 的 proxy 默认跑 Node.js runtime，在同一个进程里 `require`，路由之前执行，所以页面、Server Action（对页面的 POST，带 `Next-Action` 头）和 API 路由都经过它；matcher 排除 `_next/static`、`_next/image`、favicon、`icon.svg` 和带静态扩展名的文件。proxy 只往 `globalThis` 上的内存表里加计数（`src/lib/traffic.ts`），不碰数据库。
+- **记录挂在 proxy**（`src/proxy.ts`）。这版 Next 的 proxy 默认跑 Node.js runtime，在同一个进程里 `require`，路由之前执行，所以页面、Server Action（对页面的 POST，带 `Next-Action` 头）和 API 路由都经过它；matcher 排除 `_next/static`、`_next/image`、favicon、`icon.svg`、`apple-icon`、`manifest.webmanifest`、`opengraph-image` 和带静态扩展名的文件（`robots.txt`、`sitemap.xml` 也在其中）。proxy 只往 `globalThis` 上的内存表里加计数（`src/lib/traffic.ts`），不碰数据库。
 - **来源**按 Host 判断：公网域名是隧道（`public`）；IP、单标签名、`localhost`、`*.ts.net` 是 Tailscale（`tailnet`）。**类型**：`/api/*` 是 api，带 `Next-Action` 是 action，带 `Next-Router-Prefetch` 是 prefetch（路由预取，不算浏览，热门路径里不列），其余是 page。
 - **路径归一**（行数不能被扫描器撑大）：proxy 把路径换成本应用真实存在的路由（`traffic.ts` 的 `ROUTES`，测试对照 `src/app` 下的文件保持同步）；`/chart/<key>` 统一成一种编码，落库时只有 `symbols` 或 `stats` 表里有的 key（也就是有人在看、在同步的品种，含合成标的）才保留，其他归到 `/chart/[key]`；匹配不到任何路由的一律是 `(其他)`。所以 `traffic` 每天的行数 ≤ 2 个 origin × 4 种类型 ×（路由数 + 已有品种数 + 2）。
 - **访客**：公网取 `CF-Connecting-IP`，Tailscale 取 Next 填进 `X-Forwarded-For` 的 socket 地址；存 `HMAC-SHA256(盐, IP)` 的前 16 位，盐在配置目录的 `traffic-salt.json`。访客单独一张表（`visitors`），不和路径交叉：每天每个 origin 最多 `MAX_VISITORS = 2000` 个不同访客，已存的照常累加，新来的超出上限就合进 `(其他)` 这一行，页面上那天的访客数显示成「2000+」。代价是热门路径不再有「每个路径多少访客」。**登录名**：proxy 只记会话 cookie，落库时整批只读一次 `sessions.json`，在内存里查；伪造的 cookie 查不到就是未登录。
@@ -506,13 +506,13 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 
 **布局（TV 桌面版）**
 
-- **顶部工具栏**（一行，38px，按钮 30px 热区，组间 1px 竖分隔线）：`‹ 总览` · **商品按钮**（放大镜 + 代码 + 名称，点开全局搜索换标的）· `+` **比较商品** · 周期快捷按钮 `日 周 月 季` · **图表类型**（图标 + 下拉：实心 K 线 / 空心阳线 / 美国线 / 面积）· `fx 指标` · ……右端 **刷新**（tooltip 显示同步时间，加载时图标转动）· **全屏**（`document.documentElement.requestFullscreen()`，全屏时隐藏站点页头，弹窗和搜索浮层照常可用）。
+- **顶部工具栏**（一行，38px，按钮 30px 热区，组间 1px 竖分隔线）：`‹ 总览` · **商品按钮**（放大镜 + 代码 + 名称，点开全局搜索换标的）· `+` **比较商品** · 周期快捷按钮 `日 周 月 季` · **图表类型**（图标 + 下拉：实心 K 线 / 空心阳线 / 美国线 / 面积）· `fx 指标` · ……右端 **刷新**（tooltip 显示同步时间，加载时图标转动）· **拍快照**（相机，见下文）· **全屏**（`document.documentElement.requestFullscreen()`，全屏时隐藏站点页头，弹窗和搜索浮层照常可用）。
 - **左侧画线工具栏**（42px 竖条，图标按钮，tooltip「名称 · 快捷键」）：十字光标（= 退出画线）· 六个**工具组**，和 TV 一样每组一个按钮：趋势线工具 · 江恩和斐波那契工具 · 形态 · 预测和测量工具 · 几何形状 · 标注工具（组和工具见 `chart-types.ts` 的 `DRAW_GROUPS`）。按钮画这一组当前的工具，悬停时右缘出现小箭头，点开在旁边弹出这一组的菜单（分小节：图标 · 名称 · 快捷键）；选过的工具留在按钮上，记在 localStorage（`hebi8:chart:tools`）｜ 磁铁模式（overlay `mode: weak_magnet`）· 锁定所有绘图 · 隐藏所有绘图 / 显示所有绘图 · 删除所有绘图（确认）。当前工具高亮；画完一条自动回到十字光标（TV 默认）；开始画线时若「隐藏所有绘图」开着会先显示出来。磁铁 / 锁定 / 隐藏是纯界面偏好，存 localStorage（`hebi8:chart:drawing`），作用于所有画线和之后新画的；有单条隐藏的绘图时眼睛按钮显示为「显示所有绘图」，点一下全部显示（含单条隐藏的）。
 - **图内图例（左上角，TV 样式，React 覆盖层 `ChartLegend`）**：第一行 `名称 周期 · 源 · 币种 · 基准` + `开 高 低 收` + 涨跌（相对上一根收盘，十字线处或最后一根）；然后每个百分比对比一行、每个主图指标一行（名称 + 参数 + 各条线的值，颜色同线）；副图指标 / 新窗格对比的行放在各自窗格左上角（`chart.getSize(paneId).top`）。行上悬停（鼠标指针事件，不用 CSS `:hover`，触屏上点一下）出现 **眼睛**（隐藏 / 显示，会话内）· **设置**（内置指标 = 参数弹窗，按当前周期保存；公式指标 = 公式编辑器）· **×**（移除）；双击行 = 设置；指标行还有 **⋯**（TV 的「更多」），里面「移动到」：副图指标 →「主图窗格」，主图指标 →「下方新窗格」，写回 yaml `chart.panes`（回到默认窗格时删掉那一项）。移到主图的副图指标用自己的刻度：成交量和 TV 一样不显示刻度、柱子占主图底部四分之一（值域放大到 4 倍），其它的在左侧单独一条刻度（KLineChart 10 的 `createYAxis` + 指标 `yAxisId`；价格轴的 `overrideYAxis` 因此按 id 只改价格轴），图例随左刻度右移。主图图例最后一行下面是 TV 的折叠箭头：收起后只剩商品行，箭头旁显示收起的行数，状态存 localStorage（`hebi8:chart:legend-collapsed`）。数值跟十字线走：KLineChart 10 的 `onCrosshairChange` 只给指针坐标（`{ x, y, paneId }`，不带 `dataIndex`），所以按 x 用 `convertFromPixel` 求 K 线下标；鼠标离开图表时它不回调，由容器的 `mouseleave` 回到最后一根。KLineChart 自己的蜡烛与指标 tooltip 关闭（`showRule: "none"`），数值由 `indicator.result` 和图形样式按 KLineChart 同样的规则取（线色按 `lines[i]`，柱按 `figure.styles` 动态色）。
 - **右侧边栏**：最右 42px 图标条（自选列表 · 笔记），面板 280px，同一时间只开一个，上次打开的记在 localStorage（`hebi8:chart:panel`；没记过时有笔记就默认开笔记）。**自选列表**按 yaml 分组，每行名称 · 最新价 · 总览第一个周期的涨跌（`stats`），当前标的高亮，点击客户端切换（偏好不变）；分组和总览一样能折叠、重命名、删除、新建，标的和分组都能拖动排序（§5.1）；标题栏「+」打开搜索的添加模式。**笔记**即原来的笔记面板。
 - **加入自选**：当前标的不在自选里时，顶栏商品按钮后面出现「加入自选」下拉（现有分组 + 新分组名输入），选了就 `addSymbol`，toast 可撤销；在自选里就不显示。不在自选里的标的打开时先按需拉日线（§2.3），图上显示「正在拉取 X 的日线…」。
 - **底部栏**（32px）：左边日期范围 `1年 3年 5年 10年 全部`——按当前周期算出这段有多少根，`setBarSpace(可用宽度 / 根数)` 后 `scrollToRealTime()`；若每根不足 1px（例如日线 10 年），像 TV 一样自动升到下一个周期（日 → 周 → 月）再适配。右边 `ADJ`（含分红，总回报）· `%`（百分比坐标，localStorage）· `log` · `自动`（TV 的开关：亮 = 价格轴自动缩放；点一下熄灭，价格范围固定，在图上上下拖就是纵向平移；拖动价格轴、在价格轴上滚轮缩放也会让它熄灭，双击价格轴或再点一下恢复；换周期 / 换标的时恢复）。对数坐标下 KLineChart 自己按价格做纵向平移和缩放（结果像缩放，甚至出现负刻度），所以对数轴的 `setRange` 被包了一层：库算出的新范围按比例换算到对数空间再生效（拖动以按下时的范围为基准，滚轮以当前范围为基准）。价格里有 0 或负数（`data:` 序列、合成标的可能有）时 `log` 按钮禁用，tooltip 说明原因，yaml 里的 `log` 偏好不动、只是在这个标的上不生效。`%` 与 `log` 互斥；有百分比对比时 `%` 显示为按下且锁定，tooltip「比较模式下使用百分比坐标」，`log` 禁用。
-- **窄屏（≤768px，TV 移动版）**：顶部工具栏一行横向滚动；左侧画线栏隐藏，改为顶栏里的「画线」下拉（按组列出全部工具 + 磁铁 / 锁定 / 隐藏 / 删除，200px 宽、可滚动）；右侧图标条隐藏，自选 / 笔记按钮进顶栏，面板变成底部抽屉（60vh，默认关闭）；底部栏仍是一行。390px 宽无横向溢出。下拉菜单用 `position: fixed` 按按钮位置弹出，不被滚动的工具栏裁掉。
+- **窄屏（≤768px，TV 移动版）**：顶部工具栏一行横向滚动；左侧画线栏隐藏，改为顶栏里的「画线」下拉（按组列出全部工具 + 磁铁 / 锁定 / 隐藏 / 删除，200px 宽、可滚动）；右侧图标条隐藏，自选 / 笔记按钮进顶栏，面板变成底部抽屉（60vh，默认关闭）；底部栏仍是一行。390px 宽无横向溢出。下拉菜单用 `position: fixed` 按按钮位置弹出，不被滚动的工具栏裁掉；菜单右缘超出视口时整体左移。
 
 **快捷键（TV 默认；焦点在输入框里时不响应，`Esc` 除外）**
 
@@ -525,6 +525,7 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 | `Enter` | 结束正在画的路径 / 折线（双击也行） |
 | `Delete` / `Backspace` | 删除选中的画线（KLineChart `onSelected` / `onDeselected` 跟踪选中）；右键画线弹出菜单：设置… / 锁定 / 隐藏 / 删除（TV 样式，不再右键直接删） |
 | `Alt+R` | 重置图表：回到最新、默认缩放、价格轴自动 |
+| `Ctrl/Cmd+Alt+S` / `Ctrl/Cmd+Shift+S` / `Alt+S` | 拍快照：下载图片 / 复制图片 / 复制图表链接（见下文「拍快照」） |
 | `←` / `→` | 向更早 / 更新滚动可见宽度的 10% |
 | `↑` / `↓` | 放大 / 缩小 |
 | `Space` / `Shift+Space` | 自选列表下一只 / 上一只（跨分组循环，客户端路由；下一只的 `/api/bars` 低优先级预取） |
@@ -562,6 +563,14 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 - **图上的警报线**：当前标的每条启用的价格类警报画一条虚线（通道画两条），右端价格轴上有闹钟标签；点标签打开编辑。已停止的不画。
 - **警报列表**：右侧边栏在「自选」「笔记」旁边多一个「警报」页签，列出当前 vault 的全部警报：标的名（对全部自选的写「全部自选」，没有当前价）、条件、触发方式、是否推送、状态（活动 / 已触发 / 已停止）、当前价和取价时间；每行有「编辑」「暂停 / 恢复」「删除」，点行打开那个标的的图表。
 - **写回**：Server Actions `saveAlert(def)`、`deleteAlert(id)`、`setAlertEnabled(id, enabled)`，和别的写操作一样先过 viewer 写权限，写当前 viewer 的 yaml，注释保留。只读访客看到入口，点开是登录提示。
+
+**拍快照**（TV 顶栏的相机按钮，在刷新和全屏之间）：菜单是「下载图片 · 复制图片 · 复制链接 · 在 X 上分享」，系统支持带文件分享时（手机）多一项「分享…」（`navigator.share` 带 PNG）。快捷键照 TV：`Ctrl/Cmd+Alt+S` 保存图片，`Ctrl/Cmd+Shift+S` 复制图片，`Alt+S` 复制链接（TV 的 Alt+S 是拍快照并把快照链接放进剪贴板；这里没有托管快照，复制的是图表页的公开地址）。
+
+- **图片**（`chart-snapshot.ts`）：KLineChart 的 `getConvertPictureUrl(true, "png", 卡片底色)` 给出全部窗格、坐标轴和画线（overlay 画布里的十字线、警报线也在）；React 图例不在画布上，按图例的快照（`LegendSnapshot`：各窗格顶部、指标值、对比值）在原位置重画指标和对比行，主图图例折叠时不画主图那几行。上面加一条 56px 信息栏代替图例的商品行：名称 · 代码 · 周期 · 源 · 币种 · 基准，右侧最后一根 K 线的日期（周线写「YYYY-MM-DD 当周」、月线 YYYY-MM、季线 YYYY Qn），第二行开高低收和相对上一根收盘的涨跌（放不下时只留百分比）；下面一条 34px：icon.svg 的蜡烛 logo +「hebi8/market」等宽字 + 标语，右侧这张图的公开地址（key 解码后显示；放不下先去标语，再只留域名）。颜色从页面的 CSS 变量取，所以跟着明暗主题和 `data-updown`。按设备像素比输出 PNG，文件名照 TV：`<代码>_<YYYY-MM-DD_HH-mm-ss>.png`。水印只在导出的图片里，页面上的图表不加。
+- **复制图片**用 `navigator.clipboard.write` + `ClipboardItem`（把生成中的 Promise 直接放进 ClipboardItem，Safari 只允许在点击里写）。异步剪贴板只在安全上下文里有：经隧道的 https 和 localhost 能用，Tailscale 直连是 http，菜单项置灰并说明，快捷键弹 toast 让用下载。复制链接走隐藏 textarea + `execCommand("copy")`（`src/lib/copy-text.ts`，http 下也能用）。
+- **链接**一律是公开地址（`HEBI8_PUBLIC_URL`，默认 `https://market-hebi8.dreaife.tokyo`，`app-info.ts` 的 `publicUrl()`）+ `/chart/<编码的 key>`，在 Tailscale 上打开的页面也一样。未登录的人打开看到的是根 vault 的这张图（§1.6），不是分享者自己 vault 里的画线。
+- **在 X 上分享**打开 `https://x.com/intent/post?text=<标题 · hebi8/market>&url=<链接>`；intent 带不了图片，和 TV 一样只分享链接，链接展开时的卡片见 §5.9。
+- 标签页标题跟着周期变（`chartTitle`：「英伟达 NVDA · 周线 · hebi8/market」），服务端的 `generateMetadata` 只知道 yaml 里存的周期。
 
 **笔记**：右侧边栏的「笔记」面板，显示 `notes/<fileKey>.md` 的渲染结果，「编辑」切换 textarea，自动保存走 Server Action。没有笔记时显示「写下为什么看它」。
 
@@ -794,6 +803,19 @@ client id 不是秘密（device flow 的设计就是给拿不住密钥的客户�
 
 fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己的仓库），设 `HEBI8_GITHUB_CLIENT_ID` 和 `HEBI8_FEEDBACK_REPO`；把 `.github/workflows/app-feedback.yml` 留在自己的仓库里就有同样的标签。
 
+
+### 5.9 元数据、分享卡片与搜索引擎
+
+- **公开地址**：`HEBI8_PUBLIC_URL`（`app-info.ts` 的 `publicUrl()`，须是 http(s) 地址，否则用默认 `https://market-hebi8.dreaife.tokyo`）。根 layout 的 `generateMetadata` 用它做 `metadataBase`，请求时读取，所以换地址只要改环境变量重启。
+- **根 layout**：`title` 模板 `%s · hebi8/market`（默认 `hebi8/market`）、`description`、`applicationName`、`openGraph`（website、站点名、zh_CN）、`twitter: summary_large_image`。文字常量在 `src/lib/brand.ts`（`BRAND`、`SLOGAN`、`TAGLINE`、`DESCRIPTION`、社交图用的深色 `DARK`），页头也用它们。
+- **页面标题**：图表页 `generateMetadata` 给「名称 代码 · 周线」（viewer 的名字和存的周期）、描述、canonical、openGraph / twitter 标题；复盘、设置、使用情况是「复盘」「设置」「使用情况」并且 `robots: noindex, nofollow`；隐私说明是「隐私说明」。
+- **图标**：`icon.svg`（带 `width`/`height`，canvas 和 Firefox 才能画它）、`apple-icon.tsx`（180px PNG，icon.svg 铺满深色方块，iOS 自己切圆角）、`manifest.ts`（standalone，深色底，两个图标）。
+- **分享卡片**（`opengraph-image.tsx`，next/og，1200×630，深色主题，`force-dynamic`）：站点卡片是大 logo +「hebi8/market」+ 标语 + 一句话介绍 + 公开域名；图表卡片（`/chart/[key]/opengraph-image`）是名称和代码、源 · 币种 · 近半年涨跌、最新收盘和日涨跌 + 日期、近 130 根日线收盘的折线和渐变填充（涨跌色看半年涨跌），底部是和导出图片同样的 logo +「hebi8/market」+ 地址。涨跌色取根 yaml 的 `updown`。
+- **卡片不泄露个人内容**：抓取方没有会话，卡片也不读 cookie：名字、配色、合成表达式的别名只从根 vault 的 yaml 读（未登录访客本来就看这个），K 线只从公共缓存读，不碰任何 `users/<login>/`、画线、笔记、警报。没缓存的 key 显示「暂无缓存的日线」，读取不会触发同步。
+- **字体不走网络**：next/og 遇到自带字体里没有的字（中文、emoji）会去 Google Fonts 下载，违反「读取不碰网络」。所以 `src/lib/og.tsx` 只用本机字体：`HEBI8_OG_FONT` 或常见路径下的 Noto Sans CJK SC `.otf`（satori 读不了 `.ttc`）、DejaVu Sans Mono 一类的等宽字体；找不到中文字体时用 next/og 自带的 Geist，文字只保留拉丁字符；emoji 一律去掉。字体数组整个进程只建一次，satori 按引用缓存解析结果（第一次约 0.4s，之后十几毫秒）。
+- **`robots.txt`**：允许 `/`，禁止 `/settings`、`/usage`、`/review`、`/api/`，指向 `sitemap.xml`。**`sitemap.xml`**：首页 + 根 vault 自选里每个标的的图表页（`lastModified` 是同步时间）。两个都 `force-dynamic`，地址和自选在请求时读。
+- 这些元数据文件（图标、manifest、分享卡片、robots、sitemap）不计入流量（proxy 的 matcher 排除，§1.7）。
+
 ---
 
 ## 6. 接口
@@ -822,7 +844,7 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 - `next.config.ts` 的 `serverExternalPackages` 保留 `better-sqlite3`、`yahoo-finance2`、`@mathieuc/tradingview`。
 - 涨跌色在 SSR 时从 yaml 读出写到 `<html data-updown>`，不再需要 head 里的 localStorage 脚本；localStorage 整体不再使用。
 
-**KLineChart v10 已确认的 API**：`init(el, { locale, timezone: "UTC" })`、`setDataLoader`、`setSymbol`、`setPeriod`、`setStyles`、`overrideYAxis({ paneId, name: "normal" | "percentage" | "logarithm" })`、`createIndicator(create, isStack)`（pane 通过 `create.paneId`）、`overrideIndicator`、`removeIndicator`、`registerIndicator`、`createOverlay` / `getOverlays` / `removeOverlay` / `overrideOverlay`、`subscribeAction(type, cb)`（`onVisibleRangeChange`、`onCrosshairChange`、`onIndicatorTooltipFeatureClick` 等）、`getVisibleRange()`。
+**KLineChart v10 已确认的 API**：`init(el, { locale, timezone: "UTC" })`、`setDataLoader`、`setSymbol`、`setPeriod`、`setStyles`、`overrideYAxis({ paneId, name: "normal" | "percentage" | "logarithm" })`、`createIndicator(create, isStack)`（pane 通过 `create.paneId`）、`overrideIndicator`、`removeIndicator`、`registerIndicator`、`createOverlay` / `getOverlays` / `removeOverlay` / `overrideOverlay`、`subscribeAction(type, cb)`（`onVisibleRangeChange`、`onCrosshairChange`、`onIndicatorTooltipFeatureClick` 等）、`getVisibleRange()`、`getConvertPictureUrl(includeOverlay, "png", backgroundColor)`（拍快照，按设备像素比的 data URL）。
 
 ---
 

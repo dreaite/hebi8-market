@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { UsageLimitsForm } from "@/components/UsageLimitsForm";
 import { APP_INFO } from "@/lib/app-info";
@@ -13,6 +14,8 @@ import { listVaults, readConfigSafe } from "@/lib/vault";
 import { getViewer } from "@/lib/viewer";
 
 export const dynamic = "force-dynamic";
+// a person's own page: not for search engines (robots.ts keeps crawlers out as well)
+export const metadata: Metadata = { title: "使用情况", robots: { index: false, follow: false } };
 
 const DAYS = 30;
 const SOURCES: [Source, string][] = [

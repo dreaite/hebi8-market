@@ -4,7 +4,8 @@ import { ErrorCapture } from "@/components/ErrorCapture";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteHeader } from "@/components/SiteHeader";
 import { Account, HelpButton, SearchTrigger, UiProvider } from "@/components/UiProvider";
-import { githubClientId } from "@/lib/app-info";
+import { githubClientId, publicUrl } from "@/lib/app-info";
+import { BRAND, DESCRIPTION, SLOGAN, TAGLINE } from "@/lib/brand";
 import type { SearchContext } from "@/lib/search";
 import { searchContextFor } from "@/lib/search-context";
 import { readConfigSafe } from "@/lib/vault";
@@ -13,10 +14,17 @@ import "./globals.css";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "hebi8/market",
-  description: "七天一个轮回，第八天观测市场。周度复盘：总览、长期图表、对比、笔记。",
-};
+/** Absolute URLs (social images, canonical links) use the public address, read when the request comes in. */
+export function generateMetadata(): Metadata {
+  return {
+    metadataBase: new URL(publicUrl()),
+    title: { default: BRAND, template: `%s · ${BRAND}` },
+    description: DESCRIPTION,
+    applicationName: BRAND,
+    openGraph: { type: "website", siteName: BRAND, locale: "zh_CN", title: BRAND, description: DESCRIPTION, url: "/" },
+    twitter: { card: "summary_large_image", title: BRAND, description: DESCRIPTION },
+  };
+}
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   let updown = "green-up";
@@ -36,9 +44,9 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         <ErrorCapture />
         <UiProvider ctx={searchCtx} readOnly={!viewer?.canWrite}>
           <SiteHeader>
-            <Link href="/" className="flex shrink-0 items-baseline gap-3" title="hebi（蛇）首尾相衔，七天一个轮回；多出来的第八天，用来观测市场">
-              <span className="font-mono text-sm tracking-tight">hebi8/market</span>
-              <span className="hidden text-[11px] text-muted lg:inline">第八天，观测市场</span>
+            <Link href="/" className="flex shrink-0 items-baseline gap-3" title={TAGLINE}>
+              <span className="font-mono text-sm tracking-tight">{BRAND}</span>
+              <span className="hidden text-[11px] text-muted lg:inline">{SLOGAN}</span>
             </Link>
             <div className="flex min-w-0 flex-1 justify-center">
               <SearchTrigger />
