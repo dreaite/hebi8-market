@@ -24,6 +24,13 @@ export const FEEDBACK_REPO = REPO_FULL_NAME;
  */
 export const GITHUB_APP_CLIENT_ID = "Iv23liCniWEUtlDruFJa";
 
+/**
+ * Where the instance is public (the Cloudflare tunnel, design §1.6). Metadata, the social images,
+ * robots.txt, the sitemap and shared chart links point here even when the page was opened on the
+ * tailnet. A fork or another instance sets `HEBI8_PUBLIC_URL`.
+ */
+export const PUBLIC_URL = "https://market-hebi8.dreaife.tokyo";
+
 /** Label every in-app report carries (added by `.github/workflows/app-feedback.yml`). */
 export const FROM_APP_LABEL = "from-app";
 
@@ -44,6 +51,12 @@ export function githubClientId(): string {
   if (v?.toLowerCase() === "off") return "";
   if (v && CLIENT_ID_RE.test(v)) return v;
   return CLIENT_ID_RE.test(GITHUB_APP_CLIENT_ID) ? GITHUB_APP_CLIENT_ID : "";
+}
+
+/** `HEBI8_PUBLIC_URL` when it is an http(s) URL, else `PUBLIC_URL`; no trailing slash. Server only. */
+export function publicUrl(): string {
+  const v = env("HEBI8_PUBLIC_URL");
+  return (v && /^https?:\/\/[^/\s]+/.test(v) ? v : PUBLIC_URL).replace(/\/+$/, "");
 }
 
 /** The repo's in-app reports on github.com. */

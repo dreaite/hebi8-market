@@ -32,7 +32,7 @@ import { ChartLegend, createLegendStore, type ChartLegendProps } from "./ChartLe
 import { IconAlarm } from "./chart-icons";
 import { registerDrawingTemplates, setOverlayChart, setOverlayTheme, textOf, textSizeOf } from "./chart-overlays";
 import { dashOf, drawingStyles, lineOf, withAlpha } from "./drawing-style";
-import { COMPARE_COLORS, OPEN_DRAWINGS, TEXT_DRAWINGS, type ChartControl, type IndicatorSpec, type LegendValue } from "./chart-types";
+import { COMPARE_COLORS, MONO, OPEN_DRAWINGS, SANS, TEXT_DRAWINGS, type ChartControl, type IndicatorSpec, type LegendValue } from "./chart-types";
 import { DrawingSettings, DrawingToolbar, TextEditor, type DrawingChange, type DrawingInfo } from "./DrawingToolbar";
 
 export interface DrawingModes {
@@ -143,10 +143,6 @@ const comparePane = (slot: number) => `pane_cmp_${slot}`;
 const isCompare = (name: string) => name.startsWith("CMP");
 /** Aligned closes per compare slot; templates read them by slot so overrides never merge data. */
 const compareSeries: ((number | null)[] | undefined)[] = [];
-
-// Same stacks as globals.css; the canvas cannot read Tailwind's theme.
-const SANS = 'ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif';
-const MONO = 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace';
 
 let registered = false;
 function registerTemplates() {
@@ -966,6 +962,12 @@ export function KChart({
         chartRef.current.removeOverlay({ id });
         select(null);
         return true;
+      },
+      capture: () => {
+        const chart = chartRef.current;
+        const el = containerRef.current;
+        if (!chart || !el) return null;
+        return { url: chart.getConvertPictureUrl(true, "png", cssVar("--card")), width: el.clientWidth, height: el.clientHeight, legend: store.get() };
       },
     };
     return () => {

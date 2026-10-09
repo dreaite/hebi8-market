@@ -1,29 +1,21 @@
 import { ChartView } from "@/components/ChartView";
 import { alertViews, latestPrice } from "@/lib/alert-view";
+import { publicUrl } from "@/lib/app-info";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
 import { allItems, findItem } from "@/lib/config";
 import { renderMarkdown } from "@/lib/markdown";
 import { benchLabel, nameOf } from "@/lib/names";
 import { CHANGE_PERIODS } from "@/lib/periods";
 import { listSymbols } from "@/lib/store";
-import { isValidKey } from "@/lib/symbols";
+import { decodeChartKey, isValidKey } from "@/lib/symbols";
 import { noteMtime, readChartState, readConfigSafe, readNote } from "@/lib/vault";
 import { statsFor } from "@/lib/sync";
 import { getViewer } from "@/lib/viewer";
 
 export const dynamic = "force-dynamic";
 
-/** Keys are URL-encoded in links (`yahoo%3ASPY`, `%3DBTC%2FGOLD`); Next decodes most of it already. */
-function decodeKey(raw: string): string {
-  try {
-    return raw.includes("%") ? decodeURIComponent(raw) : raw;
-  } catch {
-    return raw;
-  }
-}
-
 export default async function ChartPage({ params }: { params: Promise<{ key: string }> }) {
-  const key = decodeKey((await params).key);
+  const key = decodeChartKey((await params).key);
   const viewer = await getViewer();
   const { config, error } = readConfigSafe(viewer.dir);
   if (!config) return <ConfigErrorView error={error} vaultPath={viewer.dir} />;
@@ -73,6 +65,7 @@ export default async function ChartPage({ params }: { params: Promise<{ key: str
       readOnly={!viewer.canWrite}
       alerts={alerts}
       livePrice={latestPrice(key, config).price}
+      shareUrl={`${publicUrl()}/chart/${encodeURIComponent(key)}`}
     />
   );
 }

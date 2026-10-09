@@ -250,6 +250,14 @@ export const IconExternal = (p: IconProps) => (
 );
 
 /** TradingView's 警报 glyph: an alarm clock. */
+/** TradingView's 拍快照 */
+export const IconCamera = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M2.5 6a1 1 0 0 1 1-1h2.2l1.3-2h4l1.3 2h2.2a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" />
+    <circle cx="9" cy="9.5" r="2.7" />
+  </Svg>
+);
+
 export const IconAlarm = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="9" cy="10" r="5.5" />

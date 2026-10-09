@@ -45,6 +45,16 @@ export interface LegendSnapshot {
   compares: CompareLegendEntry[];
 }
 
+/** The chart as a picture: every pane with axes and drawings, plus what the legend showed. */
+export interface ChartCapture {
+  /** PNG data URL at the device pixel ratio */
+  url: string;
+  /** Size in CSS px */
+  width: number;
+  height: number;
+  legend: LegendSnapshot;
+}
+
 /** Imperative handle the page uses for hotkeys and the bottom bar. */
 export interface ChartControl {
   /** Scroll by a fraction of the visible width; negative = towards older bars */
@@ -61,7 +71,13 @@ export interface ChartControl {
   closeDialog: () => void;
   /** Remove the selected drawing; false when none is selected */
   deleteSelected: () => boolean;
+  /** The chart for 拍快照; null before it exists */
+  capture: () => ChartCapture | null;
 }
+
+// Same stacks as globals.css; a canvas cannot read Tailwind's theme.
+export const SANS = 'ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif';
+export const MONO = 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace';
 
 /**
  * Readable in both themes and distinct from KLineChart's indicator palette (orange, purple,

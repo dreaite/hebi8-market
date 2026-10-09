@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { IconClose } from "./chart-icons";
 
 /** TradingView-style modal: title bar with ×, closes on backdrop click (Esc is handled by the page). */
@@ -69,6 +69,13 @@ export function Dropdown({
       window.removeEventListener("resize", onMove);
       window.removeEventListener("scroll", onMove, true);
     };
+  }, [pos]);
+  // a menu wider than the room right of its button moves left, so it stays on screen
+  useLayoutEffect(() => {
+    const el = menuRef.current;
+    if (!pos || !el) return;
+    const over = el.getBoundingClientRect().right - (window.innerWidth - 4);
+    if (over > 0) el.style.left = `${Math.max(4, pos.left - over)}px`;
   }, [pos]);
 
   return (

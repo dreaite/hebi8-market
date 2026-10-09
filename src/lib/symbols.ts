@@ -17,6 +17,9 @@ export type Timeframe = "D" | "W" | "M" | "Q";
 export const TIMEFRAMES: Timeframe[] = ["D", "W", "M", "Q"];
 export const TF_LABELS: Record<Timeframe, string> = { D: "日", W: "周", M: "月", Q: "季" };
 
+/** 「英伟达 NVDA · 周线」: the page title, and what a shared chart is called. */
+export const chartTitle = (name: string, ticker: string, tf: Timeframe) => `${name === ticker ? ticker : `${name} ${ticker}`} · ${TF_LABELS[tf]}线`;
+
 export function isSource(value: unknown): value is Source {
   return typeof value === "string" && (SOURCES as readonly string[]).includes(value);
 }
@@ -35,6 +38,15 @@ export function parseKey(key: string): { source: Source; ticker: string } {
   if (i <= 0 || !isSource(source) || !ticker) throw new Error(`无效的标的 key「${key}」`);
   if (source === "data" && !DATA_TICKER.test(ticker)) throw new Error(`无效的数据集 key「${key}」，应为 data:数据集/序列`);
   return { source, ticker };
+}
+
+/** Keys are URL-encoded in links (`yahoo%3ASPY`, `%3DBTC%2FGOLD`); Next decodes most of it already. */
+export function decodeChartKey(raw: string): string {
+  try {
+    return raw.includes("%") ? decodeURIComponent(raw) : raw;
+  } catch {
+    return raw;
+  }
 }
 
 export function isValidKey(key: unknown): key is string {

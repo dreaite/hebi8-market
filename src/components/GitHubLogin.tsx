@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { copyText } from "@/lib/copy-text";
 import type { HelpInfo } from "@/lib/help-info";
 import { IconExternal } from "./chart-icons";
 import type { ToastOptions } from "./UiProvider";
@@ -20,33 +21,6 @@ interface PendingLogin {
 let pendingLogin: PendingLogin | null = null;
 
 const currentLogin = () => (pendingLogin && pendingLogin.expiresAt > Date.now() ? pendingLogin : null);
-
-/** Copy without the async clipboard API, which plain-http origins (the tailnet) do not get. */
-function copyText(text: string): boolean {
-  const previous = document.activeElement as HTMLElement | null;
-  const area = document.createElement("textarea");
-  area.value = text;
-  area.setAttribute("readonly", "");
-  area.style.position = "fixed";
-  area.style.opacity = "0";
-  // next to the focused control, so it is inside the fullscreen element when there is one
-  (previous?.parentElement ?? document.body).appendChild(area);
-  area.select();
-  let ok = false;
-  try {
-    ok = document.execCommand("copy");
-  } catch {
-    ok = false;
-  }
-  area.remove();
-  // focus goes back into the drawer, so its keys (Esc, ?) keep working
-  previous?.focus();
-  if (!ok && navigator.clipboard) {
-    void navigator.clipboard.writeText(text);
-    return true;
-  }
-  return ok;
-}
 
 export const postJson = (url: string, body: unknown, method = "POST") =>
   fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" });

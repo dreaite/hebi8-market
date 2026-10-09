@@ -9,11 +9,13 @@ import type { AlertView } from "@/lib/alert-view";
 import { INDICATORS } from "@/indicators/catalog";
 import { compileFormula, formulaIndicatorName, formulaTemplate, isFormulaIndicator } from "@/indicators/formula-indicators";
 import type { BarsResponse } from "@/lib/api-types";
+import { BRAND } from "@/lib/brand";
 import { CHART_STYLES, type ChartPrefs, type ChartStyle, type FormulaDef, type ParamOverrides } from "@/lib/config";
+import { copyText } from "@/lib/copy-text";
 import { fmtAgo } from "@/lib/format";
 import { setChartContext } from "@/lib/page-context";
 import type { Prices } from "@/lib/series";
-import { SOURCE_LABELS, TF_LABELS, TIMEFRAMES, isSynthetic, tickerOf, type Timeframe } from "@/lib/symbols";
+import { SOURCE_LABELS, TF_LABELS, TIMEFRAMES, chartTitle, isSynthetic, tickerOf, type Timeframe } from "@/lib/symbols";
 import { synthName } from "@/lib/synth";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { useMediaQuery } from "@/lib/use-media-query";
@@ -22,6 +24,7 @@ import {
   IconArea,
   IconBack,
   IconBars,
+  IconCamera,
   IconCandles,
   IconCaret,
   IconCursor,
@@ -40,6 +43,7 @@ import {
   IconTrash,
   IconWatchlist,
 } from "./chart-icons";
+import { renderSnapshot, snapshotFileName } from "./chart-snapshot";
 import { COMPARE_COLORS, DRAW_GROUPS, DRAW_TOOLS, OPEN_DRAWINGS, RANGES, SUB_PANE_HEIGHT, type ChartControl, type IndicatorSpec } from "./chart-types";
 import { DrawToolGroups, GroupMenuItems } from "./DrawToolGroups";
 import { AlertDialog, AlertLoginDialog } from "./AlertDialog";
@@ -98,6 +102,8 @@ interface ChartViewProps {
   alerts: AlertView[];
   /** The latest price of this symbol, where a new alert starts */
   livePrice: number | null;
+  /** This chart at the instance's public address: copied, shared and printed under a snapshot */
+  shareUrl: string;
 }
 
 export function ChartView({
@@ -119,6 +125,7 @@ export function ChartView({
   vault,
   alerts,
   livePrice,
+  shareUrl,
 }: ChartViewProps) {
   const router = useRouter();
   const { openSearch, openHelp, searchCtx, toast } = useUi();
@@ -400,66 +407,6 @@ export function ChartView({
     else void document.documentElement.requestFullscreen().catch(() => setMessage("浏览器不允许全屏"));
   };
 
-  // TradingView hotkeys; the latest closure is kept in a ref so the listener is attached once
-  const onKeyRef = useRef<(e: KeyboardEvent) => void>(() => undefined);
-  useEffect(() => {
-    onKeyRef.current = (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return;
-      // Esc works from inside an editor's own input too; the search overlay stops its own Esc
-      if (e.key === "Escape") {
-        setDialog(null);
-        control.current?.closeDialog();
-        setDrawTool(null);
-        if (isEditable(e.target)) (e.target as HTMLElement).blur();
-        return;
-      }
-      if (isEditable(e.target) || dialog || control.current?.dialogOpen()) return;
-      if (e.altKey && !e.ctrlKey && !e.metaKey) {
-        const tool = DRAW_TOOLS.find((t) => t.code === e.code);
-        if (tool) {
-          e.preventDefault();
-          chooseTool(tool.name);
-        } else if (e.code === "KeyR") {
-          e.preventDefault();
-          control.current?.reset();
-        } else if (e.code === "KeyA") {
-          e.preventDefault();
-          openAlert();
-        }
-        return;
-      }
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const c = control.current;
-      switch (e.key) {
-        case "Delete":
-        case "Backspace":
-          if (c?.deleteSelected()) e.preventDefault();
-          return;
-        case "ArrowLeft":
-        case "ArrowRight":
-          if (e.shiftKey) return; // KLineChart's own Shift+arrow scroll
-          e.preventDefault();
-          c?.scroll(e.key === "ArrowLeft" ? -0.1 : 0.1);
-          return;
-        case "ArrowUp":
-        case "ArrowDown":
-          e.preventDefault();
-          c?.zoom(e.key === "ArrowUp" ? 1.25 : 0.8);
-          return;
-        case " ":
-          e.preventDefault();
-          (document.activeElement as HTMLElement | null)?.blur?.();
-          go(e.shiftKey ? -1 : 1);
-          return;
-      }
-    };
-  });
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => onKeyRef.current(e);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
   // what in-app feedback attaches about this chart
   useEffect(() => {
     setChartContext({
@@ -502,6 +449,126 @@ export function ChartView({
     ...(meta?.bench ? [`基准 ${benchLabel ?? names[meta.bench] ?? meta.bench}`] : []),
   ];
   const StyleIcon = STYLE_ICONS[chartStyle];
+  const title = chartTitle(name, ticker, dataTf);
+
+  // TradingView updates the tab title as the chart changes; the server only knows the saved timeframe
+  useEffect(() => {
+    document.title = `${title} · ${BRAND}`;
+  }, [title]);
+
+  // 拍快照, after TradingView's camera menu
+  const snapshot = () => {
+    const capture = control.current?.capture();
+    if (!capture || !bars?.length) return Promise.reject(new Error("图表还没加载好"));
+    return renderSnapshot(capture, {
+      title: name,
+      ticker,
+      subtitle,
+      tf: dataTf,
+      last: bars.at(-1) ?? null,
+      prevClose: bars.at(-2)?.close ?? null,
+      pricePrecision: data?.pricePrecision ?? 2,
+      url: shareUrl,
+      compare: compareWithHidden,
+      names,
+      labels,
+      hiddenIndicators,
+    });
+  };
+  const snapshotFailed = (err: Error) => toast(err.message || "生成图片失败", { kind: "error" });
+  const downloadImage = () =>
+    void snapshot().then((blob) => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = snapshotFileName(ticker);
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }, snapshotFailed);
+  // the async clipboard (and with it any image copy) exists only on https or localhost, not on the tailnet's http
+  const canCopyImage = () => window.isSecureContext && typeof ClipboardItem !== "undefined" && Boolean(navigator.clipboard?.write);
+  const copyImage = () => {
+    if (!canCopyImage()) return toast("浏览器只在 HTTPS 页面允许复制图片，请用「下载图片」");
+    // the pending picture goes into the clipboard item at once: Safari only allows the write during the click
+    void navigator.clipboard.write([new ClipboardItem({ "image/png": snapshot() })]).then(() => toast("已复制图片"), snapshotFailed);
+  };
+  const copyLink = () => (copyText(shareUrl) ? toast("已复制图表链接") : toast("复制失败", { kind: "error" }));
+  // like TradingView, X gets the link and a line of text: an intent cannot carry a picture
+  const postToX = () => window.open(`https://x.com/intent/post?${new URLSearchParams({ text: `${title} · ${BRAND}`, url: shareUrl })}`, "_blank", "noopener");
+  const canShareImage = () => typeof navigator.canShare === "function" && navigator.canShare({ files: [new File([], "chart.png", { type: "image/png" })] });
+  const shareImage = () =>
+    void snapshot()
+      .then((blob) => navigator.share({ files: [new File([blob], snapshotFileName(ticker), { type: "image/png" })], title, text: `${title} · ${BRAND} ${shareUrl}` }))
+      .catch((err: Error) => err.name !== "AbortError" && snapshotFailed(err));
+
+  // TradingView hotkeys; the latest closure is kept in a ref so the listener is attached once
+  const onKeyRef = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  useEffect(() => {
+    onKeyRef.current = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      // Esc works from inside an editor's own input too; the search overlay stops its own Esc
+      if (e.key === "Escape") {
+        setDialog(null);
+        control.current?.closeDialog();
+        setDrawTool(null);
+        if (isEditable(e.target)) (e.target as HTMLElement).blur();
+        return;
+      }
+      if (isEditable(e.target) || dialog || control.current?.dialogOpen()) return;
+      // TradingView's snapshot keys: Ctrl/Cmd+Alt+S saves the picture, Ctrl/Cmd+Shift+S copies it, Alt+S copies the link
+      if (e.code === "KeyS" && (e.ctrlKey || e.metaKey) && e.altKey !== e.shiftKey) {
+        e.preventDefault();
+        if (e.altKey) downloadImage();
+        else copyImage();
+        return;
+      }
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        const tool = DRAW_TOOLS.find((t) => t.code === e.code);
+        if (tool) {
+          e.preventDefault();
+          chooseTool(tool.name);
+        } else if (e.code === "KeyR") {
+          e.preventDefault();
+          control.current?.reset();
+        } else if (e.code === "KeyA") {
+          e.preventDefault();
+          openAlert();
+        } else if (e.code === "KeyS") {
+          e.preventDefault();
+          copyLink();
+        }
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const c = control.current;
+      switch (e.key) {
+        case "Delete":
+        case "Backspace":
+          if (c?.deleteSelected()) e.preventDefault();
+          return;
+        case "ArrowLeft":
+        case "ArrowRight":
+          if (e.shiftKey) return; // KLineChart's own Shift+arrow scroll
+          e.preventDefault();
+          c?.scroll(e.key === "ArrowLeft" ? -0.1 : 0.1);
+          return;
+        case "ArrowUp":
+        case "ArrowDown":
+          e.preventDefault();
+          c?.zoom(e.key === "ArrowUp" ? 1.25 : 0.8);
+          return;
+        case " ":
+          e.preventDefault();
+          (document.activeElement as HTMLElement | null)?.blur?.();
+          go(e.shiftKey ? -1 : 1);
+          return;
+      }
+    };
+  });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => onKeyRef.current(e);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const shownError = fetching && !data ? null : error;
 
   const addToList = async (group: string) => {
@@ -716,6 +783,36 @@ export function ChartView({
         <button type="button" onClick={() => setReloadTick((n) => n + 1)} disabled={loading || fetching} className="tb-btn" title={`刷新 · ${loading || fetching ? "加载中…" : syncText}`} aria-label="刷新">
           <IconRefresh className={loading || fetching ? "animate-spin" : ""} />
         </button>
+        <Dropdown label={<IconCamera />} title="拍快照" className="tb-btn" menuClassName="min-w-[13rem]">
+          {(close) => {
+            const item = (label: string, keys: string, run: () => void, disabled?: string) => (
+              <button
+                role="menuitem"
+                className="menu-item flex items-center gap-2 disabled:cursor-default disabled:opacity-50"
+                disabled={Boolean(disabled)}
+                title={disabled}
+                onClick={() => {
+                  close();
+                  run();
+                }}
+              >
+                <span className="flex-1">{label}</span>
+                {keys && <span className="pl-4 text-[11px] text-muted">{keys}</span>}
+              </button>
+            );
+            const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
+            const noChart = bars?.length ? undefined : "图表还没加载好";
+            return (
+              <>
+                {item("下载图片", mac ? "⌘⌥S" : "Ctrl+Alt+S", downloadImage, noChart)}
+                {item("复制图片", mac ? "⇧⌘S" : "Ctrl+Shift+S", copyImage, noChart ?? (canCopyImage() ? undefined : "浏览器只在 HTTPS 页面允许复制图片"))}
+                {item("复制链接", mac ? "⌥S" : "Alt+S", copyLink)}
+                {item("在 X 上分享", "", postToX)}
+                {canShareImage() && item("分享…", "", shareImage, noChart)}
+              </>
+            );
+          }}
+        </Dropdown>
         {/* the site header (and its "?") is hidden in fullscreen */}
         {fullscreen && (
           <button type="button" onClick={() => openHelp()} className="tb-btn" title="帮助与反馈 · ?" aria-label="帮助与反馈">
