@@ -7,7 +7,7 @@ import { fmtAgo } from "@/lib/format";
 import { parseTvSources } from "@/lib/tv-drawings";
 import { parseTvList, planTvImport, type ExportResult, type ImportMode } from "@/lib/tv-import";
 import type { TvLayout } from "@/lib/tv-layout";
-import { chartHref } from "./UiProvider";
+import { LoginButton, chartHref } from "./UiProvider";
 
 const body = "flex flex-col gap-3 px-4 py-3 text-xs";
 const th = "whitespace-nowrap px-2 py-1 text-left text-[11px] font-normal text-muted";
@@ -16,6 +16,14 @@ const td = "border-t border-line px-2 py-1";
 const STATUS = { new: "新增", exists: "已在自选", duplicate: "重复，跳过" } as const;
 
 const fileStem = (name: string) => name.replace(/\.[^.]*$/, "").trim();
+
+/** Beside a panel's first button when the viewer may not write: why it is grey, and the way in. */
+const loginHint = (
+  <span className="flex items-center gap-2 text-muted">
+    登录后才能导入
+    <LoginButton />
+  </span>
+);
 
 // ---------------------------------------------------------------------------- watchlist in
 
@@ -144,7 +152,7 @@ export function TvListImport({ watched, canWrite }: { watched: { name: string; k
             取消
           </button>
         )}
-        <span className="text-muted">{pending ? "导入中…" : confirming ? "现有分组会被整个换掉，文件里没有的标的会从自选里移除。" : status}</span>
+        {canWrite ? <span className="text-muted">{pending ? "导入中…" : confirming ? "现有分组会被整个换掉，文件里没有的标的会从自选里移除。" : status}</span> : loginHint}
       </div>
     </div>
   );
@@ -296,6 +304,7 @@ export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWr
             <button type="button" className="btn btn-secondary" disabled={!canWrite || pending || !sessionid.trim() || !sign.trim()} onClick={list}>
               获取布局
             </button>
+            {!canWrite && loginHint}
             {layouts && !layouts.length && <span className="text-muted">这个账号下没有布局</span>}
           </div>
           {layouts && layouts.length > 0 && (
@@ -336,6 +345,7 @@ export function TvDrawingsImport({ groups, canWrite }: { groups: string[]; canWr
         <button type="button" className="btn btn-secondary" disabled={!canWrite || pending || (source === "layout" ? !target.trim() || !sessionid.trim() || !sign.trim() : !json.trim())} onClick={load}>
           {source === "layout" ? "取画线并预览" : "预览"}
         </button>
+        {!canWrite && source === "json" && loginHint}
         <span className="text-muted">{pending ? "处理中…" : error && <span className="text-down">{error}</span>}</span>
       </div>
 

@@ -26,7 +26,6 @@ export default async function SettingsPage() {
   return (
     <main className="mx-auto flex w-full max-w-[960px] flex-col gap-5 px-5 py-5">
       <h1 className="text-sm font-medium">设置</h1>
-      {!viewer.canWrite && <p className="text-xs text-muted">登录后才能导入到自己的列表；下面可以导出示例列表。</p>}
 
       <section className={card}>
         <div className={head}>
