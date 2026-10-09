@@ -5,6 +5,7 @@
  * the built-in tools, so drawings persist and follow every timeframe the same way.
  */
 import {
+  getOverlayClass,
   registerOverlay,
   utils,
   type Chart,
@@ -16,6 +17,7 @@ import {
   type OverlayTemplate,
   type Point,
 } from "klinecharts";
+import { movePrices, type PriceScale } from "./drawing-scale";
 import { lineOf, withAlpha } from "./drawing-style";
 
 type Params = OverlayCreateFiguresCallbackParams<unknown>;
@@ -75,6 +77,11 @@ function arrowHead(from: C, to: C, size: number): C[] {
   const wing = (a: number) => ({ x: to.x - size * Math.cos(angle + a), y: to.y - size * Math.sin(angle + a) });
   return [wing(0.45), to, wing(-0.45)];
 }
+
+// ---------------------------------------------------------------------------- price scale
+
+const axisScale = (yAxis?: { name: string } | null): PriceScale => (yAxis?.name === "logarithm" ? "log" : "linear");
+const mainScale = () => axisScale(activeChart?.getYAxes({ paneId: "candle_pane" })[0]);
 
 // ---------------------------------------------------------------------------- labels and numbers
 
@@ -880,9 +887,42 @@ function arrowMark(name: string, up: boolean): Template {
   };
 }
 
+/**
+ * KLineChart drags a whole drawing by adding the price difference to every point, which bends it
+ * on a log axis and can push it to zero and below. Move it in the axis' space instead (by the
+ * ratio on a log one), never to a price that cannot be drawn there.
+ */
+function patchMoves() {
+  type Moving = Overlay & {
+    _prevPressedPoint: Partial<Point> | null;
+    _prevPressedPoints: Partial<Point>[];
+    eventPressedOtherMove: (point: Partial<Point>, store: unknown) => void;
+  };
+  const proto = Object.getPrototypeOf(getOverlayClass("segment")!.prototype) as Moving;
+  const moveAll = proto.eventPressedOtherMove;
+  proto.eventPressedOtherMove = function (this: Moving, point, store) {
+    const before = this.points;
+    moveAll.call(this, point, store);
+    const from = this._prevPressedPoint?.value;
+    if (from === undefined || point.value === undefined) return;
+    const space = mainScale();
+    const values = movePrices(
+      this._prevPressedPoints.map((pt) => pt.value),
+      from,
+      point.value,
+      space,
+      space === "log",
+    );
+    this.points.forEach((pt, i) => (pt.value = values ? values[i] : before[i]?.value));
+    // a regression's handles go back onto the fit of its new bars
+    this.performEventPressedMove?.({ currentStep: this.currentStep, mode: this.mode, points: this.points, performPointIndex: 0, performPoint: this.points[0] });
+  };
+}
+
 let registered = false;
 export function registerDrawingTemplates() {
   if (registered) return;
   registered = true;
   for (const t of [...lines, ...fib, ...patterns, ...measure, ...shapes, ...annotation]) registerOverlay(t);
+  patchMoves();
 }
