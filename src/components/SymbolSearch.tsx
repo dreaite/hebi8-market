@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { analyzeExpression, directKey, isCJK, isExpression, localSearch, mergeResults, sameSpread, suggestGroup, type SearchContext, type SearchResult } from "@/lib/search";
+import { analyzeExpression, directKey, insertText, isCJK, isExpression, localSearch, mergeResults, sameSpread, suggestGroup, type SearchContext, type SearchResult } from "@/lib/search";
 import { isSynthetic, tickerOf } from "@/lib/symbols";
 import { synthOperand } from "@/lib/synth";
 import { displayName } from "@/lib/wellknown";
@@ -41,6 +41,18 @@ interface SymbolSearchProps {
   /** pick mode: buttons on the highlighted row, like TradingView's compare dialog */
   pickActions?: { id: string; label: string }[];
 }
+
+/** TradingView's spread buttons; `-` gets spaces so it is never read as part of a ticker like BRK-B */
+const OPERATORS = [
+  { text: "/", label: "÷", title: "除，比价：BTC/SPX" },
+  { text: "*", label: "×", title: "乘：2*SPY" },
+  { text: "+", label: "+", title: "加：SPY+QQQ" },
+  { text: " - ", label: "−", title: "减：SPY - QQQ" },
+  { text: "^", label: "^", title: "乘方：SPY^2" },
+  { text: "(", label: "(", title: "左括号：2*(SPY - QQQ)" },
+  { text: ")", label: ")", title: "右括号" },
+];
+const EXAMPLES = ["BTC/GOLD", "SPY/QQQ", "2*(SPY - QQQ)"];
 
 type Section = "key" | "watchlist" | "common" | "external";
 const sectionOf = (r: SearchResult): Section =>
@@ -147,6 +159,18 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
   // an expression's text is no search term worth keeping as an alias
   const detail = (r: SearchResult, group: string, action: string | undefined): PickDetail => ({ key: r.key, name: r.name, group, query: expr ? "" : trimmed, inWatchlist: groupOf(r), action });
 
+  /** Typed at the caret, over the selection if there is one; the input keeps focus */
+  const typeAt = (text: string, start: number, end: number) => {
+    const next = insertText(query, start, end, text);
+    caretTo.current = next.caret;
+    setQuery(next.text);
+    setCaret(next.caret);
+  };
+  const typeOperator = (text: string) => {
+    const input = inputRef.current!;
+    typeAt(text, input.selectionStart ?? query.length, input.selectionEnd ?? query.length);
+  };
+
   /** The operand at the caret becomes the chosen key; the search stays open for the next one */
   const replace = (r: SearchResult) => {
     const op = expr?.active;
@@ -231,7 +255,7 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
 
   return (
     <div role="combobox" aria-expanded={rows.length > 0} aria-haspopup="listbox" aria-controls={listId} aria-owns={listId} className="flex flex-col text-xs">
-      <div className="flex items-center gap-2 border-b border-line px-3">
+      <div className="flex flex-wrap items-center gap-x-2 border-b border-line px-3">
         <span className="text-muted" aria-hidden>
           ⌕
         </span>
@@ -251,10 +275,41 @@ export function SymbolSearch({ mode, ctx, readOnly = false, initialQuery = "", p
           autoFocus
           spellCheck={false}
           autoComplete="off"
-          className="h-10 flex-1 bg-transparent text-sm outline-none"
+          className="h-10 min-w-0 flex-[1_1_10rem] bg-transparent text-sm outline-none"
         />
-        {hint && <span className="hidden text-[11px] text-muted sm:inline">{hint}</span>}
+        {/* on a narrow screen the buttons wrap under the input rather than squeezing it */}
+        <span className="flex shrink-0 gap-1 py-1.5">
+          {OPERATORS.map((op) => (
+            <button
+              key={op.text}
+              type="button"
+              tabIndex={-1}
+              title={op.title}
+              aria-label={op.title}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => typeOperator(op.text)}
+              className="h-[22px] min-w-[22px] rounded border border-line px-1 font-mono text-[12px] leading-none text-muted hover:border-muted hover:text-fg"
+            >
+              {op.label}
+            </button>
+          ))}
+        </span>
+        {/* the hint, not the buttons, goes to its own line when the row is full */}
+        {hint && <span className="ml-auto hidden pb-1.5 text-[11px] text-muted sm:inline">{hint}</span>}
       </div>
+      {!trimmed && (
+        <div className="px-3 pt-2 text-[11px] text-muted">
+          比价试试：
+          {EXAMPLES.map((ex, i) => (
+            <span key={ex}>
+              {i > 0 && " · "}
+              <button type="button" tabIndex={-1} onMouseDown={(e) => e.preventDefault()} onClick={() => typeAt(ex, 0, query.length)} className="font-mono text-fg hover:text-accent hover:underline">
+                {ex}
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <ul id={listId} role="listbox" className="max-h-[60vh] overflow-y-auto py-1">
         {items.map(({ r, section, header }, i) => {
           const isActive = i === active;

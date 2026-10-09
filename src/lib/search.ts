@@ -111,6 +111,11 @@ export function sameSpread(key: string, keys: string[], aliases: Record<string, 
   return keys.find((k) => isSynthetic(k) && canonicalSynth(k, aliases) === canon);
 }
 
+/** `insert` typed over the selection `start..end` of `text`: the new text and where the caret goes. */
+export function insertText(text: string, start: number, end: number, insert: string): { text: string; caret: number } {
+  return { text: text.slice(0, start) + insert + text.slice(end), caret: start + insert.length };
+}
+
 export interface ExprOperand {
   text: string;
   /** Position in the query, quotes included */

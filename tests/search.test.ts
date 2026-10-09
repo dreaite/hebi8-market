@@ -6,6 +6,7 @@ import {
   filterTv,
   filterYahoo,
   groupLabel,
+  insertText,
   isExpression,
   localSearch,
   looksLikeYield,
@@ -378,5 +379,14 @@ describe("displayName of a spread", () => {
   it("is short, like TradingView", () => {
     expect(displayName("=yahoo:AAPL/yahoo:MSFT")).toBe("AAPL/MSFT");
     expect(displayName("=BTC/GOLD")).toBe("BTC/GOLD");
+  });
+});
+
+describe("insertText", () => {
+  it("types at the caret and over a selection", () => {
+    expect(insertText("BTC", 3, 3, "/")).toEqual({ text: "BTC/", caret: 4 });
+    expect(insertText("SPYQQQ", 3, 3, " - ")).toEqual({ text: "SPY - QQQ", caret: 6 });
+    expect(insertText("2*SPY", 2, 5, "(")).toEqual({ text: "2*(", caret: 3 });
+    expect(insertText("", 0, 0, "BTC/GOLD")).toEqual({ text: "BTC/GOLD", caret: 8 });
   });
 });
