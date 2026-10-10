@@ -11,6 +11,7 @@ import { runAlerts } from "./alerts";
 import { loadDaily } from "./bars";
 import { allItems, findItem, type Config } from "./config";
 import type { Bar } from "./series";
+import { QUOTE_ROUND_MS, QUOTE_SLOW_MS, quoteIsCurrent } from "./session";
 import { adapters } from "./sources";
 import type { Quote, QuoteSession } from "./sources/types";
 import { computeStats, type Stats } from "./stats";
@@ -21,8 +22,8 @@ import { loadVaults, type VaultConfig } from "./sync";
 import { localDay } from "./time";
 import { readConfig, readConfigSafe, vaultDir } from "./vault";
 
-export const ROUND_MS = 5 * 60 * 1000;
-const SLOW_MS = 60 * 60 * 1000;
+export const ROUND_MS = QUOTE_ROUND_MS;
+const SLOW_MS = QUOTE_SLOW_MS;
 /** A timer that fires a little early still counts as the next round. */
 const SLACK_MS = 30 * 1000;
 /** Failures in a row before a source is only asked hourly. */
@@ -143,8 +144,10 @@ export function withQuote(bars: Bar[], quote: QuoteRow | undefined, timeZone: st
   const ownDay = seen?.t === t ? seen : null;
   const highs = [quote.price, quote.dayHigh, same?.h, ownDay?.h].filter((v): v is number => v !== undefined);
   const lows = [quote.price, quote.dayLow, same?.l, ownDay?.l].filter((v): v is number => v !== undefined);
+  // the day's volume only grows: a quote that lags behind the synced bar does not take it back
+  const volumes = [quote.dayVolume, same?.v].filter((v): v is number => v != null);
   const o = quote.dayOpen ?? same?.o ?? ownDay?.o ?? quote.price;
-  const bar: Bar = { t, o, h: Math.max(o, ...highs), l: Math.min(o, ...lows), c: quote.price, v: quote.dayVolume ?? same?.v ?? null, adj: 1 };
+  const bar: Bar = { t, o, h: Math.max(o, ...highs), l: Math.min(o, ...lows), c: quote.price, v: volumes.length > 0 ? Math.max(...volumes) : null, adj: 1 };
   return same ? [...bars.slice(0, -1), bar] : [...bars, bar];
 }
 
@@ -220,6 +223,7 @@ export async function quoteRound(now = Date.now(), vaults: VaultConfig[] = loadV
   writeQuotes(rows);
   const read = liveReader();
   for (const v of vaults) await runAlerts(v, () => readConfig(v.dir), "quotes", read);
+  for (const id of state.live.keys()) if (!vaults.some((v) => v.id === id)) state.live.delete(id);
   for (const v of vaults) liveStats(v.id, v.config);
   return rows;
 }
@@ -272,9 +276,9 @@ export function symbolStatus(key: string, aliases: Record<string, string> = {}, 
   return { syncedAt: row?.syncedAt ?? null, syncError: row?.syncError ?? null, quotedAt: quote?.fetchedAt ?? null, session: currentSession(quote) };
 }
 
-/** A quote's session while polling keeps it current: three rounds for open markets and crypto, an hour and two rounds otherwise. */
+/** A quote's session while polling keeps it current. */
 function currentSession(quote: QuoteRow | undefined): QuoteSession | null {
-  return quote && Date.now() - quote.fetchedAt < (FAST.includes(quote.session) ? 3 * ROUND_MS : SLOW_MS + 2 * ROUND_MS) ? quote.session : null;
+  return quote && quoteIsCurrent(quote.session, quote.fetchedAt, Date.now()) ? quote.session : null;
 }
 
 /**

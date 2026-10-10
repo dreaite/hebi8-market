@@ -233,6 +233,12 @@ describe("quote polling", () => {
     expect(withQuote(daily, { ...quote, time: day2 + 600 }, "UTC", null).at(-1)).toEqual({ t: day2, o: 99, h: 105, l: 98.5, c: 104, v: 12345, adj: 1 });
     // an open outside the reported range still lies inside the bar
     expect(withQuote(daily, { ...quote, dayOpen: 106 }, "UTC", null).at(-1)).toMatchObject({ o: 106, h: 106 });
+    // the day's volume never goes back: a quote that lags behind the synced bar keeps the bar's
+    const synced = [daily[0], { ...daily[1], v: 20000 }];
+    expect(withQuote(synced, { ...quote, time: day2 + 600 }, "UTC", null).at(-1)?.v).toBe(20000);
+    expect(withQuote(synced, { ...quote, time: day2 + 600, dayVolume: 25000 }, "UTC", null).at(-1)?.v).toBe(25000);
+    // a new day starts from the quote's own volume
+    expect(withQuote(synced, quote, "UTC", null).at(-1)?.v).toBe(12345);
   });
 
   it("reads Binance's UTC trading day: open, high, low and volume of the daily bar", async () => {
@@ -531,10 +537,11 @@ describe("quote polling", () => {
       const wednesday = (T0 + 2 * DAY) * 1000;
       const day = await status("D", `&with=${encodeURIComponent(SPY)}`);
       expect(day).toMatchObject({ session: "always", quotedAt: quote.fetchedAt });
-      expect(day.tail).toEqual({ bar: { timestamp: wednesday, open: 102, high: 151, low: 98, close: 150, volume: 7, bench: 410 }, refs: { [SPY]: { o: 410, h: 410, l: 410, c: 410, v: 1 } }, lastDay: wednesday });
+      // `prev` lets a chart that stopped before Tuesday see that it missed a bar
+      expect(day.tail).toEqual({ bar: { timestamp: wednesday, open: 102, high: 151, low: 98, close: 150, volume: 7, bench: 410 }, prev: wednesday - DAY * 1000, refs: { [SPY]: { o: 410, h: 410, l: 410, c: 410, v: 1 } }, lastDay: wednesday });
       // the week and the month so far: Monday's open, the range of all three days, the quote's close
       const week = { open: 100, high: 151, low: 98, close: 150, volume: 9, bench: 410 };
-      expect((await status("W")).tail).toMatchObject({ bar: { timestamp: T0 * 1000, ...week }, lastDay: wednesday });
+      expect((await status("W")).tail).toMatchObject({ bar: { timestamp: T0 * 1000, ...week }, prev: null, lastDay: wednesday });
       expect((await status("M")).tail).toMatchObject({ bar: { timestamp: Date.UTC(2026, 0, 1), ...week }, lastDay: wednesday });
       expect((await status("Q")).tail).toMatchObject({ bar: { timestamp: Date.UTC(2026, 0, 1), ...week }, lastDay: wednesday });
       expect((await GET(new NextRequest("http://h/api/status?key=nope"))).status).toBe(400);

@@ -15,6 +15,7 @@ import { copyText } from "@/lib/copy-text";
 import { SESSION_LABELS, fmtAgo } from "@/lib/format";
 import { setChartContext } from "@/lib/page-context";
 import type { Prices } from "@/lib/series";
+import { QUOTE_ROUND_MS } from "@/lib/session";
 import { SOURCE_LABELS, TF_LABELS, TIMEFRAMES, chartTitle, isSynthetic, tickerOf, type Timeframe } from "@/lib/symbols";
 import { synthName } from "@/lib/synth";
 import { useLocalStorage } from "@/lib/use-local-storage";
@@ -75,8 +76,6 @@ type DialogState =
   | { kind: "alert"; alert: AlertView | null; price: number | null }
   | null;
 
-/** src/lib/quotes.ts polls watched symbols every 5 minutes; the chart reads its status and last bar again just after a round */
-const QUOTE_ROUND_MS = 5 * 60_000;
 
 /** The status strip's line: the exchange (or 按需合成), the quote's session, the last day, how fresh. */
 function statusLine(meta: BarsSymbol): string {
@@ -274,25 +273,30 @@ export function ChartView({
     return () => controller.abort();
   }, [symbolKey, tf, prices, withParam, reloadTick]);
 
-  // The status strip follows the quote rounds while the page is in view, and catches up when it comes back.
-  const symbol = data?.symbol;
+  // The status strip and the last bar follow the quote rounds while the page is in view, and catch
+  // up when it comes back: read just after each round instead of loading the bars again.
   useEffect(() => {
-    if (!symbol) return;
+    if (!data) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const controller = new AbortController();
+    // one request at a time: an answer that was overtaken by a later one must not put older prices back
+    let request: AbortController | undefined;
     const schedule = (s: SymbolStatus) => {
       const due = (s.quotedAt ?? 0) + QUOTE_ROUND_MS + 20_000 - Date.now();
       timer = setTimeout(poll, due > 0 ? due : QUOTE_ROUND_MS);
     };
     const poll = () => {
       clearTimeout(timer);
+      request?.abort();
       if (document.visibilityState !== "visible") return;
-      const query = new URLSearchParams({ key: symbol.key, tf: dataTf, prices });
+      request = new AbortController();
+      const query = new URLSearchParams({ key: data.symbol.key, tf: dataTf, prices });
       if (withParam) query.set("with", withParam);
-      fetch(`/api/status?${query}`, { signal: controller.signal })
+      fetch(`/api/status?${query}`, { signal: request.signal })
         .then(async (res) => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const s = (await res.json()) as StatusResponse;
+          // the page slept through more than one bar: the tail alone would leave a hole, so load them all
+          if (s.tail?.prev != null && s.tail.prev > (data.bars.at(-1)?.timestamp ?? 0)) return setReloadTick((n) => n + 1);
           setLive(s);
           schedule(s);
         })
@@ -300,14 +304,14 @@ export function ChartView({
           if (err.name !== "AbortError") timer = setTimeout(poll, QUOTE_ROUND_MS);
         });
     };
-    schedule(symbol);
+    schedule(data.symbol);
     document.addEventListener("visibilitychange", poll);
     return () => {
       clearTimeout(timer);
-      controller.abort();
+      request?.abort();
       document.removeEventListener("visibilitychange", poll);
     };
-  }, [symbol, dataTf, prices, withParam]);
+  }, [data, dataTf, prices, withParam]);
 
   // Space opens the next symbol, so warm its bars up
   const nextKey = neighbour(1)?.key ?? null;

@@ -106,14 +106,14 @@ const HINTS = {
   spark: "近两年的周收盘走势",
 };
 
-/** Under or beside a quoted price: its session while the quote is current and how old it is, 「盘后 · 40 分钟前」 or just 「3 小时前」. */
+/** Under or beside a quoted price: its session while the quote is current and how old it is, 「盘后 · 40 分钟前」, just 「休市」, or just 「3 小时前」 once it is stale. */
 function QuoteTag({ quote, className = "" }: { quote: SymbolStatus; className?: string }) {
   const session = quote.session && SESSION_LABELS[quote.session];
   const how = !quote.session ? "盘中每 5 分钟、其余时段每小时取一次" : quote.session === "open" || quote.session === "always" ? "每 5 分钟取一次" : "盘中以外每小时取一次";
   return (
     <span className={`text-[11px] whitespace-nowrap text-muted ${className}`} title={`${session ? `${session} · ` : ""}${fmtAgo(quote.quotedAt, "报价")}\n${how}，涨跌幅按这个价算`}>
-      {session && `${session} · `}
-      {fmtAgo(quote.quotedAt, "")}
+      {/* a closed market's price does not age: the time stays in the title */}
+      {quote.session === "closed" ? session : `${session ? `${session} · ` : ""}${fmtAgo(quote.quotedAt, "")}`}
     </span>
   );
 }

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { barCloseAt, fmtCountdown, sessionEnd, type SessionClock } from "@/lib/session";
+import { barCloseAt, fmtCountdown, quoteIsCurrent, sessionEnd, type SessionClock } from "@/lib/session";
 
 const utc = (s: string) => Date.parse(`${s}Z`);
 const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString().slice(0, 16));
 
 describe("the countdown to the bar's close", () => {
   it("around the clock, bars end with the UTC day, the week on Monday, the month and the quarter", () => {
-    const crypto: SessionClock = { session: "always", quotedAt: null, hours: "24x7", timezone: "UTC" };
     const now = utc("2026-10-07T13:20:00"); // a Wednesday
+    const crypto: SessionClock = { session: "always", quotedAt: now - 60_000, hours: "24x7", timezone: "UTC" };
     expect(iso(barCloseAt("D", now, crypto))).toBe("2026-10-08T00:00");
     expect(iso(barCloseAt("W", now, crypto))).toBe("2026-10-12T00:00");
     expect(iso(barCloseAt("M", now, crypto))).toBe("2026-11-01T00:00");
@@ -47,13 +47,45 @@ describe("the countdown to the bar's close", () => {
     expect(barCloseAt("D", utc("2026-10-07T20:01:00"), { ...nyse, quotedAt: utc("2026-10-07T19:58:00") })).toBeNull();
   });
 
+  it("stops on its own once the quote is no longer current, whatever the page last heard", () => {
+    const now = utc("2026-10-07T15:00:00");
+    const nyse: SessionClock = { session: "open", quotedAt: now, hours: "0930-1600", timezone: "America/New_York" };
+    const crypto: SessionClock = { session: "always", quotedAt: now, hours: "24x7", timezone: "UTC" };
+    for (const tf of ["D", "W", "M", "Q"] as const) {
+      for (const clock of [nyse, crypto]) {
+        expect(barCloseAt(tf, now + 14 * 60_000, clock)).not.toBeNull();
+        expect(barCloseAt(tf, now + 16 * 60_000, clock)).toBeNull();
+      }
+    }
+    expect(quoteIsCurrent("closed", now, now + 69 * 60_000)).toBe(true);
+    expect(quoteIsCurrent("post", now, now + 71 * 60_000)).toBe(false);
+  });
+
+  it("takes the hours a session string gives for the weekday", () => {
+    // a future that stops an hour early on Fridays (TradingView counts days from Sunday = 1)
+    const cme = "1700-1600:2345|1700-1500:6";
+    const at = (iso: string): SessionClock => ({ session: "open", quotedAt: utc(iso), hours: cme, timezone: "America/Chicago" });
+    // Thursday 10:00 in Chicago: today at 16:00; the week ends on Friday at 15:00
+    expect(iso(barCloseAt("D", utc("2026-10-08T15:00:00"), at("2026-10-08T15:00:00")))).toBe("2026-10-08T21:00");
+    expect(iso(barCloseAt("W", utc("2026-10-08T15:00:00"), at("2026-10-08T15:00:00")))).toBe("2026-10-09T20:00");
+    // Thursday evening is Friday's session
+    expect(iso(barCloseAt("D", utc("2026-10-08T23:00:00"), at("2026-10-08T23:00:00")))).toBe("2026-10-09T20:00");
+    // the dollar index: Monday's session is spelled out apart from the other days'
+    const dxy = "1900-1900:3456|1700F-1900:2";
+    expect(sessionEnd(dxy, 1)).toEqual({ hh: 19, mm: 0 });
+    expect(sessionEnd(dxy, 3)).toEqual({ hh: 19, mm: 0 });
+    expect(sessionEnd(cme, 5)).toEqual({ hh: 15, mm: 0 });
+    expect(sessionEnd(cme, 4)).toEqual({ hh: 16, mm: 0 });
+    // a day by name wins over the hours that cover it by default
+    expect(sessionEnd("0930-1600|0930-1300:6", 5)).toEqual({ hh: 13, mm: 0 });
+    expect(sessionEnd("0930-1600|0930-1300:6", 2)).toEqual({ hh: 16, mm: 0 });
+  });
+
   it("reads the closing time of TradingView's session strings", () => {
-    expect(sessionEnd("0930-1600")).toEqual({ hh: 16, mm: 0 });
-    expect(sessionEnd("1700-1600:23456|1700-1500:6")).toEqual({ hh: 16, mm: 0 });
-    expect(sessionEnd("0930-1130,1300-1500")).toEqual({ hh: 15, mm: 0 });
-    expect(sessionEnd("0930-1130E0925-1131S1300-1500E1300-1501")).toEqual({ hh: 15, mm: 0 });
-    expect(sessionEnd("1900-1900:3456|1700F-1900:2")).toEqual({ hh: 19, mm: 0 });
-    expect(sessionEnd("24x7")).toBeNull();
+    expect(sessionEnd("0930-1600", 3)).toEqual({ hh: 16, mm: 0 });
+    expect(sessionEnd("0930-1130,1300-1500", 3)).toEqual({ hh: 15, mm: 0 });
+    expect(sessionEnd("0930-1130E0925-1131S1300-1500E1300-1501", 3)).toEqual({ hh: 15, mm: 0 });
+    expect(sessionEnd("24x7", 3)).toBeNull();
   });
 
   it("formats like TradingView", () => {

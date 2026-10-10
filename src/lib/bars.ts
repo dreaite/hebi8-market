@@ -84,6 +84,7 @@ export function chartTail({ daily, bars, refs }: ChartData): BarsTail | null {
   if (i < 0) return null;
   return {
     bar: bars[i],
+    prev: bars[i - 1]?.timestamp ?? null,
     refs: Object.fromEntries(Object.entries(refs).map(([k, r]) => [k, { o: r.o?.[i] ?? null, h: r.h?.[i] ?? null, l: r.l?.[i] ?? null, c: r.c[i], v: r.v?.[i] ?? null }])),
     lastDay: daily[daily.length - 1].t * 1000,
   };

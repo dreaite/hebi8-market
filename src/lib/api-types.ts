@@ -28,6 +28,8 @@ export interface RefPoint {
 /** The chart's last bar as it is now, with the other symbols at it: what a quote round changes */
 export interface BarsTail {
   bar: ChartBar;
+  /** The bar before it (ms), null when it is the only one: a chart whose last bar is older than this missed bars in between */
+  prev: number | null;
   refs: Record<string, RefPoint>;
   /** The last daily bar's day (ms, UTC midnight) */
   lastDay: number;
