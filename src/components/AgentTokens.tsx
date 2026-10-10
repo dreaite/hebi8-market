@@ -103,7 +103,8 @@ export function AgentTokens({ tokens, endpoint, canWrite }: { tokens: AgentToken
 
       {made && (
         <div className="flex flex-col gap-3 rounded border border-line p-3">
-          <p>
+          {/* a name is free text: one long word breaks instead of widening the page */}
+          <p className="wrap-anywhere">
             「{made.name}」的令牌只显示这一次，这里存的只是它的哈希。离开这一页之前把它交给 agent。
             <button type="button" className="btn ml-2 h-6 px-1.5" onClick={() => setMade(null)}>
               收起
@@ -131,7 +132,7 @@ export function AgentTokens({ tokens, endpoint, canWrite }: { tokens: AgentToken
             <tbody>
               {tokens.map((t) => (
                 <tr key={t.id}>
-                  <td className={td}>{t.name}</td>
+                  <td className={`${td} min-w-16 wrap-anywhere`}>{t.name}</td>
                   <td className={td}>{t.write ? "可写" : "只读"}</td>
                   <td className={`${td} whitespace-nowrap text-muted`}>{t.created}</td>
                   <td className={`${td} whitespace-nowrap text-muted`}>{t.used ?? "还没用过"}</td>
