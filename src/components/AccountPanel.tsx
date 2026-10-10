@@ -70,7 +70,10 @@ function OtherDevice({ autoStart, toast }: { autoStart: boolean; toast: (message
   const [link, setLink] = useState<{ url: string; qr: string; expiresAt: number } | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [busy, setBusy] = useState(false);
+  const [closing, setClosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // bumped by every 生成 and 关闭: an answer that comes back to an older number is no longer wanted
+  const run = useRef(0);
 
   useEffect(() => {
     if (!link) return;
@@ -79,18 +82,32 @@ function OtherDevice({ autoStart, toast }: { autoStart: boolean; toast: (message
   }, [link]);
 
   const create = useCallback(async () => {
+    const mine = ++run.current;
     setBusy(true);
     setError(null);
     try {
       const next = await request<{ url: string; qr: string; expires_in: number }>("/api/github/claim", "POST", {});
+      // closed while this was on its way: the link must not come back
+      if (mine !== run.current) return;
       setNow(Date.now());
       setLink({ url: next.url, qr: next.qr, expiresAt: Date.now() + next.expires_in * 1000 });
     } catch (err) {
-      setError(errorText(err));
+      if (mine === run.current) setError(errorText(err));
     } finally {
-      setBusy(false);
+      if (mine === run.current) setBusy(false);
     }
   }, []);
+
+  /** 关闭: the link must stop working too, not just disappear from here; nothing new is made until it has, or the late DELETE would take the new link with it. */
+  const close = async () => {
+    run.current++;
+    setLink(null);
+    setBusy(false);
+    setError(null);
+    setClosing(true);
+    await request("/api/github/claim", "DELETE").catch(() => undefined);
+    setClosing(false);
+  };
 
   // 在其他设备上登录 in the header's menu: show the code at once instead of another button to press
   const autoStarted = useRef(false);
@@ -103,7 +120,7 @@ function OtherDevice({ autoStart, toast }: { autoStart: boolean; toast: (message
   if (!link) {
     return (
       <div className="mb-5">
-        <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void create()}>
+        <button type="button" className="btn btn-secondary" disabled={busy || closing} onClick={() => void create()}>
           在其他设备上登录
         </button>
         {error && <p className="mt-1 text-down">{error}</p>}
@@ -135,15 +152,7 @@ function OtherDevice({ autoStart, toast }: { autoStart: boolean; toast: (message
         <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void create()}>
           重新生成
         </button>
-        <button
-          type="button"
-          className="btn"
-          onClick={() => {
-            setLink(null);
-            // the link must stop working too, not just disappear from here
-            void request("/api/github/claim", "DELETE").catch(() => undefined);
-          }}
-        >
+        <button type="button" className="btn" onClick={() => void close()}>
           关闭
         </button>
       </div>
