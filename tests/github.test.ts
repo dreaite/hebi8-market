@@ -225,11 +225,25 @@ describe("device flow", () => {
     expect((await startDeviceFlow(CLIENT_ID, T0)).verification_uri).toBe("https://github.com/login/device");
   });
 
-  it("maps a disabled device flow and an unknown client id", async () => {
+  it("maps a disabled device flow", async () => {
     routes[`POST ${DEVICE_CODE}`] = () => json({ error: "device_flow_disabled", error_description: "Device Flow must be explicitly enabled for this App" }, 400);
     await expect(startDeviceFlow(CLIENT_ID, T0)).rejects.toThrow("Enable Device Flow");
-    routes[`POST ${DEVICE_CODE}`] = () => json({ error: "Not Found" }, 404);
-    await expect(startDeviceFlow(CLIENT_ID, T0)).rejects.toThrow("GitHub 不认识这个 client id");
+  });
+
+  it("an unknown client id: the person is told to ask whoever runs the instance, the log says which setting to check", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const shown = "GitHub 不认识这个应用，请联系部署的人检查登录配置";
+    for (const reply of [() => json({ error: "Not Found" }, 404), () => json({ error: "incorrect_client_credentials", error_description: "The client_id and/or client_secret passed are incorrect." })]) {
+      warn.mockClear();
+      routes[`POST ${DEVICE_CODE}`] = reply;
+      const err = await startDeviceFlow(CLIENT_ID, T0).catch((e) => e);
+      expect(err).toBeInstanceOf(GitHubError);
+      // nothing about files or environment variables in what the drawer shows
+      expect(err.message).toBe(shown);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(/^\[hebi8m\] github: GitHub 不认识 client id：检查 app-info\.ts 的 GITHUB_APP_CLIENT_ID 或 HEBI8_GITHUB_CLIENT_ID；网页登录检查 github-oauth\.json/);
+    }
+    warn.mockRestore();
   });
 
   it("polls at most once per interval, waits on authorization_pending and adds 5 s on slow_down", async () => {
@@ -463,6 +477,16 @@ describe("web login", () => {
     expect(failed.cookies.get(SESSION_COOKIE)).toBeUndefined();
     expect(warn.mock.calls.flat().join(" ")).toContain("授权码无效或已过期");
     expect(warn.mock.calls.flat().join(" ")).not.toContain(WEB_SECRET);
+
+    // a callback address GitHub does not have: what to check is in the log, never the secret
+    ({ cookies, state } = await started("/review"));
+    warn.mockClear();
+    tokenReplies({ error: "redirect_uri_mismatch", error_description: "The redirect_uri MUST match the registered callback URL for this application." });
+    const mismatch = await callbackGET(webReq(`/api/github/callback?code=c0de&state=${state}`, cookies));
+    expect(mismatch.headers.get("location")).toBe("/review?login=failed");
+    const logged = warn.mock.calls.flat().join("\n");
+    expect(logged).toContain("[hebi8m] github: 回调地址和 GitHub 上登记的不一致：检查 github-oauth.json 的 origins 和 App 的 Callback URL");
+    expect(logged).not.toContain(WEB_SECRET);
     warn.mockRestore();
   });
 });

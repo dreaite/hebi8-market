@@ -178,27 +178,35 @@ async function oauthPost<T extends { error?: string; error_description?: string 
   const json = (await res.json().catch(() => null)) as T | null;
   // a known OAuth error is the caller's to interpret (slow_down etc. may come with a 4xx)
   if (!res.ok && !(json?.error && json.error in OAUTH_ERRORS) && !(json?.error && DEVICE_STATES.has(json.error))) {
+    if (res.status === 404) log(UNKNOWN_CLIENT_CHECK);
     throw new GitHubError(res.status, res.status === 404 ? UNKNOWN_CLIENT : describeFailure(res.status));
   }
   return { status: res.status, json };
 }
 
-const UNKNOWN_CLIENT = "GitHub 不认识这个 client id（检查 app-info.ts 的 GITHUB_APP_CLIENT_ID 或 HEBI8_GITHUB_CLIENT_ID；网页登录检查 github-oauth.json）";
+const log = (msg: string) => console.warn(`[hebi8m] github: ${msg}`);
+
+// A wrong setup is not for the person logging in to fix: they are told to ask whoever runs the
+// instance, and which setting to check goes to the server log.
+const UNKNOWN_CLIENT = "GitHub 不认识这个应用，请联系部署的人检查登录配置";
+const UNKNOWN_CLIENT_CHECK = "GitHub 不认识 client id：检查 app-info.ts 的 GITHUB_APP_CLIENT_ID 或 HEBI8_GITHUB_CLIENT_ID；网页登录检查 github-oauth.json 的 client_id 和 client_secret";
 const DEVICE_STATES = new Set(["authorization_pending", "slow_down", "expired_token", "access_denied"]);
 
-const OAUTH_ERRORS: Record<string, [number, string]> = {
+/** OAuth error → status, what the UI shows, and for a wrong setup what the log says to check. */
+const OAUTH_ERRORS: Record<string, [number, string, string?]> = {
   device_flow_disabled: [400, "GitHub App 没有开启 Device Flow（App 设置 → 勾选 Enable Device Flow）"],
-  incorrect_client_credentials: [400, UNKNOWN_CLIENT],
+  incorrect_client_credentials: [400, UNKNOWN_CLIENT, UNKNOWN_CLIENT_CHECK],
   bad_refresh_token: [401, "GitHub 返回 401：登录已过期，请重新登录"],
   unverified_user_email: [403, "GitHub 账号的邮箱还没验证"],
   incorrect_device_code: [400, "登录代码无效，请重新登录"],
   bad_verification_code: [400, "GitHub 的授权码无效或已过期，请重新登录"],
-  redirect_uri_mismatch: [400, "回调地址和 GitHub 上登记的不一致（github-oauth.json 的 origins 和 App 的 callback URL）"],
+  redirect_uri_mismatch: [400, "GitHub 不接受这次登录的回调地址，请联系部署的人检查登录配置", "回调地址和 GitHub 上登记的不一致：检查 github-oauth.json 的 origins 和 App 的 Callback URL"],
   unsupported_grant_type: [400, "GitHub 不接受这种登录方式"],
 };
 
 const oauthFailure = (reply: { error?: string; error_description?: string } | null) => {
   const known = reply?.error ? OAUTH_ERRORS[reply.error] : undefined;
+  if (known?.[2]) log(known[2]);
   if (known) return new GitHubError(known[0], known[1]);
   return new GitHubError(400, `GitHub 登录失败：${reply?.error_description ?? reply?.error ?? "没有返回 token"}`);
 };
