@@ -16,6 +16,8 @@ declare module "@mathieuc/tradingview" {
     currency_code?: string;
     timezone?: string;
     type?: string;
+    /** The regular session on the exchange's clock: `0930-1600`, `1700-1600`, `24x7` */
+    session?: string;
   }
 
   interface ChartSession {

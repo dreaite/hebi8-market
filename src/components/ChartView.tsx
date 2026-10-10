@@ -8,7 +8,7 @@ import { addSymbol, deleteIndicator, loadSymbol, removeSymbol, saveChartState, s
 import type { AlertView } from "@/lib/alert-view";
 import { INDICATORS } from "@/indicators/catalog";
 import { compileFormula, formulaIndicatorName, formulaTemplate, isFormulaIndicator } from "@/indicators/formula-indicators";
-import type { BarsResponse, BarsSymbol, SymbolStatus } from "@/lib/api-types";
+import type { BarsResponse, BarsSymbol, StatusResponse, SymbolStatus } from "@/lib/api-types";
 import { BRAND } from "@/lib/brand";
 import { CHART_STYLES, type ChartPrefs, type ChartStyle, type FormulaDef, type ParamOverrides } from "@/lib/config";
 import { copyText } from "@/lib/copy-text";
@@ -187,7 +187,7 @@ export function ChartView({
 
   const [data, setData] = useState<BarsResponse | null>(null);
   // the status strip's sync and quote, read again between bar loads (which reset the chart's view)
-  const [live, setLive] = useState<SymbolStatus | null>(null);
+  const [live, setLive] = useState<StatusResponse | null>(null);
   const [dataTf, setDataTf] = useState<Timeframe>(tf);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -286,10 +286,12 @@ export function ChartView({
     const poll = () => {
       clearTimeout(timer);
       if (document.visibilityState !== "visible") return;
-      fetch(`/api/status?key=${encodeURIComponent(symbol.key)}`, { signal: controller.signal })
+      const query = new URLSearchParams({ key: symbol.key, tf: dataTf, prices });
+      if (withParam) query.set("with", withParam);
+      fetch(`/api/status?${query}`, { signal: controller.signal })
         .then(async (res) => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const s = (await res.json()) as SymbolStatus;
+          const s = (await res.json()) as StatusResponse;
           setLive(s);
           schedule(s);
         })
@@ -304,7 +306,7 @@ export function ChartView({
       controller.abort();
       document.removeEventListener("visibilitychange", poll);
     };
-  }, [symbol]);
+  }, [symbol, dataTf, prices, withParam]);
 
   // Space opens the next symbol, so warm its bars up
   const nextKey = neighbour(1)?.key ?? null;
@@ -496,8 +498,11 @@ export function ChartView({
   const ticker = meta?.ticker ?? (isSynthetic(symbolKey) ? synthName(symbolKey) : tickerOf(symbolKey));
   const sourceLabel = meta ? (meta.source === "expr" ? "合成" : SOURCE_LABELS[meta.source]) : null;
   const syncText = meta ? (meta.source === "expr" ? "按需合成" : fmtAgo(meta.syncedAt)) : "";
-  const shown = meta && { ...meta, ...live };
+  const { tail = null, ...liveStatus } = live ?? {};
+  const shown = meta && { ...meta, ...liveStatus, lastDay: tail?.lastDay ?? meta.lastDay };
   const status = shown ? statusLine(shown) : "";
+  const [session, quotedAt, hours, timezone] = [shown?.session ?? null, shown?.quotedAt ?? null, meta?.hours ?? null, meta?.timezone ?? null];
+  const clock = useMemo(() => ({ session, quotedAt, hours, timezone }), [session, quotedAt, hours, timezone]);
   const subtitle = [
     TF_LABELS[dataTf],
     ...(sourceLabel ? [sourceLabel] : []),
@@ -960,6 +965,8 @@ export function ChartView({
                 symbolKey={symbolKey}
                 tf={dataTf}
                 bars={bars ?? null}
+                tail={tail}
+                clock={clock}
                 pricePrecision={data?.pricePrecision ?? 2}
                 log={log && !nonPositive}
                 percentAxis={pctAxis}

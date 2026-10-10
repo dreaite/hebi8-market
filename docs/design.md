@@ -154,6 +154,7 @@ CREATE TABLE symbols (
   key        TEXT PRIMARY KEY,  -- 不含合成标的
   source     TEXT NOT NULL, ticker TEXT NOT NULL,
   name       TEXT, exchange TEXT, currency TEXT, timezone TEXT, kind TEXT,  -- 来自数据源的元数据
+  hours      TEXT,              -- 常规交易时段，交易所当地时钟：HHMM-HHMM（1700-1600 是跨夜）或 24x7；倒计时用（§5.2）
   synced_at  INTEGER, sync_error TEXT, first_t INTEGER, last_t INTEGER
 );
 CREATE TABLE bars (
@@ -179,7 +180,7 @@ CREATE TABLE alert_state (                  -- §2.5；删库后第一次同步�
 CREATE TABLE quotes (                       -- §2.6：盘中轮询拿到的最新价，所有人共用；不是 K 线
   key TEXT PRIMARY KEY,
   price REAL NOT NULL, time INTEGER NOT NULL,          -- 数据源报的成交时间（unix 秒）
-  day_high REAL, day_low REAL,                          -- 当天的高低，有就记
+  day_open REAL, day_high REAL, day_low REAL, day_volume REAL,  -- 数据源报的当天开、高、低、量，有就记
   session TEXT NOT NULL,                                -- open | closed | pre | post | always
   fetched_at INTEGER NOT NULL
 );
@@ -376,7 +377,7 @@ date,open,high,low,close,volume
 
 ### 2.6 价格警报与盘中轮询
 
-照搬 TradingView 的警报模型，但只看日线：判断时把最新价当作今天这根还没收完的日线（股票按交易所当地日期归日，加密按 UTC 日，跨夜品种按交易时段归日）（`o` 是当天第一个价，`h`/`l` 取轮询见过的最高最低和数据源报的日内高低，`c` 是最新价），接在库里的日线后面。**这根 K 线只在内存里，绝不写进 `bars`**；下一次日线同步拿到真正的日线后自然替换。
+照搬 TradingView 的警报模型，但只看日线：判断时把最新价当作今天这根还没收完的日线（股票按交易所当地日期归日，加密按 UTC 日，跨夜品种按交易时段归日），接在库里的日线后面。这根 K 线优先用数据源随报价给的当天数字：`o` 是数据源的开盘价（没有就用库里同一天那根的开盘，再没有就是轮询见到的第一个价），`h`/`l` 取数据源报的日内高低、库里同一天那根的高低和轮询见过的最高最低，`c` 是最新价，`v` 是数据源的当天成交量（没有就沿用库里同一天那根的，新的一天就是没有）。**这根 K 线只在内存里，绝不写进 `bars`**；下一次日线同步拿到真正的日线后自然替换。
 
 **警报的写法**（`alerts` 里每一项二选一）：
 
@@ -414,12 +415,13 @@ date,open,high,low,close,volume
 - `always`（加密）和 `open`（交易所在常规交易时段）：每 5 分钟。
 - `pre` / `post` / `closed`：每小时。
 - 新加进来的标的立刻取一次。连续失败的源退避到每小时，日志里记一次，不刷屏。
-- 同一个源的标的一次批量请求：Yahoo 用 `quote()`，Binance 用 `/api/v3/ticker/24hr?symbols=…`，TradingView 用库的 quote 会话（一轮开一个客户端，取完就关）。源报不出交易时段时，工作日按 `open`、周末按 `closed`。
+- 同一个源的标的一次批量请求：Yahoo 用 `quote()`（开盘 `regularMarketOpen`、成交量 `regularMarketVolume`），Binance 用 `/api/v3/ticker/tradingDay?symbols=…`（UTC 自然日的开高低量，和它的日线一致；滚动 24 小时的 `ticker/24hr` 不能当日线用），TradingView 用库的 quote 会话（`open_price`、`volume`；一轮开一个客户端，取完就关）。源报不出交易时段时，工作日按 `open`、周末按 `closed`。成交量为 0（外汇、CFD）或 TradingView 的 1e100（收益率）按没有记。
+- **交易时段**（`symbols.hours`）在日线同步时存：Yahoo 取 chart meta 的 `currentTradingPeriod.regular` 换成交易所当地的 `HHMM-HHMM`，TradingView 取 symbol info 的 `session`（`0930-1600`、跨夜的 `1700-1600`、`24x7`），Binance 固定 `24x7`。只用于图表的倒计时（§5.2）。
 
 **适配器接口**加一个可选方法：
 
 ```ts
-interface Quote { price: number; time: number; dayHigh?: number; dayLow?: number; session: "open" | "closed" | "pre" | "post" | "always" }
+interface Quote { price: number; time: number; dayOpen?: number; dayHigh?: number; dayLow?: number; dayVolume?: number; session: "open" | "closed" | "pre" | "post" | "always" }
 interface SourceAdapter {
   // …
   quotes?(tickers: string[]): Promise<Record<string, Quote>>;
@@ -616,6 +618,15 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 - 标签页标题跟着周期变（`chartTitle`：「英伟达 NVDA · 周线 · hebi8/market」），服务端的 `generateMetadata` 只知道 yaml 里存的周期。
 
 **笔记**：右侧边栏的「笔记」面板，显示 `notes/<fileKey>.md` 的渲染结果，「编辑」切换 textarea，自动保存走 Server Action。没有笔记时显示「写下为什么看它」。
+
+**实时 K 线和倒计时**（照 TradingView）：
+
+- **最后一根自己动**：图表页在前台时，每轮报价后（上一次报价时间 + 5 分钟 + 20 秒）读一次 `GET /api/status?key=&tf=&prices=&with=`，拿到状态条要的同步 / 报价时间，和当前周期最后一根 K 线（`tail`：K 线本身、对比 / 公式引用 / 基准在这一根上的值、最后一个交易日）。K 线走 KLineChart 的 `subscribeBar` 回调：时间戳相同就替换最后一根，更大就追加一根（新的一天 / 周 / 月），指标、对比线、基准线随之重算，图例和价格线跟着变；`refs` 的对应位置原地改。不重新请求 `/api/bars`，所以缩放和滚动位置不动。
+- **倒计时**在右侧最新价标签下面（KLineChart 的 `priceMark.last.extendTexts`，和价格标签同底色，每秒重画），显示距离当前这根 K 线收盘的时间：一天以上 `2d 5h`，一小时以上 `05:12:09`，否则 `12:09`。时间由纯函数 `barCloseAt()`（`src/lib/session.ts`）在浏览器里算：
+  - 全天交易（报价时段 `always`，或 `hours` 是 `24x7`）：日线到下一个 UTC 0 点，周线到下周一 0 点，月 / 季线到下个月 / 季度 1 日 0 点。
+  - 交易所：只在报价是当前的、时段是盘中（`open`）时显示；日线到报价之后的第一个收盘时刻（`hours` 最后一段的结束时间，按交易所时区；跨夜品种因此落在所属交易日的收盘），周线到那一周的周五收盘，月 / 季线到当月 / 当季最后一个工作日收盘。节假日和提前收盘不知道，所以长假前的周线、月线会多算；收盘时刻一过倒计时就消失，不会接着数到第二天。
+  - 盘前、盘后、休市，报价过期，合成标的，还没同步出 `hours` 的标的：不显示。
+- **状态条**（窄屏底部，iPhone home bar 那一条）：交易所 · 时段 · 最新日期 · 新鲜度，数据同上。
 
 **数据流**：客户端组件请求 `GET /api/bars?key=&tf=&prices=&with=k1,k2`，`with` = 对比列表 ∪ 已开启公式指标的 `refs` ∪ bench；响应里带对齐好的 `refs`，公式模板通过闭包拿到。K 线、图例、指标参数和参数弹窗都跟随已经到手的那组 K 线的周期（`dataTf`），点了新周期、数据还没回来时不会把周线参数套在日线上。`tf`/`log`/`style`/指标开关/参数变化写回 yaml `chart:`（参数编辑去抖），`ADJ` 写回 `prices`；`%` 坐标、画线模式、侧栏面板只存 localStorage。图例的眼睛（隐藏指标 / 对比）只在当前页面有效。
 
@@ -874,7 +885,8 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 **Route Handlers（只读 JSON）**
 
 - `GET /api/bars?key=&tf=D|W|M|Q&prices=split|total&with=k1,k2`
-  → `{ symbol: {key, name, source, ticker, currency, bench, syncedAt, syncError}, pricePrecision, bars: [{timestamp, open, high, low, close, volume}], refs: { [key]: { c: (number|null)[], o?, h?, l?, v? } } }`，`refs` 与 `bars` 等长对齐。响应按 viewer 的 yaml 解析名字、基准和合成别名，`Cache-Control: no-store`，不做条件请求。
+  → `{ symbol: {key, name, source, ticker, currency, exchange, bench, timezone, hours, syncedAt, syncError, quotedAt, session, lastDay}, pricePrecision, bars: [{timestamp, open, high, low, close, volume}], refs: { [key]: { c: (number|null)[], o?, h?, l?, v? } } }`，`refs` 与 `bars` 等长对齐。响应按 viewer 的 yaml 解析名字、基准和合成别名，`Cache-Control: no-store`，不做条件请求。
+- `GET /api/status?key=&tf=&prices=&with=`（参数同 `/api/bars`）→ `{ syncedAt, syncError, quotedAt, session, tail: { bar, refs: { [key]: {o,h,l,c,v} }, lastDay } | null }`：打开着的图表每轮报价后读它来更新最后一根 K 线和状态条（§5.2），只读缓存。
 - `GET /api/search?q=` → 外部结果 `SearchResult[]`（§5.4；本地层在浏览器里算）。
 - `GET /api/help` → 反馈页签和通知设置抽屉要的登录状态与反馈设置（§5.8，只读本地）。
 - `/api/github/device`（POST 开始 device flow / DELETE 取消）、`/api/github/device/poll`（POST）、`/api/github/logout`（POST）、`/api/github/issues`（GET 最近反馈 / POST 提交）：§5.8，唯一会碰 GitHub 网络的接口，都是打开反馈页签或用户动作触发。

@@ -1,6 +1,7 @@
 /** Read path: bars for any key, synthetic ones included. Never touches the network. */
 import type { RefSeries } from "@/indicators/formula";
-import type { Config } from "./config";
+import type { BarsTail, ChartBar } from "./api-types";
+import { findItem, type Config } from "./config";
 import { aggregate, align, applyPrices, type Bar, type Prices } from "./series";
 import { readDaily } from "./store";
 import { isSynthetic, type Timeframe } from "./symbols";
@@ -47,4 +48,43 @@ export function loadRefs(bars: Bar[], keys: string[], tf: Timeframe, prices: Pri
     };
   }
   return refs;
+}
+
+/** Trim float noise from adjusted prices to keep the payload small. */
+const round = (x: number) => Number(x.toPrecision(8));
+
+export interface ChartData {
+  daily: Bar[];
+  bars: ChartBar[];
+  refs: Record<string, RefSeries>;
+}
+
+/** What the chart draws for a key: its bars on a timeframe with the benchmark's close, and the other symbols aligned to them. */
+export function loadChart(key: string, tf: Timeframe, prices: Prices, withKeys: string[], cfg: Config, read: DailyReader = readDaily): ChartData {
+  const daily = loadDaily(key, prices, cfg, read);
+  const bench = findItem(cfg, key)?.bench ?? null;
+  const series = aggregate(daily, tf);
+  const refs = loadRefs(series, [...withKeys, ...(bench && bench !== key ? [bench] : [])], tf, prices, cfg, read);
+  const benchCloses = bench ? refs[bench]?.c : undefined;
+  const bars = series.map((b, i) => ({
+    timestamp: b.t * 1000,
+    open: round(b.o),
+    high: round(b.h),
+    low: round(b.l),
+    close: round(b.c),
+    volume: b.v ?? undefined,
+    bench: benchCloses?.[i] != null ? round(benchCloses[i]!) : undefined,
+  }));
+  return { daily, bars, refs };
+}
+
+/** The last bar of a chart and the other symbols at it, for updating an open chart after a quote round. */
+export function chartTail({ daily, bars, refs }: ChartData): BarsTail | null {
+  const i = bars.length - 1;
+  if (i < 0) return null;
+  return {
+    bar: bars[i],
+    refs: Object.fromEntries(Object.entries(refs).map(([k, r]) => [k, { o: r.o?.[i] ?? null, h: r.h?.[i] ?? null, l: r.l?.[i] ?? null, c: r.c[i], v: r.v?.[i] ?? null }])),
+    lastDay: daily[daily.length - 1].t * 1000,
+  };
 }

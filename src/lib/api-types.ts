@@ -16,7 +16,24 @@ export interface ChartBar {
   bench?: number;
 }
 
-/** How fresh a symbol's data is: the daily sync and the quote polling (alert symbols only) */
+/** One bar of another symbol aligned to a chart bar */
+export interface RefPoint {
+  o: number | null;
+  h: number | null;
+  l: number | null;
+  c: number | null;
+  v: number | null;
+}
+
+/** The chart's last bar as it is now, with the other symbols at it: what a quote round changes */
+export interface BarsTail {
+  bar: ChartBar;
+  refs: Record<string, RefPoint>;
+  /** The last daily bar's day (ms, UTC midnight) */
+  lastDay: number;
+}
+
+/** How fresh a symbol's data is: the daily sync and the quote polling */
 export interface SymbolStatus {
   syncedAt: number | null;
   syncError: string | null;
@@ -33,8 +50,16 @@ export interface BarsSymbol extends SymbolStatus {
   currency: string | null;
   exchange: string | null;
   bench: string | null;
+  /** The exchange's timezone and its regular session on that clock (`HHMM-HHMM` or `24x7`), for the countdown to the bar's close */
+  timezone: string | null;
+  hours: string | null;
   /** The last daily bar's day (ms, UTC midnight); weekly and longer bars carry their bucket's start */
   lastDay: number;
+}
+
+/** `/api/status`: the status strip, and the last bar when a timeframe is asked for */
+export interface StatusResponse extends SymbolStatus {
+  tail: BarsTail | null;
 }
 
 export interface BarsResponse {

@@ -7,6 +7,8 @@ export interface SourceMeta {
   currency?: string;
   timezone?: string;
   kind?: string;
+  /** The regular session by the exchange's clock, `HHMM-HHMM` (TradingView's notation, `1700-1600` runs overnight) or `24x7` */
+  hours?: string;
 }
 
 export interface FetchResult {
@@ -40,8 +42,11 @@ export interface Quote {
   price: number;
   /** When it traded, unix seconds */
   time: number;
+  /** The trading day's open, high, low and volume as the source reports them, when it does */
+  dayOpen?: number;
   dayHigh?: number;
   dayLow?: number;
+  dayVolume?: number;
   session: QuoteSession;
 }
 

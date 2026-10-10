@@ -1,11 +1,21 @@
 import YahooFinance from "yahoo-finance2";
 import { dedupeBars, type Bar } from "../series";
 import { tradingDay } from "../time";
+import { partsIn } from "../tz";
 import { weekdaySession, type Quote, type QuoteSession, type SourceAdapter } from "./types";
 
 const SESSIONS: Record<string, QuoteSession> = { REGULAR: "open", PRE: "pre", PREPRE: "pre", POST: "post", POSTPOST: "post", CLOSED: "closed" };
 
 const yf = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
+
+/** A trading period as `HHMM-HHMM` on the exchange's clock. */
+function clockHours(period: { start: Date; end: Date }, timeZone: string): string {
+  const hhmm = (d: Date) => {
+    const p = partsIn(d, timeZone);
+    return `${String(p.hh).padStart(2, "0")}${String(p.mm).padStart(2, "0")}`;
+  };
+  return `${hhmm(period.start)}-${hhmm(period.end)}`;
+}
 
 /**
  * Full daily history. The chart endpoint's OHLC is already split-adjusted and is stored as is;
@@ -38,6 +48,7 @@ export const yahoo: SourceAdapter = {
         currency: meta.currency,
         timezone: timeZone,
         kind: meta.instrumentType?.toLowerCase(),
+        ...(meta.currentTradingPeriod ? { hours: clockHours(meta.currentTradingPeriod.regular, timeZone) } : {}),
       },
       mode: "replace",
     };
@@ -47,7 +58,7 @@ export const yahoo: SourceAdapter = {
   async quotes(tickers) {
     const rows = await yf.quote(tickers, {
       return: "array",
-      fields: ["symbol", "regularMarketPrice", "regularMarketTime", "regularMarketDayHigh", "regularMarketDayLow", "marketState", "quoteType"],
+      fields: ["symbol", "regularMarketPrice", "regularMarketTime", "regularMarketOpen", "regularMarketDayHigh", "regularMarketDayLow", "regularMarketVolume", "marketState", "quoteType"],
     });
     const out: Record<string, Quote> = {};
     for (const q of rows) {
@@ -56,8 +67,11 @@ export const yahoo: SourceAdapter = {
       out[q.symbol] = {
         price: q.regularMarketPrice,
         time: Math.floor(q.regularMarketTime.getTime() / 1000),
+        ...(q.regularMarketOpen != null ? { dayOpen: q.regularMarketOpen } : {}),
         ...(q.regularMarketDayHigh != null ? { dayHigh: q.regularMarketDayHigh } : {}),
         ...(q.regularMarketDayLow != null ? { dayLow: q.regularMarketDayLow } : {}),
+        // FX reports 0: no volume, as in its daily bars
+        ...(q.regularMarketVolume ? { dayVolume: q.regularMarketVolume } : {}),
         session,
       };
     }

@@ -69,6 +69,7 @@ function fetchChart(ticker: string): Promise<FetchResult> {
           currency: infos.currency_code,
           timezone: timeZone,
           kind: infos.type,
+          hours: infos.session,
         },
         mode: "replace",
       });
@@ -89,7 +90,7 @@ const QUOTE_TIMEOUT_MS = 20_000;
 function fetchQuotes(tickers: string[]): Promise<Record<string, Quote>> {
   return new Promise((resolve, reject) => {
     const client = new TradingView.Client();
-    const session = new client.Session.Quote({ customFields: ["lp", "lp_time", "high_price", "low_price", "current_session"] });
+    const session = new client.Session.Quote({ customFields: ["lp", "lp_time", "open_price", "high_price", "low_price", "volume", "current_session"] });
     const data: Record<string, Record<string, unknown>> = {};
     let pending = tickers.length;
     let settled = false;
@@ -109,8 +110,11 @@ function fetchQuotes(tickers: string[]): Promise<Record<string, Quote>> {
         out[ticker] = {
           price,
           time: typeof d.lp_time === "number" ? d.lp_time : Math.floor(Date.now() / 1000),
+          ...(typeof d.open_price === "number" ? { dayOpen: d.open_price } : {}),
           ...(typeof d.high_price === "number" ? { dayHigh: d.high_price } : {}),
           ...(typeof d.low_price === "number" ? { dayLow: d.low_price } : {}),
+          // 0 (a CFD) and 1e100 (a yield) stand for no volume
+          ...(typeof d.volume === "number" && d.volume > 0 && d.volume < 1e99 ? { dayVolume: d.volume } : {}),
           session: typeof d.current_session === "string" ? (SESSIONS[d.current_session] ?? "closed") : weekdaySession(Date.now()),
         };
       }

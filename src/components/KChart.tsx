@@ -26,8 +26,9 @@ import {
 } from "klinecharts";
 import { customIndicators } from "@/indicators/custom";
 import type { RefSeries } from "@/indicators/formula";
-import type { ChartBar } from "@/lib/api-types";
+import type { BarsTail, ChartBar } from "@/lib/api-types";
 import type { ChartStyle } from "@/lib/config";
+import { barCloseAt, fmtCountdown, type SessionClock } from "@/lib/session";
 import type { Timeframe } from "@/lib/symbols";
 import type { CompareEntry, OverlaySpec } from "@/lib/vault";
 import { ChartLegend, createLegendStore, type ChartLegendProps } from "./ChartLegend";
@@ -50,6 +51,10 @@ interface KChartProps {
   symbolKey: string;
   tf: Timeframe;
   bars: ChartBar[] | null;
+  /** The last bar after a quote round: it replaces the chart's last one (or follows it on a new day) without loading the bars again */
+  tail: BarsTail | null;
+  /** What the countdown under the last price needs: the quote's session and the exchange's hours */
+  clock: SessionClock;
   pricePrecision: number;
   log: boolean;
   /** The user's % axis; compares in percent mode force it on regardless */
@@ -256,7 +261,34 @@ function applyTheme(chart: Chart, style: ChartStyle) {
       priceMark: {
         high: { textFamily: MONO },
         low: { textFamily: MONO },
-        last: { upColor: up, downColor: down, noChangeColor: muted, text: { family: MONO } },
+        last: {
+          upColor: up,
+          downColor: down,
+          noChangeColor: muted,
+          text: { family: MONO },
+          // TradingView's countdown to the bar's close, joined to the price label; the text comes from `formatExtendText`
+          extendTexts: [
+            {
+              show: true,
+              style: "fill",
+              position: "below_price",
+              updateInterval: 1000,
+              size: 11,
+              family: MONO,
+              weight: "normal",
+              color: "#ffffff",
+              paddingLeft: 4,
+              paddingTop: 0,
+              paddingRight: 4,
+              paddingBottom: 4,
+              borderStyle: "solid",
+              borderColor: "transparent",
+              borderSize: 0,
+              borderDashedValue: [2, 2],
+              borderRadius: 2,
+            },
+          ],
+        },
       },
       // the React legend (ChartLegend) shows OHLC, indicator and compare values, TradingView style
       tooltip: { showRule: "none" },
@@ -285,6 +317,18 @@ function applyTheme(chart: Chart, style: ChartStyle) {
   setOverlayTheme({ up, down, text: cssVar("--fg") });
 }
 
+/** The other symbols' values at bar `at`, written into the aligned columns the formula and compare lines read. */
+function patchRefs(refs: Record<string, RefSeries>, at: number, points: BarsTail["refs"]): void {
+  for (const [key, point] of Object.entries(points)) {
+    const series = refs[key];
+    if (!series) continue;
+    for (const field of ["o", "h", "l", "c", "v"] as const) {
+      const column = series[field];
+      if (column) column[at] = point[field];
+    }
+  }
+}
+
 /** Points without repeats in a row (two clicks on one spot). */
 function distinctPoints(points: Partial<Point>[]): Partial<Point>[] {
   return points.filter((p, i) => i === 0 || p.timestamp !== points[i - 1].timestamp || p.value !== points[i - 1].value);
@@ -309,7 +353,7 @@ function fmtValue(value: number, precision: number, big: boolean): string {
 }
 
 /** Values at `idx` as KLineChart's own tooltip would show them: one per titled figure, in the figure's color. */
-function indicatorValues(chart: Chart, ind: Indicator, idx: number, pricePrecision: number): LegendValue[] {
+function indicatorValues(chart: Chart, ind: Indicator, idx: number, pricePrecision: number, bar: ChartBar | undefined): LegendValue[] {
   const defaults = chart.getStyles().indicator;
   const own = (ind.styles ?? {}) as Partial<IndicatorStyle>;
   const lists = {
@@ -337,7 +381,8 @@ function indicatorValues(chart: Chart, ind: Indicator, idx: number, pricePrecisi
     } as Parameters<NonNullable<typeof figure.styles>>[0]);
     if (dynamic && typeof dynamic.color === "string") color = dynamic.color;
     if (typeof figure.title !== "string") continue;
-    const v = data[figure.key];
+    // KLineChart's VOL counts a bar without volume (an index, today's bar from a quote) as 0
+    const v = ind.name === "VOL" && figure.key === "volume" && bar?.volume == null ? undefined : data[figure.key];
     // price-scale lines follow the symbol; oscillators get two decimals unless the values are tiny
     const precision = ind.series === "price" ? pricePrecision : typeof v === "number" && Math.abs(v) >= 1 ? Math.min(ind.precision, 2) : ind.precision;
     values.push({
@@ -361,6 +406,8 @@ export function KChart({
   templates,
   compare,
   refs,
+  tail,
+  clock,
   overlays,
   onOverlaysChange,
   drawTool,
@@ -379,6 +426,9 @@ export function KChart({
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const barsRef = useRef<ChartBar[]>([]);
+  /** KLineChart's own way in for one bar: the same timestamp replaces the last bar, a later one is appended */
+  const pushBarRef = useRef<((bar: KLineData) => void) | null>(null);
+  const clockRef = useRef(clock);
   const tfRef = useRef(tf);
   const precisionRef = useRef(pricePrecision);
   const styleRef = useRef(chartStyle);
@@ -424,8 +474,9 @@ export function KChart({
     compareRef.current = compare;
     overlaysRef.current = overlays;
     precisionRef.current = pricePrecision;
+    clockRef.current = clock;
     settingsOpenRef.current = settings !== null;
-  }, [settings, onOverlaysChange, onDrawDone, onAutoScaleChange, compare, overlays, pricePrecision, onAddAlert, onEditAlert]);
+  }, [settings, onOverlaysChange, onDrawDone, onAutoScaleChange, compare, overlays, pricePrecision, clock, onAddAlert, onEditAlert]);
 
   const computeLegend = () => {
     const chart = chartRef.current;
@@ -440,7 +491,7 @@ export function KChart({
     const indicators = chart.getIndicators().flatMap((ind) => {
       if (!(ind.paneId in paneTops)) paneTops[ind.paneId] = chart.getSize(ind.paneId)?.top ?? 0;
       if (isCompare(ind.name)) return [];
-      return [{ name: ind.name, paneId: ind.paneId, params: ind.calcParams as number[], values: indicatorValues(chart, ind, idx, precisionRef.current) }];
+      return [{ name: ind.name, paneId: ind.paneId, params: ind.calcParams as number[], values: indicatorValues(chart, ind, idx, precisionRef.current, bar) }];
     });
     syncGap();
     store.set({
@@ -893,6 +944,19 @@ export function KChart({
     // The full history arrives in one response, so there is never more to load.
     chart.setDataLoader({
       getBars: ({ type, callback }) => callback(type === "init" ? (barsRef.current as KLineData[]) : [], false),
+      subscribeBar: ({ callback }) => {
+        pushBarRef.current = callback;
+      },
+      unsubscribeBar: () => {
+        pushBarRef.current = null;
+      },
+    });
+    chart.setFormatter({
+      formatExtendText: () => {
+        const now = Date.now();
+        const close = barCloseAt(tfRef.current, now, clockRef.current);
+        return close === null ? "" : fmtCountdown(close - now);
+      },
     });
 
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1107,6 +1171,18 @@ export function KChart({
     scheduleLegend();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handlers are stable refs
   }, [bars, symbolKey, tf, pricePrecision]);
+
+  // A quote round moved the last bar. The chart's list is the `bars` array itself and the formula
+  // and compare lines read `refs`, so both are updated in place: a new `bars` would reset the view.
+  useEffect(() => {
+    const list = barsRef.current;
+    const last = list.at(-1);
+    if (!tail || !last || !pushBarRef.current || tail.bar.timestamp < last.timestamp) return;
+    patchRefs(refs, tail.bar.timestamp > last.timestamp ? list.length : list.length - 1, tail.refs);
+    pushBarRef.current(tail.bar as KLineData);
+    scheduleLegend();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only a new tail moves the bar; refs belong to the bars it follows
+  }, [tail]);
 
   useEffect(() => {
     styleRef.current = chartStyle;

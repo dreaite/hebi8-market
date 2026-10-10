@@ -142,6 +142,14 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
         PRIMARY KEY (day, origin, visitor, login)
       ) WITHOUT ROWID;
     `),
+  (db) =>
+    db.exec(`
+      -- The trading day's open and volume as the source reports them with a quote, and the regular
+      -- session on the exchange's clock (HHMM-HHMM or 24x7) for the countdown to the bar's close.
+      ALTER TABLE quotes ADD COLUMN day_open REAL;
+      ALTER TABLE quotes ADD COLUMN day_volume REAL;
+      ALTER TABLE symbols ADD COLUMN hours TEXT;
+    `),
 ];
 
 const dbFile = () => process.env.HEBI8_DB ?? path.join(process.cwd(), "data", "hebi8.db");

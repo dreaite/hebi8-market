@@ -40,24 +40,27 @@ export const binance: SourceAdapter = {
     const quote = QUOTES.find((q) => ticker.endsWith(q));
     return {
       bars,
-      meta: { name: ticker, exchange: "Binance", currency: quote, timezone: "UTC", kind: "crypto" },
+      meta: { name: ticker, exchange: "Binance", currency: quote, timezone: "UTC", kind: "crypto", hours: "24x7" },
       mode: since === null ? "replace" : "merge",
     };
   },
 
   /**
-   * Last trade of every pair in one request. The 24h high/low is a rolling window, not the UTC
-   * day the daily bar covers, so it is left out.
+   * The UTC trading day of every pair in one request (at most 100 symbols, weight 4 each): the
+   * same open, high, low and volume the daily kline has, unlike the rolling 24h ticker.
    */
   async quotes(tickers) {
-    const url = `${BASE_URL}/api/v3/ticker/24hr?type=MINI&symbols=${encodeURIComponent(JSON.stringify(tickers))}`;
+    const url = `${BASE_URL}/api/v3/ticker/tradingDay?type=MINI&symbols=${encodeURIComponent(JSON.stringify(tickers))}`;
     const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(20_000) });
     if (!res.ok) throw new Error(`Binance ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    const rows = (await res.json()) as { symbol: string; lastPrice: string; closeTime: number }[];
+    const rows = (await res.json()) as { symbol: string; openPrice: string; highPrice: string; lowPrice: string; lastPrice: string; volume: string; closeTime: number }[];
+    const now = Date.now();
     const out: Record<string, Quote> = {};
     for (const r of rows) {
       const price = Number(r.lastPrice);
-      if (Number.isFinite(price) && price > 0) out[r.symbol] = { price, time: Math.floor(r.closeTime / 1000), session: "always" };
+      if (!Number.isFinite(price) || price <= 0) continue;
+      // closeTime is the end of the day, not the last trade
+      out[r.symbol] = { price, time: Math.floor(Math.min(now, r.closeTime) / 1000), dayOpen: Number(r.openPrice), dayHigh: Number(r.highPrice), dayLow: Number(r.lowPrice), dayVolume: Number(r.volume), session: "always" };
     }
     return out;
   },

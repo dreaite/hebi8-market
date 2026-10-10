@@ -211,6 +211,35 @@ describe("quote polling", () => {
     expect(withQuote(daily, quote(104, day2 + DAY), "UTC", 3_000_000_000_000)).toBe(daily);
   });
 
+  it("takes the day's open and volume from the source when it reports them", async () => {
+    const { withQuote } = await import("@/lib/quotes");
+    const daily = closes(100, 101);
+    const day2 = T0 + DAY;
+    const quote = { key: SPY, price: 104, time: day2 + DAY + 600, session: "open" as const, fetchedAt: 2_000_000_000_000, dayOpen: 99, dayHigh: 105, dayLow: 98.5, dayVolume: 12345 };
+    // a new day: the source's open, not the first price polling saw; its volume instead of none
+    expect(withQuote(daily, quote, "UTC", null, { t: day2 + DAY, o: 102, h: 103, l: 101.5 }).at(-1)).toEqual({ t: day2 + DAY, o: 99, h: 105, l: 98.5, c: 104, v: 12345, adj: 1 });
+    // the same day as the synced bar: the source's figures replace the bar's
+    expect(withQuote(daily, { ...quote, time: day2 + 600 }, "UTC", null).at(-1)).toEqual({ t: day2, o: 99, h: 105, l: 98.5, c: 104, v: 12345, adj: 1 });
+    // an open outside the reported range still lies inside the bar
+    expect(withQuote(daily, { ...quote, dayOpen: 106 }, "UTC", null).at(-1)).toMatchObject({ o: 106, h: 106 });
+  });
+
+  it("reads Binance's UTC trading day: open, high, low and volume of the daily bar", async () => {
+    const { binance } = await import("@/lib/sources/binance");
+    const closeTime = Date.UTC(2100, 0, 1) - 1;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify([{ symbol: "BTCUSDT", openPrice: "82635.56", highPrice: "82892.01", lowPrice: "82545.82", lastPrice: "82756.00", volume: "1856.70133", closeTime }])),
+    );
+    const before = Math.floor(Date.now() / 1000);
+    const quotes = await binance.quotes!(["BTCUSDT"]);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/api/v3/ticker/tradingDay?type=MINI&symbols=%5B%22BTCUSDT%22%5D");
+    expect(quotes.BTCUSDT).toMatchObject({ price: 82756, dayOpen: 82635.56, dayHigh: 82892.01, dayLow: 82545.82, dayVolume: 1856.70133, session: "always" });
+    // the day's end is not the time of the trade
+    expect(quotes.BTCUSDT.time).toBeGreaterThanOrEqual(before);
+    expect(quotes.BTCUSDT.time).toBeLessThan(before + 60);
+    fetchMock.mockRestore();
+  });
+
   it("puts Sunday evening overnight quotes on Monday, matching the daily bars", async () => {
     const { withQuote } = await import("@/lib/quotes");
     const monday = Date.UTC(2026, 9, 5) / 1000;
@@ -449,6 +478,30 @@ describe("quote polling", () => {
       expect(body.bars).toHaveLength(3);
       expect(body.bars.at(-1)).toMatchObject({ open: 105, close: 105, bench: 410 });
       expect(body.symbol).toMatchObject({ session: "always", lastDay: body.bars.at(-1).timestamp });
+    });
+
+    it("/api/status gives an open chart its last bar on any timeframe, with the bench at it", async () => {
+      const { writeBars, writeQuotes } = await import("@/lib/store");
+      const { NextRequest } = await import("next/server");
+      const { GET } = await import("@/app/api/status/route");
+      // Monday Jan 5 and Tuesday Jan 6, then a quote on Wednesday with the source's open and volume
+      writeBars(BTC, [{ ...bar(100, 0), h: 103, l: 99 }, bar(101, 1)], "replace");
+      writeBars(SPY, closes(400, 410), "replace");
+      const quote = { key: BTC, price: 150, time: T0 + 2 * DAY + 3600, session: "always" as const, fetchedAt: Date.now(), dayOpen: 102, dayHigh: 151, dayLow: 98, dayVolume: 7 };
+      writeQuotes([quote]);
+      vaultsWith([]);
+      fs.appendFileSync(path.join(root, "hebi8.yaml"), `groups:\n  - symbols:\n      - key: BTC\n        bench: ${SPY}\n`);
+      const status = async (tf: string, extra = "") => (await GET(new NextRequest(`http://h/api/status?key=${encodeURIComponent(BTC)}&tf=${tf}${extra}`))).json();
+      const wednesday = (T0 + 2 * DAY) * 1000;
+      const day = await status("D", `&with=${encodeURIComponent(SPY)}`);
+      expect(day).toMatchObject({ session: "always", quotedAt: quote.fetchedAt });
+      expect(day.tail).toEqual({ bar: { timestamp: wednesday, open: 102, high: 151, low: 98, close: 150, volume: 7, bench: 410 }, refs: { [SPY]: { o: 410, h: 410, l: 410, c: 410, v: 1 } }, lastDay: wednesday });
+      // the week and the month so far: Monday's open, the range of all three days, the quote's close
+      const week = { open: 100, high: 151, low: 98, close: 150, volume: 9, bench: 410 };
+      expect((await status("W")).tail).toMatchObject({ bar: { timestamp: T0 * 1000, ...week }, lastDay: wednesday });
+      expect((await status("M")).tail).toMatchObject({ bar: { timestamp: Date.UTC(2026, 0, 1), ...week }, lastDay: wednesday });
+      expect((await status("Q")).tail).toMatchObject({ bar: { timestamp: Date.UTC(2026, 0, 1), ...week }, lastDay: wednesday });
+      expect((await GET(new NextRequest("http://h/api/status?key=nope"))).status).toBe(400);
     });
 
     it("the overview takes the price from any quote newer than the sync, the session only while it is current", async () => {

@@ -123,7 +123,8 @@ export function withQuote(bars: Bar[], quote: QuoteRow | undefined, timeZone: st
   const ownDay = seen?.t === t ? seen : null;
   const highs = [quote.price, quote.dayHigh, same?.h, ownDay?.h].filter((v): v is number => v !== undefined);
   const lows = [quote.price, quote.dayLow, same?.l, ownDay?.l].filter((v): v is number => v !== undefined);
-  const bar: Bar = { t, o: same?.o ?? ownDay?.o ?? quote.price, h: Math.max(...highs), l: Math.min(...lows), c: quote.price, v: same?.v ?? null, adj: 1 };
+  const o = quote.dayOpen ?? same?.o ?? ownDay?.o ?? quote.price;
+  const bar: Bar = { t, o, h: Math.max(o, ...highs), l: Math.min(o, ...lows), c: quote.price, v: quote.dayVolume ?? same?.v ?? null, adj: 1 };
   return same ? [...bars.slice(0, -1), bar] : [...bars, bar];
 }
 

@@ -14,6 +14,8 @@ export interface SymbolRow {
   currency: string | null;
   timezone: string | null;
   kind: string | null;
+  /** The regular session on the exchange's clock, `HHMM-HHMM` or `24x7` */
+  hours: string | null;
   syncedAt: number | null;
   syncError: string | null;
   firstT: number | null;
@@ -29,6 +31,7 @@ interface RawRow {
   currency: string | null;
   timezone: string | null;
   kind: string | null;
+  hours: string | null;
   synced_at: number | null;
   sync_error: string | null;
   first_t: number | null;
@@ -44,6 +47,7 @@ const toRow = (r: RawRow): SymbolRow => ({
   currency: r.currency,
   timezone: r.timezone,
   kind: r.kind,
+  hours: r.hours,
   syncedAt: r.synced_at,
   syncError: r.sync_error,
   firstT: r.first_t,
@@ -91,7 +95,7 @@ export function markSynced(key: string, meta: SourceMeta): void {
     .prepare(
       `UPDATE symbols SET synced_at = @now, sync_error = NULL,
          name = coalesce(@name, name), exchange = coalesce(@exchange, exchange), currency = coalesce(@currency, currency),
-         timezone = coalesce(@timezone, timezone), kind = coalesce(@kind, kind)
+         timezone = coalesce(@timezone, timezone), kind = coalesce(@kind, kind), hours = coalesce(@hours, hours)
        WHERE key = @key`,
     )
     .run({
@@ -102,6 +106,7 @@ export function markSynced(key: string, meta: SourceMeta): void {
       currency: meta.currency ?? null,
       timezone: meta.timezone ?? null,
       kind: meta.kind ?? null,
+      hours: meta.hours ?? null,
     });
 }
 
@@ -138,10 +143,11 @@ export interface QuoteRow extends Quote {
 export function writeQuotes(rows: QuoteRow[]): void {
   const db = getDb();
   const upsert = db.prepare(
-    `INSERT OR REPLACE INTO quotes (key, price, time, day_high, day_low, session, fetched_at) VALUES (@key, @price, @time, @dayHigh, @dayLow, @session, @fetchedAt)`,
+    `INSERT OR REPLACE INTO quotes (key, price, time, day_open, day_high, day_low, day_volume, session, fetched_at)
+     VALUES (@key, @price, @time, @dayOpen, @dayHigh, @dayLow, @dayVolume, @session, @fetchedAt)`,
   );
   db.transaction(() => {
-    for (const r of rows) upsert.run({ ...r, dayHigh: r.dayHigh ?? null, dayLow: r.dayLow ?? null });
+    for (const r of rows) upsert.run({ ...r, dayOpen: r.dayOpen ?? null, dayHigh: r.dayHigh ?? null, dayLow: r.dayLow ?? null, dayVolume: r.dayVolume ?? null });
   })();
 }
 
@@ -150,15 +156,27 @@ export function readQuotes(): Record<string, QuoteRow> {
     key: string;
     price: number;
     time: number;
+    day_open: number | null;
     day_high: number | null;
     day_low: number | null;
+    day_volume: number | null;
     session: QuoteSession;
     fetched_at: number;
   }[];
   return Object.fromEntries(
     rows.map((r) => [
       r.key,
-      { key: r.key, price: r.price, time: r.time, session: r.session, fetchedAt: r.fetched_at, ...(r.day_high !== null ? { dayHigh: r.day_high } : {}), ...(r.day_low !== null ? { dayLow: r.day_low } : {}) },
+      {
+        key: r.key,
+        price: r.price,
+        time: r.time,
+        session: r.session,
+        fetchedAt: r.fetched_at,
+        ...(r.day_open !== null ? { dayOpen: r.day_open } : {}),
+        ...(r.day_high !== null ? { dayHigh: r.day_high } : {}),
+        ...(r.day_low !== null ? { dayLow: r.day_low } : {}),
+        ...(r.day_volume !== null ? { dayVolume: r.day_volume } : {}),
+      },
     ]),
   );
 }
