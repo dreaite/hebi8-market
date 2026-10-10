@@ -67,7 +67,7 @@ const log = (msg: string) => console.log(`[hebi8m] quotes: ${msg}`);
 
 /**
  * The real keys a round asks for: every watched symbol and its benchmark, and what enabled alerts
- * on a symbol read (synthetic ones expanded into their operands). `data:` only has daily bars.
+ * judged on the price read (synthetic ones expanded into their operands). `data:` only has daily bars.
  */
 export function quoteKeys(configs: Config[]): string[] {
   const keys = new Set<string>();
@@ -87,12 +87,13 @@ export function quoteKeys(configs: Config[]): string[] {
       if (item.bench) add(item.bench);
     }
     for (const alert of cfg.alerts) {
-      // an alert on the whole watchlist reads the watched symbols, which are in already
-      if (!alert.enabled || !alert.key) continue;
-      add(alert.key);
+      // one judged at the close reads daily bars only
+      if (!alert.enabled || alert.check !== "price") continue;
+      // on the whole watchlist: the watched symbols and their benchmarks are in already
+      if (alert.key) add(alert.key);
       if (!alert.when) continue;
       try {
-        compile(alert.when, { aliases: cfg.aliases, bench: findItem(cfg, alert.key)?.bench ?? null }).refs.forEach(add);
+        compile(alert.when, { aliases: cfg.aliases, bench: alert.key ? (findItem(cfg, alert.key)?.bench ?? null) : undefined }).refs.forEach(add);
       } catch {
         // a broken formula is reported by the alert itself
       }

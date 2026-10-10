@@ -1,13 +1,14 @@
 /**
- * Alerts (§2.5, §2.6): the `alerts` list. One on a symbol is judged when a daily sync ends and after
- * every 5-minute quote round, on daily bars whose last one is today's unfinished bar; one without a
- * key covers every watched symbol and is judged when a daily sync ends. State lives in the
- * `alert_state` table, per vault, so a restart does not repeat a message, event conditions compare
- * with the previous check, and the overview can tell which alerts fired when.
+ * Alerts (§2.5, §2.6): the `alerts` list, on one symbol or (without a key) on every watched one.
+ * `check: price` ones are judged after every 5-minute quote round on daily bars whose last one is
+ * today's unfinished bar, and again when a daily sync ends; `check: close` ones only when a daily
+ * sync ends, on the daily bars that are complete. State lives in the `alert_state` table, per
+ * vault, so a restart does not repeat a message, event conditions compare with the previous
+ * check, and the overview can tell which alerts fired when.
  */
 import { isMap, isScalar, isSeq, type Document, type YAMLMap, type YAMLSeq } from "yaml";
 import { crossed, observe, ALERT_CONDS, type AlertCondition, type AlertTrigger } from "./alert-conds";
-import { loadDaily, type DailyReader } from "./bars";
+import { closedReader, loadDaily, type DailyReader } from "./bars";
 import { evalRule, type SeriesCache } from "./conditions";
 import { allItems, conditionId, parseAlert, type AlertDef, type Config } from "./config";
 import { getDb } from "./db";
@@ -63,33 +64,42 @@ interface Check {
   once: boolean;
   /** Off: a firing is recorded for the overview but not pushed */
   notify: boolean;
+  /** The bars it was judged on, for the price in the message */
+  read: DailyReader;
   decide: (row: StateRow | undefined) => Decision;
 }
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const log = (msg: string) => console.log(`[hebi8m] ${msg}`);
 
-/** Which alerts a run judges: all of them after a daily sync, the ones on a symbol in a quote round, the whole-watchlist ones after one is saved. */
+/** Which alerts a run judges: all of them after a daily sync, the `check: price` ones in a quote round, the whole-watchlist ones after one is saved. */
 export type AlertPass = "sync" | "quotes" | "watchlist";
 
 /** The symbols an alert covers: its own, or every watched one. */
 export const alertKeys = (alert: AlertDef, cfg: Config): string[] => (alert.key ? [alert.key] : allItems(cfg).map((i) => i.key));
 
-/** Every (alert, symbol) pair to judge in this pass, on the bars `read` gives. */
-function checks(cfg: Config, pass: AlertPass, read: DailyReader | undefined, who: string): Check[] {
+/**
+ * Every (alert, symbol) pair to judge in this pass. `check: price` alerts see the bars `live`
+ * gives (a quote round's, with today's unfinished bar); `check: close` ones only the daily bars
+ * that are complete.
+ */
+function checks(cfg: Config, pass: AlertPass, live: DailyReader, who: string): Check[] {
   const out: Check[] = [];
-  // formulas on the same symbol and timeframe share the loaded series
+  const closed = closedReader();
+  // formulas on the same symbol, bars and timeframe share the loaded series
   const caches = new Map<string, SeriesCache>();
   for (const alert of cfg.alerts) {
-    if (!alert.enabled || (alert.key ? pass === "watchlist" : pass === "quotes")) continue;
+    if (!alert.enabled || (pass === "watchlist" && alert.key) || (pass === "quotes" && alert.check !== "price")) continue;
+    const read = alert.check === "close" ? closed : live;
     // on the whole watchlist one line per alert, not per symbol (`bench` on a symbol without one is common)
     const failed: { key: string; error: string }[] = [];
     const fail = (key: string, error: string) => (alert.key ? log(`alert ${alert.id} on ${key}${who}: ${error}`) : failed.push({ key, error }));
     for (const key of alertKeys(alert, cfg)) {
-      const base = { rule: alert.id, key, text: alert.text, tf: alert.tf, once: alert.trigger === "once", notify: alert.notify };
+      const base = { rule: alert.id, key, text: alert.text, tf: alert.tf, once: alert.trigger === "once", notify: alert.notify, read };
       if (alert.when) {
-        const cache = caches.get(key) ?? new Map();
-        caches.set(key, cache);
+        const cacheId = `${alert.check}\u0000${key}`;
+        const cache = caches.get(cacheId) ?? new Map();
+        caches.set(cacheId, cache);
         const result = evalRule(key, alert.when, alert.tf, cfg, cache, read);
         if (result.error) fail(key, result.error);
         out.push({ ...base, decide: (row) => decide(row, result) });
@@ -249,8 +259,8 @@ export function serializeAlerts<T>(run: () => T | Promise<T>): Promise<T> {
 }
 
 /**
- * Judge one vault and deliver its events as one digest. `read` gives the bars (a quote round's live
- * ones; the daily ones by default). The config is loaded when the run starts, not when it is
+ * Judge one vault and deliver its events as one digest. `read` gives the bars `check: price` alerts
+ * see (a quote round's live ones; the daily ones as synced by default). The config is loaded when the run starts, not when it is
  * queued, so a `once` alert switched off (or an alert paused) by the run before is seen as off.
  * Never throws; returns the events.
  */
@@ -263,7 +273,7 @@ async function judge(vault: VaultRef, loadConfig: () => Config, pass: AlertPass,
   try {
     const cfg = loadConfig();
     adoptConditionState(vault.id, cfg);
-    const list = checks(cfg, pass, read, who);
+    const list = checks(cfg, pass, read ?? readDaily, who);
     const state = readState(vault.id);
     const symbols = listSymbols();
     const updates: { rule: string; key: string; row: StateRow; fired: boolean; notify: boolean }[] = [];
@@ -284,7 +294,7 @@ async function judge(vault: VaultRef, loadConfig: () => Config, pass: AlertPass,
       if (!c.notify) continue;
       let close: number | null = null;
       try {
-        close = loadDaily(c.key, cfg.prices, cfg, read ?? readDaily).at(-1)?.c ?? null;
+        close = loadDaily(c.key, cfg.prices, cfg, c.read).at(-1)?.c ?? null;
       } catch {
         // the name and label are enough
       }

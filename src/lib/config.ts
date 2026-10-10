@@ -1,6 +1,6 @@
 /** Typed view of `vault/hebi8.yaml`; pure so it can be tested without a file system. */
 import { compile } from "@/indicators/formula";
-import { ALERT_CONDS, describeCondition, parseCondition, type AlertCondition, type AlertTrigger } from "./alert-conds";
+import { ALERT_CHECKS, ALERT_CONDS, defaultCheck, describeCondition, parseCondition, type AlertCheck, type AlertCondition, type AlertTrigger } from "./alert-conds";
 import { CHANGE_PERIODS, DEFAULT_PERIODS, MAX_PERIODS, type ChangePeriod } from "./periods";
 import type { Prices } from "./series";
 import { DATA_ID, TF_LABELS, hash6, isSynthetic, isTimeframe, isValidKey, tickerOf, type Timeframe } from "./symbols";
@@ -42,7 +42,7 @@ export interface FormulaDef {
 export interface AlertDef {
   /** `alert:<id>` when given in the yaml, else a hash of the key and the condition (or formula and timeframe) */
   id: string;
-  /** Null: every watched symbol, judged after each daily sync */
+  /** Null: every watched symbol */
   key: string | null;
   /** As written, or generated: 「BTC 上穿 130,000」 */
   label: string;
@@ -57,6 +57,8 @@ export interface AlertDef {
   tf: Timeframe;
   /** Always `bar` for the whole watchlist: each symbol fires at most once per bar */
   trigger: AlertTrigger;
+  /** `price`: judged on today's live bar after every quote round (and after a sync); `close`: after a daily sync, on closed daily bars only */
+  check: AlertCheck;
   enabled: boolean;
   /** False: only shown on the overview, never pushed */
   notify: boolean;
@@ -322,6 +324,11 @@ function conditionAsAlert(raw: unknown, taken: Set<string>): Record<string, unkn
 }
 
 /** 「收盘价上穿 130,000」, 「5 根 K 线内上涨 3%」, or the formula with its timeframe. */
+/** 「日线收盘」 or 「盘中价格」 when it is not what an alert of its kind does anyway. */
+export function checkNote(a: Pick<AlertDef, "key" | "check">): string | null {
+  return a.check === defaultCheck(a.key) ? null : ALERT_CHECKS[a.check];
+}
+
 export function describeAlert(a: Pick<AlertDef, "condition" | "when" | "tf">): string {
   if (a.condition) return a.condition.cond.startsWith("moving_") ? describeCondition(a.condition) : `收盘价${describeCondition(a.condition)}`;
   return `${TF_LABELS[a.tf]}线公式 ${a.when}`;
@@ -351,10 +358,12 @@ export function parseAlert(raw: unknown, i: number, aliases: Record<string, stri
   for (const flag of ["enabled", "notify"]) {
     if (d[flag] !== undefined && typeof d[flag] !== "boolean") throw new ConfigError(`${where}：${flag} 应为 true 或 false`);
   }
+  const check = d.check ?? defaultCheck(key);
+  if (check !== "price" && check !== "close") throw new ConfigError(`${where}：check 应为 price（盘中价格）或 close（日线收盘）`);
   const tf = when && isTimeframe(d.tf) ? d.tf : ("D" as const);
   const own = text(d.id);
   if (own && !/^[A-Za-z0-9_-]+$/.test(own)) throw new ConfigError(`${where}：id「${own}」只能用字母、数字、下划线、横线`);
-  // pausing or switching the trigger keeps the id, so the alert keeps its state
+  // pausing, or switching the trigger or the check, keeps the id, so the alert keeps its state
   const scope = key ?? "*";
   const identity = condition ? `${scope}|${condition.cond}|${JSON.stringify(condition.value)}` : `${scope}|${when}|${tf}`;
   const label = text(d.label);
@@ -369,6 +378,7 @@ export function parseAlert(raw: unknown, i: number, aliases: Record<string, stri
     when,
     tf,
     trigger,
+    check,
     enabled: d.enabled !== false,
     notify: d.notify !== false,
   };

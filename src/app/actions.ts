@@ -4,8 +4,9 @@ import { revalidatePath } from "next/cache";
 import { isMap, isScalar, isSeq, type Document, type YAMLMap, type YAMLSeq } from "yaml";
 import { compile } from "@/indicators/formula";
 import { describeError } from "@/indicators/formula-indicators";
-import type { AlertCond, AlertCondition, AlertTrigger } from "@/lib/alert-conds";
+import { defaultCheck, type AlertCheck, type AlertCond, type AlertCondition, type AlertTrigger } from "@/lib/alert-conds";
 import { adoptConditionState, alertIndex, editAlerts, forgetAlerts, runAlerts, serializeAlerts, setAlertsEnabled } from "@/lib/alerts";
+import { liveReader } from "@/lib/quotes";
 import { CHART_STYLES, USAGE_LIMITS, findItem, parseAlert, resolveKey, type ChartPrefs, type FormulaDef, type UsageLimits } from "@/lib/config";
 import { CHANGE_PERIODS, MAX_PERIODS } from "@/lib/periods";
 import type { Prices } from "@/lib/series";
@@ -472,6 +473,8 @@ export interface AlertInput {
   tf?: Timeframe;
   /** Ignored for the whole watchlist, which fires each symbol at most once per bar */
   trigger: AlertTrigger;
+  /** 判断时机; absent for what an alert of its kind does by default */
+  check?: AlertCheck;
   /** Empty for the generated name */
   label?: string;
   /** Undoing a delete puts a paused alert back paused */
@@ -494,8 +497,8 @@ function setField(doc: Document, map: YAMLMap, field: string, value: unknown): v
 
 /**
  * Create or edit an alert in the viewer's yaml; an edited alert starts over (TradingView restarts it
- * too). One on the whole watchlist is judged right away on the daily bars, so the overview shows
- * where it holds without waiting for the next sync.
+ * too). One on the whole watchlist is judged right away (on the live bars, or the closed daily
+ * ones for `check: close`), so the overview shows where it holds without waiting for the next sync.
  */
 export async function saveAlert(input: AlertInput): Promise<ActionResult> {
   return attempt(async ({ dir, vault }) => {
@@ -523,6 +526,8 @@ export async function saveAlert(input: AlertInput): Promise<ActionResult> {
         entry.value = input.value;
       }
       if (key) entry.trigger = input.trigger === "bar" ? "bar" : "once";
+      // the default is left out, so alerts written before stay as they are
+      if ((input.check === "price" || input.check === "close") && input.check !== defaultCheck(key)) entry.check = input.check;
       const label = str(input.label);
       if (label) entry.label = label;
       if (input.enabled === false) entry.enabled = false;
@@ -549,7 +554,7 @@ export async function saveAlert(input: AlertInput): Promise<ActionResult> {
         const written = node.get("key");
         if (!key) node.delete("key");
         else if (typeof written !== "string" || resolveKey(written, cfg.aliases) !== key) setField(doc, node, "key", entry.key);
-        for (const field of ["cond", "value", "when", "tf", "trigger", "label", "enabled", "notify"]) {
+        for (const field of ["cond", "value", "when", "tf", "trigger", "check", "label", "enabled", "notify"]) {
           if (field in entry) setField(doc, node, field, entry[field]);
           else node.delete(field);
         }
@@ -558,7 +563,7 @@ export async function saveAlert(input: AlertInput): Promise<ActionResult> {
       forgetAlerts(vault, input.id ? [input.id, id] : [id]);
       return key === null;
     });
-    if (watchlist) await runAlerts({ id: vault, dir }, () => readConfig(dir), "watchlist");
+    if (watchlist) await runAlerts({ id: vault, dir }, () => readConfig(dir), "watchlist", liveReader());
   });
 }
 
@@ -583,6 +588,6 @@ export async function setAlertEnabled(id: string, enabled: boolean): Promise<Act
       setAlertsEnabled(dir, [str(id)], Boolean(enabled));
       if (enabled) forgetAlerts(vault, [str(id)]);
     });
-    if (enabled && readConfig(dir).alerts.some((a) => a.id === str(id) && !a.key)) await runAlerts({ id: vault, dir }, () => readConfig(dir), "watchlist");
+    if (enabled && readConfig(dir).alerts.some((a) => a.id === str(id) && !a.key)) await runAlerts({ id: vault, dir }, () => readConfig(dir), "watchlist", liveReader());
   });
 }

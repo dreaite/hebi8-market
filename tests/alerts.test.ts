@@ -53,9 +53,26 @@ describe("alerts in hebi8.yaml", () => {
       when: "close < sma(close, 200)",
       tf: "W",
       trigger: "once",
+      check: "price",
       enabled: true,
       notify: true,
     });
+  });
+
+  it("check: an alert on a symbol follows the price, one on the whole watchlist waits for the close, unless written otherwise", () => {
+    const cfg = normalizeConfig({
+      ...base,
+      alerts: [
+        { key: "BTC", cond: "greater", value: 1 },
+        { when: "close > 1" },
+        { key: "BTC", cond: "less", value: 1, check: "close" },
+        { when: "close > 2", check: "price" },
+      ],
+    });
+    expect(cfg.alerts.map((a) => a.check)).toEqual(["price", "close", "close", "price"]);
+    // switching it keeps the id, like the trigger
+    expect(normalizeConfig({ ...base, alerts: [{ key: "BTC", cond: "less", value: 1 }] }).alerts[0].id).toBe(cfg.alerts[2].id);
+    expect(() => normalizeConfig({ ...base, alerts: [{ key: "BTC", cond: "less", value: 1, check: "open" }] })).toThrow(/check 应为 price/);
   });
 
   it("syncs alert keys that are not watched, and their references", () => {

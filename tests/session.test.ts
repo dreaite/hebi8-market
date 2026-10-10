@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { barCloseAt, fmtCountdown, quoteIsCurrent, sessionEnd, type SessionClock } from "@/lib/session";
+import { barCloseAt, dayCloseAt, fmtCountdown, quoteIsCurrent, sessionEnd, type SessionClock } from "@/lib/session";
 
 const utc = (s: string) => Date.parse(`${s}Z`);
 const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString().slice(0, 16));
@@ -86,6 +86,19 @@ describe("the countdown to the bar's close", () => {
     expect(sessionEnd("0930-1130,1300-1500", 3)).toEqual({ hh: 15, mm: 0 });
     expect(sessionEnd("0930-1130E0925-1131S1300-1500E1300-1501", 3)).toEqual({ hh: 15, mm: 0 });
     expect(sessionEnd("24x7", 3)).toBeNull();
+  });
+
+  it("knows when a trading day's bar is complete", () => {
+    const friday = Date.UTC(2026, 9, 9) / 1000;
+    // around the clock: with the UTC day
+    expect(iso(dayCloseAt(friday, "24x7", "UTC"))).toBe("2026-10-10T00:00");
+    // an exchange: at its close on that day, by its own clock and the day's own hours
+    expect(iso(dayCloseAt(friday, "0930-1600", "America/New_York"))).toBe("2026-10-09T20:00");
+    expect(iso(dayCloseAt(friday, "0930-1500", "Asia/Shanghai"))).toBe("2026-10-09T07:00");
+    expect(iso(dayCloseAt(friday, "1700-1600:2345|1700-1500:6", "America/Chicago"))).toBe("2026-10-09T20:00");
+    // hours not synced yet: once the day is over on the exchange's calendar
+    expect(iso(dayCloseAt(friday, null, "America/New_York"))).toBe("2026-10-10T04:00");
+    expect(iso(dayCloseAt(friday, null, null))).toBe("2026-10-10T00:00");
   });
 
   it("formats like TradingView", () => {

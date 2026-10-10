@@ -3,7 +3,7 @@
 import { useMemo, useState, type FocusEvent, type ReactNode } from "react";
 import { deleteAlert, saveAlert, type AlertInput } from "@/app/actions";
 import { compileFormula } from "@/indicators/formula-indicators";
-import { ALERT_CONDS, WATCHLIST, describeCondition, parseCondition, type AlertCond, type AlertCondition, type AlertTrigger } from "@/lib/alert-conds";
+import { ALERT_CHECKS, ALERT_CONDS, WATCHLIST, defaultCheck, describeCondition, parseCondition, type AlertCheck, type AlertCond, type AlertCondition, type AlertTrigger } from "@/lib/alert-conds";
 import type { AlertView } from "@/lib/alert-view";
 import { isSynthetic, TF_LABELS, TIMEFRAMES, tickerOf, type Timeframe } from "@/lib/symbols";
 import { synthName } from "@/lib/synth";
@@ -30,8 +30,8 @@ export function AlertLoginDialog({ onClose }: { onClose: () => void }) {
 
 /**
  * 新建警报 / 编辑警报, TradingView's dialog: the symbol (or 全部自选), 条件 with the value inputs
- * that condition needs, 触发 (仅一次 | 每根 K 线一次), an optional name whose placeholder is the
- * generated one, and whether it is pushed. The chart and the overview open the same dialog.
+ * that condition needs, 判断时机 (盘中价格 | 日线收盘), 触发 (仅一次 | 每根 K 线一次), an optional name
+ * whose placeholder is the generated one, and whether it is pushed. The chart and the overview open the same dialog.
  */
 export function AlertDialog({
   symbolKey,
@@ -73,6 +73,9 @@ export function AlertDialog({
   const [label, setLabel] = useState(alert?.ownLabel ?? "");
   /** On every watched symbol instead of this one */
   const [all, setAll] = useState(alert ? alert.key === null : false);
+  /** Null: what an alert of this scope does by default, so switching the scope switches it too */
+  const [chosenCheck, setChosenCheck] = useState<AlertCheck | null>(alert && alert.check !== defaultCheck(alert.key) ? alert.check : null);
+  const check = chosenCheck ?? defaultCheck(all ? null : symbolKey);
   const [notify, setNotify] = useState(alert?.notify ?? true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -111,6 +114,7 @@ export function AlertDialog({
       cond,
       ...(parsed && "condition" in parsed ? { value: parsed.condition.value } : { when, tf }),
       trigger,
+      check,
       label,
       notify,
     };
@@ -217,6 +221,15 @@ export function AlertDialog({
             </div>
           </Field>
         )}
+        <Field label="判断时机">
+          <div className="seg" role="group" aria-label="判断时机">
+            {(Object.keys(ALERT_CHECKS) as AlertCheck[]).map((c) => (
+              <button key={c} type="button" aria-pressed={check === c} onClick={() => setChosenCheck(c)}>
+                {ALERT_CHECKS[c]}
+              </button>
+            ))}
+          </div>
+        </Field>
         <Field label="触发">
           {all ? (
             <span className="text-muted">每个标的每根 K 线最多一次</span>
@@ -242,7 +255,8 @@ export function AlertDialog({
           </label>
         </Field>
         <p className="text-[11px] text-muted">
-          {all ? "每次日线同步后对每个自选标的判断，总览上在成立的标的旁显示这个名字。" : "盘中每 5 分钟取一次最新价判断（休市时每小时），总览上这个标的旁显示这个名字。"}
+          {check === "price" ? "每 5 分钟取一次最新价判断（休市时每小时），今天还没收完的日线也算。" : "每次日线同步后判断，只看已经收盘的日线。"}
+          {all ? "对每个自选标的分别判断，总览上在成立的标的旁显示这个名字。" : "总览上这个标的旁显示这个名字。"}
         </p>
         {error && <p className="text-down">{error}</p>}
         <div className="-mx-4 -mb-4 flex justify-end gap-2 border-t border-line px-4 py-3">

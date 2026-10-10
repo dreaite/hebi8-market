@@ -505,6 +505,110 @@ describe("quote polling", () => {
       logs.mockRestore();
     });
 
+    /** The root vault with BTC on its list and these alerts, written the way a person would. */
+    const watching = async (alerts: string[]) => {
+      const { readConfig } = await import("@/lib/vault");
+      fs.writeFileSync(path.join(root, "hebi8.yaml"), `aliases:\n  BTC: ${BTC}\ngroups:\n  - { name: 加密, symbols: [BTC] }\nalerts:\n${alerts.map((a) => `  - ${a}\n`).join("")}`);
+      return { id: "", dir: root, config: readConfig(root) };
+    };
+
+    it("check decides when an alert is judged: price ones after every quote round, close ones only after a sync", async () => {
+      const { quoteKeys, quoteRound } = await import("@/lib/quotes");
+      const { runAlerts, readState, stateId } = await import("@/lib/alerts");
+      const { readConfig } = await import("@/lib/vault");
+      const { writeBars } = await import("@/lib/store");
+      writeBars(BTC, closes(100, 101), "replace");
+      const vault = await watching([
+        "{ id: key-price, key: BTC, cond: greater, value: 104, trigger: bar }",
+        "{ id: key-close, key: BTC, cond: greater, value: 103, trigger: bar, check: close }",
+        '{ id: all-close, when: "close > 102" }',
+        '{ id: all-price, when: "close > 101.5", check: price }',
+        '{ id: all-ref, when: "close > close(\\"yahoo:QQQ\\")", check: price }',
+        `{ id: far-close, key: ${SPY}, cond: greater, value: 1, check: close }`,
+      ]);
+      // what a price alert reads is polled, the whole watchlist's formula references too; a close alert's symbol is not
+      expect(quoteKeys([vault.config]).sort()).toEqual([BTC, "yahoo:QQQ"].sort());
+      const logs = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const row = (id: string) => readState("").get(stateId(`alert:${id}`, BTC));
+
+      // a quote round at 105: only the price alerts are judged, on today's live bar
+      await quoteRound(Date.now(), [vault]);
+      expect(row("key-price")).toMatchObject({ state: 1, firedAt: expect.any(Number) });
+      // a formula's first sighting only records
+      expect(row("all-price")).toMatchObject({ state: 1, firedAt: null });
+      expect(row("key-close")).toBeUndefined();
+      expect(row("all-close")).toBeUndefined();
+
+      // the daily sync ends: the close alerts are judged on the last daily close, 101, not on the quote
+      await runAlerts(vault, () => readConfig(root));
+      expect(row("key-close")).toMatchObject({ state: 0, firedAt: null });
+      expect(row("all-close")).toMatchObject({ state: 0, firedAt: null });
+      // and the next quote round leaves them alone
+      prices.BTCUSDT = 110;
+      await quoteRound(Date.now() + 5 * 60_000, [vault]);
+      expect(row("key-close")).toMatchObject({ state: 0, firedAt: null });
+      expect(row("all-close")).toMatchObject({ state: 0, firedAt: null });
+      logs.mockRestore();
+    });
+
+    it("a close alert does not look at a daily bar whose day is still going; a price alert does", async () => {
+      const { runAlerts, readState, stateId } = await import("@/lib/alerts");
+      const { readConfig } = await import("@/lib/vault");
+      const { writeBars } = await import("@/lib/store");
+      const today = Math.floor(Date.now() / 1000 / DAY) * DAY;
+      // the sync brought today's bar of the UTC day so far: 200, after yesterday's 101
+      writeBars(BTC, [{ ...bar(101), t: today - DAY }, { ...bar(200), t: today }], "replace");
+      const vault = await watching([
+        "{ id: key-price, key: BTC, cond: greater, value: 150, trigger: bar }",
+        "{ id: key-close, key: BTC, cond: greater, value: 150, trigger: bar, check: close }",
+        '{ id: all-close, when: "close > 150" }',
+        '{ id: all-price, when: "close > 150", check: price }',
+      ]);
+      const logs = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const row = (id: string) => readState("").get(stateId(`alert:${id}`, BTC));
+      const load = () => readConfig(root);
+
+      await runAlerts(vault, load);
+      expect(row("key-price")).toMatchObject({ state: 1, firedBar: today, firedAt: expect.any(Number) });
+      expect(row("all-price")).toMatchObject({ state: 1 });
+      // yesterday's close is the last one that counts
+      expect(row("key-close")).toMatchObject({ state: 0, firedAt: null });
+      expect(row("all-close")).toMatchObject({ state: 0, firedAt: null });
+
+      // the UTC day is over: the same bar is a close now
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime((today + DAY) * 1000 + 60_000);
+      await runAlerts(vault, load);
+      vi.useRealTimers();
+      expect(row("key-close")).toMatchObject({ state: 1, firedBar: today, firedAt: expect.any(Number) });
+      expect(row("all-close")).toMatchObject({ state: 1, firedBar: today, firedAt: expect.any(Number) });
+      logs.mockRestore();
+    });
+
+    it("a price alert on the whole watchlist is judged every round and still fires once per bar, in its own vault only", async () => {
+      const { quoteRound } = await import("@/lib/quotes");
+      const { readState, stateId } = await import("@/lib/alerts");
+      const { writeBars } = await import("@/lib/store");
+      const { getDb } = await import("@/lib/db");
+      writeBars(BTC, closes(100, 101), "replace");
+      const mine = await watching(['{ id: hot, when: "close > 104", check: price }']);
+      // bob watches BTC too, with the same alert left at its default: judged after a sync only
+      fs.writeFileSync(path.join(bob, "hebi8.yaml"), `groups:\n  - { name: 加密, symbols: ["${BTC}"] }\nalerts:\n  - { id: hot, when: "close > 104" }\n`);
+      const { readConfig } = await import("@/lib/vault");
+      const vaults = [mine, { id: "bob", dir: bob, config: readConfig(bob) }];
+      const logs = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const now = Date.now();
+      // below, above (turns true: fires), below, above again within the same daily bar
+      for (const [i, price] of [100, 105, 99, 106].entries()) {
+        prices.BTCUSDT = price;
+        await quoteRound(now + i * 5 * 60_000, vaults);
+      }
+      expect(logs.mock.calls.flat().filter((m) => /new alert\(s\)/.test(String(m)))).toHaveLength(1);
+      expect(readState("").get(stateId("alert:hot", BTC))).toMatchObject({ state: 1, firedAt: expect.any(Number) });
+      expect(getDb().prepare("SELECT count(*) AS n FROM alert_state WHERE vault = 'bob'").get()).toEqual({ n: 0 });
+      logs.mockRestore();
+    });
+
     it("the chart's last bar is today's live one, with the bench aligned to it", async () => {
       const { quoteRound } = await import("@/lib/quotes");
       const { writeBars } = await import("@/lib/store");

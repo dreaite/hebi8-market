@@ -52,6 +52,7 @@ export function AlertsPanel({
             cond: a.cond ?? "formula",
             ...(a.cond ? { value: a.value! } : { when: a.when!, tf: a.tf }),
             trigger: a.trigger,
+            check: a.check,
             label: a.ownLabel ?? "",
             enabled: a.enabled,
             notify: a.notify,

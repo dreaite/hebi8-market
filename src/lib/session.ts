@@ -85,6 +85,18 @@ export function barCloseAt(tf: Timeframe, now: number, { session, quotedAt, hour
   return close > now ? close : null;
 }
 
+/**
+ * When the daily bar of trading day `t` (unix seconds at UTC midnight) is complete (ms): the end
+ * of the UTC day around the clock, the close of the regular session on that day at an exchange,
+ * and the end of the day on the exchange's calendar while its hours are not known yet.
+ */
+export function dayCloseAt(t: number, hours: string | null, timezone: string | null): number {
+  if (hours === "24x7") return (t + 86400) * 1000;
+  const day = dayOf(partsIn(new Date(t * 1000), "UTC"));
+  const end = hours ? sessionEnd(hours, weekday(day)) : null;
+  return zonedToUtc(end ? { ...day, ...end } : dayOf(day, 1), timezone ?? "UTC");
+}
+
 /** TradingView's countdown: `2d 5h` from a day up, `05:12:09` from an hour up, else `12:09`. */
 export function fmtCountdown(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));

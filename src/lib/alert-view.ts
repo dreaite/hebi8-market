@@ -1,9 +1,9 @@
 /** What the alert lines, the alert list and the overview badges show (§2.6, §5.1, §5.2), read from the vault, the cache and the quotes table. No network. */
-import type { AlertCond, AlertCondition, AlertTrigger } from "./alert-conds";
-import { ALERT_CONDS, WATCHLIST, conditionLevels } from "./alert-conds";
+import type { AlertCheck, AlertCond, AlertCondition, AlertTrigger } from "./alert-conds";
+import { ALERT_CHECKS, ALERT_CONDS, WATCHLIST, conditionLevels } from "./alert-conds";
 import { adoptConditionState, alertFiredAt, alertKeys, readState, stateId } from "./alerts";
 import { loadDaily, type DailyReader } from "./bars";
-import { describeAlert, type AlertDef, type Config } from "./config";
+import { checkNote, describeAlert, type AlertDef, type Config } from "./config";
 import { nameOf } from "./names";
 import { liveReader } from "./quotes";
 import { getSymbol, readQuotes, type SymbolRow } from "./store";
@@ -17,7 +17,7 @@ export interface AlertView {
   /** Display name of the symbol, or 全部自选 */
   name: string;
   label: string;
-  /** In plain words: 「收盘价大于 1」, or the formula with its timeframe; shown under the name whatever the name is */
+  /** In plain words: 「收盘价大于 1」, or the formula with its timeframe, then 「日线收盘」 or 「盘中价格」 when that is not the default; shown under the name whatever the name is */
   summary: string;
   /** The label as written, null when generated */
   ownLabel: string | null;
@@ -26,6 +26,7 @@ export interface AlertView {
   when: string | null;
   tf: Timeframe;
   trigger: AlertTrigger;
+  check: AlertCheck;
   enabled: boolean;
   notify: boolean;
   /** 活动 / 已触发 (a `once` alert that fired) / 已停止 */
@@ -61,13 +62,14 @@ export function alertViews(vault: string, cfg: Config, symbols: Record<string, S
       key: a.key,
       name: a.key ? nameOf(cfg, a.key, symbols[a.key]?.name) : WATCHLIST,
       label: a.label,
-      summary: describeAlert(a),
+      summary: [describeAlert(a), checkNote(a)].filter(Boolean).join(" · "),
       ownLabel: a.ownLabel,
       cond: a.condition?.cond ?? null,
       value: a.condition?.value ?? null,
       when: a.when,
       tf: a.tf,
       trigger: a.trigger,
+      check: a.check,
       enabled: a.enabled,
       notify: a.notify,
       status: a.enabled ? "active" : a.trigger === "once" && fired.has(a.id) ? "triggered" : "stopped",
@@ -89,9 +91,9 @@ export interface AlertBadge {
   title: string;
 }
 
-/** How an alert fires, in words: 「全部自选 · 每根 K 线最多一次 · 推送」 */
-export function alertScope(a: Pick<AlertDef, "key" | "trigger" | "notify">): string {
-  return [a.key ? null : WATCHLIST, a.trigger === "once" ? "仅一次" : "每根 K 线最多一次", a.notify ? "推送到通知通道" : "只在总览显示"].filter(Boolean).join(" · ");
+/** How an alert fires, in words: 「全部自选 · 日线收盘 · 每根 K 线最多一次 · 推送」 */
+export function alertScope(a: Pick<AlertDef, "key" | "trigger" | "notify" | "check">): string {
+  return [a.key ? null : WATCHLIST, ALERT_CHECKS[a.check], a.trigger === "once" ? "仅一次" : "每根 K 线最多一次", a.notify ? "推送到通知通道" : "只在总览显示"].filter(Boolean).join(" · ");
 }
 
 /**
