@@ -42,7 +42,9 @@ export async function POST(request: NextRequest) {
   const repo = feedbackRepo();
   try {
     const { token, session } = await userToken(clientId, sessionId);
-    const issue = await createIssue(token, repo, { title: input.title, body: buildIssueBody(input.description, input.context) }, Boolean(session.web_client));
+    // a refusal reads differently when the token is not the feedback App's (a web login through another client)
+    const otherClient = Boolean(session.web_client) && session.web_client !== clientId;
+    const issue = await createIssue(token, repo, { title: input.title, body: buildIssueBody(input.description, input.context) }, otherClient);
     forgetRecentIssues(repo);
     return NextResponse.json({ number: issue.number, html_url: issue.html_url });
   } catch (err) {

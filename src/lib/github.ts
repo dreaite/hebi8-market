@@ -29,7 +29,12 @@ export class GitHubError extends Error {
 /** The message the UI shows for a failed GitHub API response. */
 export function describeFailure(
   status: number,
-  { repo, detail, rateLimited = false, web = false }: { repo?: string; detail?: string; rateLimited?: boolean; /** the token came from the web login */ web?: boolean } = {},
+  {
+    repo,
+    detail,
+    rateLimited = false,
+    otherClient = false,
+  }: { repo?: string; detail?: string; rateLimited?: boolean; /** the token came from a web login through a client that is not the feedback App */ otherClient?: boolean } = {},
 ): string {
   const what = detail ? `（${detail}）` : "";
   const where = repo ?? "仓库";
@@ -38,8 +43,9 @@ export function describeFailure(
       return "GitHub 返回 401：登录已过期，请重新登录";
     case status === 403 && rateLimited:
       return "GitHub 返回 403：请求太频繁，稍后再试";
-    // the web login asks for the identity only: its token opens no issue, App installed or not
-    case (status === 403 || status === 404) && web:
+    // a web login through another client (an OAuth App without a scope) only says who someone is:
+    // its token opens no issue, wherever the feedback App is installed
+    case (status === 403 || status === 404) && otherClient:
       return `GitHub 返回 ${status}：这次登录的授权不能在 ${where} 上开 issue（网页登录只确认身份，没有开 issue 的权限）${what}。可以改在 GitHub 网页上提交`;
     case status === 403:
       return `GitHub 返回 403：你的账号不能在 ${where} 上开 issue（hebi8/market 的 GitHub App 没装在这个仓库，或账号被仓库限制）${what}。可以改在 GitHub 网页上提交`;
@@ -64,10 +70,10 @@ async function send(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
-/** REST API call; non-2xx throws `GitHubError`. `repo` and `web` only flavour the error messages. */
+/** REST API call; non-2xx throws `GitHubError`. `repo` and `otherClient` only flavour the error messages. */
 export async function api<T>(
   path: string,
-  { method = "GET", token, body, repo, web }: { method?: string; token?: string | null; body?: unknown; repo?: string; web?: boolean } = {},
+  { method = "GET", token, body, repo, otherClient }: { method?: string; token?: string | null; body?: unknown; repo?: string; otherClient?: boolean } = {},
 ): Promise<T> {
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
@@ -89,7 +95,7 @@ export async function api<T>(
     const first = detail?.errors?.[0];
     const message = [detail?.message, first?.message ?? (first ? `${first.field ?? ""} ${first.code ?? ""}`.trim() : null)].filter(Boolean).join(" · ");
     const rateLimited = res.headers.get("x-ratelimit-remaining") === "0";
-    throw new GitHubError(res.status, describeFailure(res.status, { repo, detail: message || undefined, rateLimited, web }), !rateLimited && [403, 404, 410].includes(res.status));
+    throw new GitHubError(res.status, describeFailure(res.status, { repo, detail: message || undefined, rateLimited, otherClient }), !rateLimited && [403, 404, 410].includes(res.status));
   }
   return json as T;
 }
@@ -214,8 +220,9 @@ export const LOGIN_COOKIE = "hebi8m_login";
 export const LOGIN_MINUTES = 10;
 
 /**
- * The client of the web login, an OAuth App or a GitHub App alike (same endpoints; a GitHub App's
- * reply just adds an expiry and a refresh token).
+ * The client of the web login: as a rule the feedback App itself (`githubClientId()`) with its
+ * client secret, so both logins give the same kind of token; another OAuth App works alike (same
+ * endpoints; its reply just has no expiry and no refresh token).
  */
 export interface WebClient {
   clientId: string;
@@ -470,8 +477,8 @@ export interface CreatedIssue {
 }
 
 /** Open the issue as the logged-in user (they are the author). No labels: the repo's workflow adds them. */
-export function createIssue(token: string, repo: string, issue: { title: string; body: string }, web = false): Promise<CreatedIssue> {
-  return api<CreatedIssue>(`/repos/${repo}/issues`, { method: "POST", token, body: { title: issue.title, body: issue.body }, repo, web });
+export function createIssue(token: string, repo: string, issue: { title: string; body: string }, otherClient = false): Promise<CreatedIssue> {
+  return api<CreatedIssue>(`/repos/${repo}/issues`, { method: "POST", token, body: { title: issue.title, body: issue.body }, repo, otherClient });
 }
 
 export interface IssueSummary {

@@ -823,14 +823,14 @@ client id 不是秘密（device flow 的设计就是给拿不住密钥的客户�
 网页登录另有一个文件，配置目录（§1.5）下的 `github-oauth.json`，手写，权限 600，每次用到时读，改了不用重启：
 
 ```json
-{ "client_id": "Ov23li…", "client_secret": "…", "scope": "", "origins": ["https://market-hebi8.dreaife.tokyo"] }
+{ "client_id": "Iv23li…", "client_secret": "…", "scope": "", "origins": ["https://market-hebi8.dreaife.tokyo"] }
 ```
 
 | 字段 | 说明 |
 |---|---|
-| `client_id`、`client_secret` | 必填，两个都有才启用网页登录。OAuth App 或 GitHub App 都行：两者的 authorize / token 接口一样，代码不区分，差别只在 GitHub App 的 token 带过期时间和 refresh token |
-| `scope` | 可省，默认空（只确认身份），原样传给 GitHub |
-| `origins` | 可省，默认 `[publicUrl()]`。请求的 origin（`Host` + `X-Forwarded-Proto`）在这个列表里才提供网页登录：GitHub 只跳回登记过的回调地址（OAuth App 只能登记一个），从别的入口发起会落到另一个 Host 上，cookie 到不了发起的入口 |
+| `client_id`、`client_secret` | 必填，两个都有才启用网页登录。通常就是反馈用的那个 GitHub App（`GITHUB_APP_CLIENT_ID`）加上它的 client secret：两种登录拿到的是同一种 token，都能在应用里提交。也可以是另一个 OAuth App：authorize / token 接口一样，代码不区分，差别只在 OAuth App 的 token 没有过期时间和 refresh token，而且不带 scope 时只确认身份（见下面「提交」） |
+| `scope` | 可省，默认空，原样传给 GitHub。GitHub App 不看它（权限是 App 自己的）；对 OAuth App，空就是只确认身份 |
+| `origins` | 可省，默认 `[publicUrl()]`。请求的 origin（`Host` + `X-Forwarded-Proto`）在这个列表里才提供网页登录：GitHub 只跳回登记过的回调地址（GitHub App 可以登记多个，OAuth App 只能一个），从别的入口发起会落到另一个 Host 上，cookie 到不了发起的入口 |
 
 没有这个文件、当前入口不在列表里、或 `HEBI8_GITHUB_CLIENT_ID=off`：没有网页登录，「登录」走 device flow。
 
@@ -860,7 +860,7 @@ client id 不是秘密（device flow 的设计就是给拿不住密钥的客户�
 
 **两种方式共用的**：
 
-- GitHub App 的用户 token 8 小时过期；离过期不到 5 分钟时用 `grant_type=refresh_token` + `refresh_token` 续，**由发 token 的那个 client 续**：会话有 `web_client` 的用 `github-oauth.json` 的 `client_id` + `client_secret`（文件里的 client 已经换掉或删掉就续不了）；没有的是 device flow 的会话，用 `githubClientId()`，不带 secret。OAuth App 的 token 不过期，没有 refresh token，不走这一步。续不上（或 GitHub 对用户 token 返回 401）就删会话，面板显示原因和登录按钮。
+- GitHub App 的用户 token 8 小时过期；离过期不到 5 分钟时用 `grant_type=refresh_token` + `refresh_token` 续，**由发 token 的那个 client 续**：会话有 `web_client` 的用 `github-oauth.json` 的 `client_id` + `client_secret`（文件里的 client 已经换掉或删掉就续不了）；没有的是 device flow 的会话，用 `githubClientId()`，不带 secret（两种登录用的是同一个 App 时也是这样分）。OAuth App 的 token 不过期，没有 refresh token，不走这一步。续不上（或 GitHub 对用户 token 返回 401）就删会话，面板显示原因和登录按钮。
 - `POST /api/github/logout` 删会话。
 - 写操作的接口都拒绝跨站 `Origin`；两个 GET（`login`、`callback`）靠 `state` 和 SameSite=Lax 的临时 cookie。
 
@@ -871,7 +871,7 @@ client id 不是秘密（device flow 的设计就是给拿不住密钥的客户�
 3. 「登录」是一个普通表单，`POST /api/github/claim/redeem`（拒绝跨站）→ `takeClaim` 把码用掉 → 建一条**新会话**（自己的 id，login 和头像来自发起人，`access_token` 等四个 token 字段都是 null），设 cookie，303 到 `/?login=ok`；码已经没了就 303 回 `/claim`。**不复制 token**：GitHub App 的 refresh token 每用一次就换新的，两条会话共用一份会互相作废。
 4. 没有 token 的会话身份完全正常（vault、通知、警报都照常），只有应用内提交要用 GitHub 登录一次（见上面反馈页签的状态）。
 
-**提交**：`POST /api/github/issues` → 用**用户** token `POST /repos/<repo>/issues`，只有 title + body，不带标签（非协作者带的标签会被 GitHub 静默丢掉）。用户 token 只能访问用户和 App 都能访问的资源，所以 App 必须安装在反馈仓库上；没装（404）、账号被仓库限制（403）、仓库关了 issue（410）都映射成中文说明并提供网页版。网页登录默认不带 scope，OAuth App 的这种 token 开不了 issue（GitHub 回 403 或 404）：会话有 `web_client` 时这两个状态的说明是「这次登录的授权不能在 <repo> 上开 issue（网页登录只确认身份，没有开 issue 的权限）」，同样提供网页版；不为此多发探测请求。`GET /api/github/issues`：`from-app` 标签、`state=all`、去掉 PR、前 5 条；登录时用用户 token（被拒就匿名重试），否则匿名（公开仓库）；服务端按仓库缓存 60 秒，提交成功后清缓存。
+**提交**：`POST /api/github/issues` → 用**用户** token `POST /repos/<repo>/issues`，只有 title + body，不带标签（非协作者带的标签会被 GitHub 静默丢掉）。用户 token 只能访问用户和 App 都能访问的资源，所以 App 必须安装在反馈仓库上；没装（404）、账号被仓库限制（403）、仓库关了 issue（410）都映射成中文说明并提供网页版。网页登录的 token 看它是哪个 client 发的：会话的 `web_client` 就是 `githubClientId()`（网页登录用的是反馈的那个 GitHub App）时，和 device flow 的 token 一样能提交，被拒的原因和说明也同上。是另一个 client（不带 scope 的 OAuth App）时，token 只确认身份，开不了 issue（GitHub 回 403 或 404），这两个状态的说明换成「这次登录的授权不能在 <repo> 上开 issue（网页登录只确认身份，没有开 issue 的权限）」，同样提供网页版。只按会话里记的 client 判断，不为此多发探测请求。`GET /api/github/issues`：`from-app` 标签、`state=all`、去掉 PR、前 5 条；登录时用用户 token（被拒就匿名重试），否则匿名（公开仓库）；服务端按仓库缓存 60 秒，提交成功后清缓存。
 
 **网页版**（`webIssueUrl()`，纯函数，浏览器里算）：`https://github.com/<repo>/issues/new?title=…&body=…`，body 与应用内提交的完全一样（含 context 块）。URL 上限 7000 字符（GitHub 约 8 KB 起报 414）：超了先把 JSON 压成一行，再去掉 `errors`、`userAgent`，再只留 `{ v, type, autoFix }`，最后才从尾部截断描述并注明「网页版已截断」。
 
@@ -923,7 +923,7 @@ client id 不是秘密（device flow 的设计就是给拿不住密钥的客户�
 
 1. 用预填好的链接在 Hebi8 组织下注册 App（名字、描述、主页、公开、关闭 webhook、Issues 读写；Metadata 只读是自动带的）：
    `https://github.com/organizations/Hebi8/settings/apps/new?name=hebi8-market&description=hebi8%20market%20%E7%9A%84%E5%BA%94%E7%94%A8%E5%86%85%E5%8F%8D%E9%A6%88%EF%BC%9A%E7%94%A8%E4%BD%A0%E8%87%AA%E5%B7%B1%E7%9A%84%20GitHub%20%E8%B4%A6%E5%8F%B7%E5%9C%A8%20Hebi8%2Fhebi8-market%20%E4%B8%8A%E6%8F%90%E4%BA%A4%20issue&url=https%3A%2F%2Fgithub.com%2FHebi8%2Fhebi8-market&public=true&webhook_active=false&issues=write`
-   核对：**Any account** 可安装（公开——私有 App 只有组织成员能授权）；Webhook 不勾 Active；Repository permissions 只有 Issues: Read and write 和 Metadata: Read-only；Callback URL 留空（device flow 不需要）；**Expire user authorization tokens** 保持勾选（8 小时 + refresh）。不要生成 client secret 或私钥，用不到。
+   核对：**Any account** 可安装（公开——私有 App 只有组织成员能授权）；Webhook 不勾 Active；Repository permissions 只有 Issues: Read and write 和 Metadata: Read-only；Callback URL 留空（device flow 不需要，网页登录才要，见下面）；**Expire user authorization tokens** 保持勾选（8 小时 + refresh）。私钥用不到；client secret 只有网页登录要，device flow 不用。
 2. 建好后在 App 的 General 设置里勾选 **Enable Device Flow** 并保存（URL 参数不能设这一项）。
 3. Install App → Hebi8 → **Only select repositories → hebi8-market** → Install。
 4. 把 App 页面上的 **Client ID**（`Iv23…`）填进 `src/lib/app-info.ts` 的 `GITHUB_APP_CLIENT_ID`，提交。
@@ -933,11 +933,13 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 
 **实例的一次性设置（网页登录，可选）**：不做这一步，登录就是 device flow。
 
-1. 在 GitHub 上建一个 OAuth App（Settings → Developer settings → OAuth Apps → New OAuth App）：Homepage URL 填实例的公开地址，**Authorization callback URL** 填 `<公开地址>/api/github/callback`，不用勾 Enable Device Flow。生成一个 client secret。
-2. 在配置目录里写 `github-oauth.json`（上面的格式），`chmod 600`。`origins` 不写就是 `HEBI8_PUBLIC_URL`；要写就只写回调地址登记在这个 client 上的入口。
+1. 打开反馈用的那个 GitHub App 的设置页（上面注册的 hebi8-market，client id 就是 `GITHUB_APP_CLIENT_ID`）：在 **Callback URL** 里加上 `<公开地址>/api/github/callback`，点 **Generate a new client secret**。Enable Device Flow 保持勾选，其他入口还在用。
+2. 在配置目录里写 `github-oauth.json`（上面的格式），`chmod 600`：`client_id` 是 App 的 Client ID（`Iv23…`），`client_secret` 是刚生成的。`origins` 不写就是 `HEBI8_PUBLIC_URL`；要写就只写回调地址登记在这个 App 上的入口。GitHub App 可以登记多个回调地址，别的入口也要网页登录的话，把它的 `<origin>/api/github/callback` 也登记上，再写进 `origins`。
 3. 从公开地址打开页面点「登录」，应该跳到 GitHub 再回来。回调地址不对时 GitHub 自己的页面会报 redirect_uri 不匹配。
 
-也可以填一个 GitHub App 的 client id 和 secret（GitHub App 能登记多个回调地址，token 的权限就是 App 的权限）：把各个入口的 `<origin>/api/github/callback` 都登记上，再把这些 origin 写进 `origins`。
+这样网页登录和 device flow 拿到的是同一个 App 的用户 token：能在应用里提交，8 小时过期，用 refresh token 续（网页登录的会话续期带 secret）。
+
+另一种可行的配置是单独建一个 OAuth App（Settings → Developer settings → OAuth Apps，只能登记一个回调地址），把它的 id 和 secret 填进去。这种登录不带 scope 时只确认身份，token 开不了 issue，应用内提交会说明原因并给出网页版；要能提交得写 `"scope": "public_repo"`，那是这个人所有公开仓库的写权限，所以更推荐上面用 GitHub App 的做法。
 
 
 ### 5.9 元数据、分享卡片与搜索引擎

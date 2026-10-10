@@ -29,7 +29,7 @@
 
 ### 应用内反馈
 
-`?` → 反馈：填好标题和描述，点「用 GitHub 登录」，抽屉里会显示一串代码，到 github.com/login/device 输入并授权，回来就能提交——issue 以**你自己的** GitHub 账号开在 `Hebi8/hebi8-market` 上。登录用的是公开 GitHub App「hebi8-market」的 device flow，只需要写在 `src/lib/app-info.ts` 里的 client id，任何人自己部署的 hebi8 都能用，不用配置任何密钥；登录会话存在服务器的 `~/.config/hebi8/market/sessions.json`（`HEBI8_SECRETS` 可改，权限 600）。实例配了[网页登录](#网页登录可选)的入口上，「用 GitHub 登录」是跳到 GitHub 再回来，不用输代码；这种登录默认只确认身份，提交时会请你改用「在 GitHub 网页上提交」。不想登录、或者 App 还没配置（「反馈未启用」）时，「在 GitHub 网页上提交」会在 github.com 打开预填好同样内容的新 issue。
+`?` → 反馈：填好标题和描述，点「用 GitHub 登录」，抽屉里会显示一串代码，到 github.com/login/device 输入并授权，回来就能提交——issue 以**你自己的** GitHub 账号开在 `Hebi8/hebi8-market` 上。登录用的是公开 GitHub App「hebi8-market」的 device flow，只需要写在 `src/lib/app-info.ts` 里的 client id，任何人自己部署的 hebi8 都能用，不用配置任何密钥；登录会话存在服务器的 `~/.config/hebi8/market/sessions.json`（`HEBI8_SECRETS` 可改，权限 600）。实例配了[网页登录](#网页登录可选)的入口上，「用 GitHub 登录」是跳到 GitHub 再回来，不用输代码。不想登录、或者 App 还没配置（「反馈未启用」）时，「在 GitHub 网页上提交」会在 github.com 打开预填好同样内容的新 issue。
 
 标签不由应用加（非协作者开 issue 时 GitHub 会丢掉标签），而是仓库里的 Actions 工作流 `.github/workflows/app-feedback.yml` 读 issue 正文里的 `hebi8-context` 块：加 `from-app` 和类型标签；勾了「可以自动修复」的，作者是仓库 owner / 组织成员 / 协作者才加 `auto-fix-ok`，其他人加 `auto-fix-requested`。
 
@@ -176,18 +176,20 @@ vault/
 
 ### 网页登录（可选）
 
-device flow 每次都要复制代码、去 GitHub 粘贴、等轮询。给实例配一个 client secret，就可以改成跳到 GitHub 再回来：浏览器里已经登录 GitHub 的人点一下「登录」就完成。
+device flow 每次都要复制代码、去 GitHub 粘贴、等轮询。给实例配上 GitHub App 的 client secret，就可以改成跳到 GitHub 再回来：浏览器里已经登录 GitHub 的人点一下「登录」就完成。
 
-1. 在 GitHub 上建一个 OAuth App（Settings → Developer settings → OAuth Apps），**Authorization callback URL** 填 `<公开地址>/api/github/callback`，生成一个 client secret。
+1. 在反馈用的那个 GitHub App 的设置页（上面注册的 hebi8-market；fork 是自己的 App）里，往 **Callback URL** 加上 `<公开地址>/api/github/callback`，点 **Generate a new client secret**。Enable Device Flow 保持勾选。
 2. 在 `HEBI8_SECRETS` 目录（默认 `~/.config/hebi8/market`）里写 `github-oauth.json`，`chmod 600`：
 
    ```json
-   { "client_id": "Ov23li…", "client_secret": "…" }
+   { "client_id": "Iv23li…", "client_secret": "…" }
    ```
 
-   还可以写 `scope`（默认空，只确认身份）和 `origins`（提供网页登录的入口，默认只有 `HEBI8_PUBLIC_URL`）。文件每次用到时读，改了不用重启。
+   `client_id` 是 App 的 Client ID。还可以写 `origins`（提供网页登录的入口，默认只有 `HEBI8_PUBLIC_URL`；每个入口的 `<origin>/api/github/callback` 都要登记在 App 上）。文件每次用到时读，改了不用重启。
 
-GitHub 只跳回登记过的回调地址，所以网页登录只在 `origins` 里的入口提供；从别的入口（比如 Tailscale 的 http 地址）打开时，「登录」还是 device flow。没有这个文件时一切照旧。细节见 [`docs/design.md`](docs/design.md) §5.8。
+这样两种登录拿到的是同一个 App 的授权，都能在应用里提交反馈。GitHub 只跳回登记过的回调地址，所以网页登录只在 `origins` 里的入口提供；从别的入口（比如 Tailscale 的 http 地址）打开时，「登录」还是 device flow。没有这个文件时一切照旧。
+
+也可以单独建一个 OAuth App，把它的 id 和 secret 填进去（`scope` 默认空）：这样的登录只确认身份，不能在应用里提交反馈，提交时会说明原因并给出「在 GitHub 网页上提交」。细节见 [`docs/design.md`](docs/design.md) §5.8。
 
 ## 通知
 

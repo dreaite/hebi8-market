@@ -714,7 +714,18 @@ describe("issues", () => {
     expect(getSession(id)).not.toBeNull();
   });
 
-  it("a web login's token opens no issue: the reason says so, and the github.com form is offered", async () => {
+  it("a web login through the feedback App is refused for the same reasons as the device flow's", async () => {
+    const id = createSession({ login: "someone", avatar_url: "", access_token: "ghu_web", access_expires_at: Date.now() + 3600_000, refresh_token: "ghr_web", refresh_expires_at: null, web_client: CLIENT_ID });
+    routes[`POST ${ISSUES}`] = () => json({ message: "Resource not accessible by integration" }, 403);
+    let body = await (await submit({ [SESSION_COOKIE]: id }, { type: "bug", title: "x" })).json();
+    expect(body.error).toMatch(/^GitHub 返回 403：你的账号不能在 Hebi8\/hebi8-market 上开 issue（hebi8\/market 的 GitHub App 没装在这个仓库/);
+    routes[`POST ${ISSUES}`] = () => json({ message: "Not Found" }, 404);
+    body = await (await submit({ [SESSION_COOKIE]: id }, { type: "bug", title: "x" })).json();
+    expect(body.error).toMatch(/GitHub App 没有安装到这个仓库/);
+    expect(body.webFallback).toBe(true);
+  });
+
+  it("a web login through another client only says who someone is: the reason says so, and the github.com form is offered", async () => {
     const id = createSession({ login: "someone", avatar_url: "", access_token: "gho_web", access_expires_at: null, refresh_token: null, refresh_expires_at: null, web_client: "Ov23_web" });
     for (const [status, message] of [[404, "Not Found"], [403, "Resource not accessible by integration"]] as const) {
       routes[`POST ${ISSUES}`] = () => json({ message }, status);

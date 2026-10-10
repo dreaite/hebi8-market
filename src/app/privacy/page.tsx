@@ -66,9 +66,9 @@ export default function PrivacyPage() {
       </Section>
 
       <Section title="GitHub 登录">
-        <p>登录是可选的，不登录也能只读浏览运营者公开的总览和图表。登录在 GitHub 上完成：跳转到 GitHub 授权后回来，或者在 GitHub 上输入一串登录代码（GitHub App「hebi8-market」的设备授权）。</p>
+        <p>登录是可选的，不登录也能只读浏览运营者公开的总览和图表。登录在 GitHub 上完成，通过 GitHub App「hebi8-market」：跳转到 GitHub 授权后回来，或者在 GitHub 上输入一串登录代码（设备授权）。</p>
         <ul className="list-disc space-y-1 pl-5">
-          <li>服务器保存你的 GitHub 用户名、头像地址、登录时间，以及 GitHub 发给这次登录的访问令牌。令牌只用于应用内的反馈：以你的名义提交，以及读取最近的反馈。跳转登录不申请任何额外权限，只确认你是谁；用「在其他设备上登录」带到另一台设备的登录不带令牌。</li>
+          <li>服务器保存你的 GitHub 用户名、头像地址、登录时间，以及 GitHub 发给这次登录的访问令牌。令牌只用于应用内的反馈：以你的名义提交，以及读取最近的反馈。用「在其他设备上登录」带到另一台设备的登录不带令牌。</li>
           <li>浏览器里只有一个会话 Cookie，脚本读不到，连续 30 天没有使用后失效。退出登录会同时删除服务器上的会话。跳转登录的途中还有一个临时 Cookie，用来确认回来的是同一个浏览器，10 分钟后失效。</li>
           <li>你的头像图片由浏览器直接从 GitHub 加载。</li>
         </ul>
