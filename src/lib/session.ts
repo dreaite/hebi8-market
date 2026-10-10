@@ -132,10 +132,13 @@ export function dayCloseAt(t: number, calendar: TradingCalendar): number {
   return zonedToUtc(end ? { ...day, ...end } : dayOf(day, 1), calendar.timezone ?? "UTC");
 }
 
-/** When a day's sessions begin on the evening before (`1700-1600`, `1700-1700`, a start marked `F`): that clock time. */
-function eveningStart(sessions: string | null): { hh: number; mm: number } | null {
+/**
+ * When a day's sessions begin on the evening before (`1700-1600`, `1700-1700`, a start marked `F`):
+ * that clock time, and how many days before (`1700F2-…` after a holiday: two).
+ */
+function eveningStart(sessions: string | null): { hh: number; mm: number; back: number } | null {
   const m = /^(\d{2})(\d{2})(F\d*)?-(\d{4})/.exec(sessions ?? "");
-  return m && (m[3] !== undefined || m[1] + m[2] >= m[4]) ? { hh: Number(m[1]), mm: Number(m[2]) } : null;
+  return m && (m[3] !== undefined || m[1] + m[2] >= m[4]) ? { hh: Number(m[1]), mm: Number(m[2]), back: Number(m[3]?.slice(1) || 1) } : null;
 }
 
 /**
@@ -154,6 +157,34 @@ export function scheduledSession(now: number, calendar: TradingCalendar): QuoteS
   const sessions = sessionsOn(calendar, today);
   if (sessions === null || (eveningStart(sessions) && passed(closeOn(calendar, today)))) return "closed";
   return "open";
+}
+
+/**
+ * The day of the daily bar a trade at `at` (ms) belongs to, on the exchange's calendar. An
+ * overnight session counts for the day it ends on: the trade is in the nearest coming day's
+ * sessions that have begun, the evening before or, across a holiday, days before. So is one on a
+ * day of the week without sessions (Sunday, a little before the stated start). When no coming
+ * session has begun, the trade is a late print after the close and stays where it is (Friday
+ * evening, the evening before a holiday). A day session keeps its calendar day.
+ *
+ * The bar is stored under the day after the evening it starts on (`tradingDay()` of its time), which
+ * across a holiday is not the day the sessions end on: Tuesday's `1800F2-1430F1,1800-1700` after a
+ * Monday holiday is one bar from Sunday evening, stored as Monday.
+ */
+export function tradingDayAt(at: number, calendar: TradingCalendar): Parts {
+  const timezone = calendar.timezone ?? "UTC";
+  const today = dayOf(partsIn(new Date(at), timezone));
+  const startOf = (day: Parts) => eveningStart(sessionsOn(calendar, day));
+  const barDay = (day: Parts) => dayOf(day, 1 - (startOf(day)?.back ?? 1));
+  // `F6` is as far back as a start goes
+  for (let ahead = 1; ahead <= 6; ahead++) {
+    const day = dayOf(today, ahead);
+    const start = startOf(day);
+    if (start && zonedToUtc({ ...dayOf(day, -start.back), hh: start.hh, mm: start.mm }, timezone) <= at) return barDay(day);
+  }
+  // by the week's hours alone: a bar on a day the calendar calls a holiday did trade
+  const idle = sessionsOn({ ...calendar, holidays: null, corrections: null }, today) === null;
+  return barDay(idle && startOf(dayOf(today, 1)) ? dayOf(today, 1) : today);
 }
 
 /** TradingView's countdown: `2d 5h` from a day up, `05:12:09` from an hour up, else `12:09`. */

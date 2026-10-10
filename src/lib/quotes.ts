@@ -11,7 +11,7 @@ import { runAlerts } from "./alerts";
 import { loadDaily } from "./bars";
 import { allItems, findItem, type Config } from "./config";
 import type { Bar } from "./series";
-import { QUOTE_ROUND_MS, QUOTE_SLOW_MS, quoteIsCurrent, scheduledSession } from "./session";
+import { QUOTE_ROUND_MS, QUOTE_SLOW_MS, quoteIsCurrent, scheduledSession, tradingDayAt, type TradingCalendar } from "./session";
 import { adapters } from "./sources";
 import type { Quote, QuoteSession } from "./sources/types";
 import { computeStats, type Stats } from "./stats";
@@ -111,23 +111,26 @@ export function dueKeys(keys: string[], seen: State["seen"], now: number): strin
   });
 }
 
-/** Overnight TradingView sessions roll into the next trading day at 17:00; UTC feeds use New York's session clock. */
-function quoteDay(key: string, q: Pick<Quote, "time" | "session">, timeZone: string, kind?: string): number {
+/**
+ * The trading day a quote belongs to: the UTC day around the clock, the day of its session for a
+ * TradingView symbol (`tradingDayAt`: an evening session is the next day's, as in the daily bars,
+ * and a print after Friday's close stays on Friday), the exchange's calendar day otherwise (Yahoo's
+ * daily bars are calendar days) and while the hours are not known.
+ */
+function quoteDay(key: string, q: Pick<Quote, "time" | "session">, timeZone: string, calendar?: TradingCalendar): number {
   if (q.session === "always") return localDay(q.time, "UTC");
-  const { source, ticker } = parseKey(key);
-  const overnight = source === "tv" && (/^(TVC|FX_IDC|OANDA):/.test(ticker) || kind === "futures" || kind === "future" || kind === "forex");
-  if (!overnight) return localDay(q.time, timeZone);
-  const sessionZone = timeZone === "UTC" || timeZone === "Etc/UTC" ? "America/New_York" : timeZone;
-  return localDay(q.time + 7 * 3600, sessionZone);
+  if (!calendar?.hours || parseKey(key).source !== "tv") return localDay(q.time, timeZone);
+  const day = tradingDayAt(q.time * 1000, calendar);
+  return Date.UTC(day.y, day.m - 1, day.d) / 1000;
 }
 
 /**
  * The trading day a quote extends or adds after a last bar at `lastT`, or null when it is not
  * taken: not newer than the last daily sync (the synced bar wins), or on a day before the last bar.
  */
-export function quoteDayIn(lastT: number | null | undefined, quote: QuoteRow, timeZone: string, syncedAt: number | null, kind?: string): number | null {
+export function quoteDayIn(lastT: number | null | undefined, quote: QuoteRow, timeZone: string, syncedAt: number | null, calendar?: TradingCalendar): number | null {
   if (syncedAt !== null && quote.fetchedAt <= syncedAt) return null;
-  const t = quoteDay(quote.key, quote, timeZone, kind);
+  const t = quoteDay(quote.key, quote, timeZone, calendar);
   return lastT != null && t < lastT ? null : t;
 }
 
@@ -136,10 +139,10 @@ export function quoteDayIn(lastT: number | null | undefined, quote: QuoteRow, ti
  * same trading day, appended when it is a new one. A quote older than the last daily sync is
  * ignored, the synced bar is newer. Memory only.
  */
-export function withQuote(bars: Bar[], quote: QuoteRow | undefined, timeZone: string, syncedAt: number | null, seen?: Intraday, kind?: string): Bar[] {
+export function withQuote(bars: Bar[], quote: QuoteRow | undefined, timeZone: string, syncedAt: number | null, seen?: Intraday, calendar?: TradingCalendar): Bar[] {
   if (!quote) return bars;
   const last = bars.at(-1);
-  const t = quoteDayIn(last?.t, quote, timeZone, syncedAt, kind);
+  const t = quoteDayIn(last?.t, quote, timeZone, syncedAt, calendar);
   if (t === null) return bars;
   const same = last?.t === t ? last : null;
   const ownDay = seen?.t === t ? seen : null;
@@ -156,12 +159,12 @@ export function withQuote(bars: Bar[], quote: QuoteRow | undefined, timeZone: st
 export function liveReader(quotes = readQuotes()): (key: string) => Bar[] {
   return (key) => {
     const meta = getSymbol(key);
-    return withQuote(readDaily(key), quotes[key], meta?.timezone ?? "UTC", meta?.syncedAt ?? null, state.intraday.get(key), meta?.kind ?? undefined);
+    return withQuote(readDaily(key), quotes[key], meta?.timezone ?? "UTC", meta?.syncedAt ?? null, state.intraday.get(key), calendarOfRow(meta));
   };
 }
 
-function remember(key: string, q: Quote, timeZone: string, kind?: string): void {
-  const t = quoteDay(key, q, timeZone, kind);
+function remember(key: string, q: Quote, timeZone: string, calendar: TradingCalendar): void {
+  const t = quoteDay(key, q, timeZone, calendar);
   const day = state.intraday.get(key);
   if (day?.t === t) state.intraday.set(key, { t, o: day.o, h: Math.max(day.h, q.price), l: Math.min(day.l, q.price) });
   else state.intraday.set(key, { t, o: q.price, h: q.price, l: q.price });
@@ -202,7 +205,7 @@ async function fetchSource(source: Source, keys: string[], now: number): Promise
       // a symbol the source left out is asked again with the slow ones
       state.seen.set(key, { at: now, session: q?.session ?? "closed" });
       if (!q) continue;
-      remember(key, q, meta?.timezone ?? "UTC", meta?.kind ?? undefined);
+      remember(key, q, meta?.timezone ?? "UTC", calendarOfRow(meta));
       rows.push({ key, ...q, fetchedAt: receivedAt });
     }
   });
@@ -257,7 +260,7 @@ export function resetQuotes(): void {
 
 /** A real key's quote where `withQuote` takes it (`quoteDayIn`), judged from the symbol's row alone. */
 function takenQuote(quote: QuoteRow | undefined, meta: SymbolRow | null | undefined): QuoteRow | null {
-  return quote && quoteDayIn(meta?.lastT, quote, meta?.timezone ?? "UTC", meta?.syncedAt ?? null, meta?.kind ?? undefined) !== null ? quote : null;
+  return quote && quoteDayIn(meta?.lastT, quote, meta?.timezone ?? "UTC", meta?.syncedAt ?? null, calendarOfRow(meta)) !== null ? quote : null;
 }
 
 /** The oldest quote among the ones a key's price comes from: its own, or for a synthetic key its operands'. */

@@ -262,15 +262,70 @@ describe("quote polling", () => {
     const monday = Date.UTC(2026, 9, 5) / 1000;
     const time = Date.parse("2026-10-04T22:00:00Z") / 1000; // Sunday 18:00 New York
     const daily = [{ ...bar(100), t: monday }];
-    for (const [key, zone, kind] of [["tv:TVC:GOLD", "America/New_York", "cfd"], ["tv:FX_IDC:EURUSD", "Etc/UTC", "forex"], ["tv:CME_MINI:ES1!", "America/New_York", "futures"]]) {
+    for (const [key, zone, hours] of [["tv:TVC:GOLD", "America/New_York", "1800-1700"], ["tv:FX_IDC:EURUSD", "Etc/UTC", "2200-2200"], ["tv:CME_MINI:ES1!", "America/Chicago", "1700-1600:2345|1700-1500:6"]]) {
       const quote = { key, price: 110, time, session: "open" as const, fetchedAt: Date.now() };
-      const live = withQuote(daily, quote, zone, null, undefined, kind);
+      const calendar = { hours, timezone: zone, holidays: null, corrections: null };
+      const live = withQuote(daily, quote, zone, null, undefined, calendar);
       expect(live).toHaveLength(1);
       expect(live[0]).toMatchObject({ t: monday, c: 110 });
-      expect(withQuote([{ ...bar(100), t: monday - 3 * DAY }], quote, zone, null, undefined, kind).map((b) => b.t)).toEqual([monday - 3 * DAY, monday]);
+      expect(withQuote([{ ...bar(100), t: monday - 3 * DAY }], quote, zone, null, undefined, calendar).map((b) => b.t)).toEqual([monday - 3 * DAY, monday]);
+      // an hour before the stated start (FX opens at 21:00 UTC in summer) is Monday's all the same: Sunday is no trading day
+      expect(withQuote(daily, { ...quote, time: time - 3600 }, zone, null, undefined, calendar).map((b) => [b.t, b.c])).toEqual([[monday, 110]]);
       // Monday afternoon stays on Monday, instead of rolling over at noon.
-      expect(withQuote(daily, { ...quote, time: Date.parse("2026-10-05T19:00:00Z") / 1000 }, zone, null, undefined, kind)[0].t).toBe(monday);
+      expect(withQuote(daily, { ...quote, time: Date.parse("2026-10-05T19:00:00Z") / 1000 }, zone, null, undefined, calendar).map((b) => [b.t, b.c])).toEqual([[monday, 110]]);
+      // Monday evening is Tuesday's session
+      expect(withQuote(daily, { ...quote, time: Date.parse("2026-10-05T23:30:00Z") / 1000 }, zone, null, undefined, calendar).map((b) => [b.t, b.c])).toEqual([[monday, 100], [monday + DAY, 110]]);
     }
+  });
+
+  it("keeps a print after Friday's close on Friday instead of opening a Saturday bar", async () => {
+    const { withQuote } = await import("@/lib/quotes");
+    const friday = Date.UTC(2026, 9, 9) / 1000;
+    const daily = [{ t: friday, o: 4134.44, h: 4207.54, l: 4130.85, c: 4194.145, v: 0, adj: 1 }];
+    const brent = "0100-2300|2300F-2300:2#20261026/0000-2200|2200F-2200:2#20261102/0100-2300|2300F-2300:2";
+    for (const [key, zone, hours, at] of [
+      ["tv:TVC:GOLD", "America/New_York", "1800-1700", "2026-10-09T23:23:18Z"], // 19:23 in New York, after the 18:00 start of a session that never comes
+      ["tv:TVC:US10Y", "America/New_York", "1900-1730", "2026-10-09T21:25:00Z"],
+      ["tv:FOREXCOM:CNHJPY", "America/New_York", "1700-1700:23456", "2026-10-09T21:22:00Z"],
+      ["tv:FX_IDC:THBUSD", "Etc/UTC", "2200-2200", "2026-10-09T22:30:00Z"],
+      ["tv:TVC:UKOIL", "Europe/London", brent, "2026-10-09T21:59:59Z"], // 22:59 in London
+    ]) {
+      // a last price of its own: the quote is taken into Friday's bar, not dropped
+      const quote = { key, price: 4200, time: Date.parse(at) / 1000, session: "closed" as const, fetchedAt: Date.now(), dayOpen: 4134.44, dayHigh: 4207.54, dayLow: 4130.85 };
+      expect(withQuote(daily, quote, zone, null, undefined, { hours, timezone: zone, holidays: null, corrections: null })).toEqual([{ ...daily[0], c: 4200 }]);
+    }
+    // the evening before a holiday: Thursday 2026-12-24, 18:30 in New York, and Christmas Day has no session
+    const fx = { hours: "1700-1700", timezone: "America/New_York", holidays: "20261225", corrections: null };
+    const eve = [{ ...bar(100), t: Date.UTC(2026, 11, 24) / 1000 }];
+    const late = { key: "tv:FX:EURUSD", price: 110, time: Date.parse("2026-12-24T23:30:00Z") / 1000, session: "closed" as const, fetchedAt: Date.now() };
+    expect(withQuote(eve, late, fx.timezone, null, undefined, fx).map((b) => [b.t, b.c])).toEqual([[eve[0].t, 110]]);
+    // without the holiday that evening would be Friday's session
+    expect(withQuote(eve, late, fx.timezone, null, undefined, { ...fx, holidays: null }).map((b) => b.t)).toEqual([eve[0].t, eve[0].t + DAY]);
+    // a Monday holiday the metals trade through: Tuesday's sessions are one bar from Sunday evening, stored as Monday 2026-01-19
+    const gold = { hours: "1800-1700", timezone: "America/New_York", holidays: "20260119", corrections: "1800F2-1430F1,1800-1700:20260120" };
+    const stored = [Date.UTC(2026, 0, 16), Date.UTC(2026, 0, 19)].map((ms) => ({ ...bar(100), t: ms / 1000 }));
+    for (const at of ["2026-01-19T15:00:00Z", "2026-01-20T15:00:00Z"]) {
+      const quote = { key: "tv:TVC:GOLD", price: 110, time: Date.parse(at) / 1000, session: "open" as const, fetchedAt: Date.now() };
+      expect(withQuote(stored, quote, gold.timezone, null, undefined, gold).map((b) => [b.t, b.c])).toEqual([[stored[0].t, 100], [stored[1].t, 110]]);
+    }
+  });
+
+  it("goes by the hours of the market, not by a fixed evening hour", async () => {
+    const { withQuote } = await import("@/lib/quotes");
+    const thursday = Date.UTC(2026, 9, 8) / 1000;
+    const daily = [{ ...bar(100), t: thursday }];
+    const brent = "0100-2300|2300F-2300:2#20261026/0000-2200|2200F-2200:2#20261102/0100-2300|2300F-2300:2";
+    const days = (key: string, zone: string, hours: string | null, at: string) =>
+      withQuote(daily, { key, price: 110, time: Date.parse(at) / 1000, session: "open" as const, fetchedAt: Date.now() }, zone, null, undefined, { hours, timezone: zone, holidays: null, corrections: null }).map((b) => b.t);
+    // Brent trades 01:00 to 23:00 in London: Thursday 21:00 there is still Thursday's bar
+    expect(days("tv:TVC:UKOIL", "Europe/London", brent, "2026-10-08T20:00:00Z")).toEqual([thursday]);
+    // and Sunday 23:30 is Monday's
+    expect(days("tv:TVC:UKOIL", "Europe/London", brent, "2026-10-11T22:30:00Z")).toEqual([thursday, thursday + 4 * DAY]);
+    // a stock's after-hours print stays on its day; so does a market whose hours are not known yet
+    expect(days("tv:NASDAQ:MSTR", "America/New_York", "0930-1600", "2026-10-08T23:59:00Z")).toEqual([thursday]);
+    expect(days("tv:CME_MINI:ES1!", "America/Chicago", null, "2026-10-08T23:30:00Z")).toEqual([thursday]);
+    // Yahoo's daily bars are calendar days
+    expect(days("yahoo:GC=F", "America/New_York", "1800-1700", "2026-10-08T23:30:00Z")).toEqual([thursday]);
   });
 
   describe("rounds", () => {

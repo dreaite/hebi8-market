@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { barCloseAt, closeOn, dayCloseAt, fmtCountdown, quoteIsCurrent, scheduledSession, sessionsOn, type SessionClock, type TradingCalendar } from "@/lib/session";
+import { barCloseAt, closeOn, dayCloseAt, fmtCountdown, quoteIsCurrent, scheduledSession, sessionsOn, tradingDayAt, type SessionClock, type TradingCalendar } from "@/lib/session";
 
 const utc = (s: string) => Date.parse(`${s}Z`);
 const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString().slice(0, 16));
@@ -242,6 +242,52 @@ describe("the countdown to the bar's close", () => {
     // an ordinary day session never reaches into the next day
     expect(scheduledSession(utc("2026-11-25T23:00:00"), NASDAQ)).toBe("open");
     expect(scheduledSession(utc("2026-11-26T03:00:00"), NASDAQ)).toBe("open"); // 22:00 on Wednesday in New York
+  });
+
+  it("knows the day of the daily bar a trade belongs to: an evening session is the next day's, a late print stays where it is", () => {
+    const on = (at: string, calendar: TradingCalendar) => {
+      const d = tradingDayAt(utc(at), calendar);
+      return `${d.m}-${d.d}`;
+    };
+    const gold = plain("1800-1700", "America/New_York");
+    // Monday 2026-10-05 in New York: the afternoon is Monday's, from 18:00 it is Tuesday's
+    expect(on("2026-10-05T19:00:00", gold)).toBe("10-5");
+    expect(on("2026-10-05T22:00:00", gold)).toBe("10-6");
+    // Sunday is Monday's, also a little before the stated start
+    expect(on("2026-10-04T22:00:00", gold)).toBe("10-5");
+    expect(on("2026-10-04T21:00:00", gold)).toBe("10-5");
+    // Friday 19:23, after the close: Saturday has no session, the print is Friday's
+    expect(on("2026-10-09T23:23:18", gold)).toBe("10-9");
+    // the dollar index: Monday starts on Sunday at 17:00 and runs until 19:00, the other days from 19:00
+    expect(on("2026-10-04T21:30:00", DXY)).toBe("10-5");
+    expect(on("2026-10-05T22:00:00", DXY)).toBe("10-5"); // Monday 18:00
+    expect(on("2026-10-05T23:30:00", DXY)).toBe("10-6"); // Monday 19:30
+    // Brent keeps London's calendar day, except Sunday 23:00, which opens Monday; an hour earlier while the clocks differ
+    const brent = plain("0100-2300|2300F-2300:2#20261026/0000-2200|2200F-2200:2#20261102/0100-2300|2300F-2300:2", "Europe/London");
+    expect(on("2026-10-08T20:00:00", brent)).toBe("10-8"); // Thursday 21:00
+    expect(on("2026-10-09T21:59:59", brent)).toBe("10-9"); // Friday 22:59
+    expect(on("2026-10-11T22:30:00", brent)).toBe("10-12"); // Sunday 23:30
+    expect(on("2026-10-25T22:30:00", brent)).toBe("10-26"); // Sunday 22:30, winter time in London already
+    // the evening before a holiday without trading starts nothing
+    expect(on("2026-01-01T00:00:00", ES)).toBe("12-31"); // New Year's Eve 18:00 in Chicago
+    // Martin Luther King Day, Monday 2026-01-19: the future trades until noon as part of Tuesday (`1700F2-1200F1,1700-1600`),
+    // one daily bar from Sunday 17:00 to Tuesday 16:00, which TradingView stamps Sunday evening: stored as Monday
+    expect(on("2026-01-16T23:00:00", ES)).toBe("1-16"); // Friday 17:00, after the close
+    expect(on("2026-01-19T00:00:00", ES)).toBe("1-19"); // Sunday 18:00
+    expect(on("2026-01-19T16:00:00", ES)).toBe("1-19"); // Monday 10:00
+    expect(on("2026-01-20T00:00:00", ES)).toBe("1-19"); // Monday 18:00
+    expect(on("2026-01-20T16:00:00", ES)).toBe("1-19"); // Tuesday 10:00
+    expect(on("2026-01-20T23:30:00", ES)).toBe("1-21"); // Tuesday 17:30
+    // Independence Day observed on Friday 2026-07-03: Monday's bar starts on Thursday evening (`1700F4-1200F3,1700-1600`), stored as Friday
+    expect(on("2026-07-02T21:30:00", ES)).toBe("7-2"); // Thursday 16:30, after the close
+    expect(on("2026-07-02T23:00:00", ES)).toBe("7-3"); // Thursday 18:00
+    expect(on("2026-07-03T15:00:00", ES)).toBe("7-3"); // Friday 10:00
+    expect(on("2026-07-05T23:00:00", ES)).toBe("7-3"); // Sunday 18:00
+    expect(on("2026-07-06T15:00:00", ES)).toBe("7-3"); // Monday 10:00
+    expect(on("2026-07-06T22:30:00", ES)).toBe("7-7"); // Monday 17:30
+    // day sessions and markets around the clock keep the calendar day
+    expect(on("2026-10-08T23:59:00", NASDAQ)).toBe("10-8");
+    expect(on("2026-10-10T23:59:00", plain("24x7", "Etc/UTC"))).toBe("10-10");
   });
 
   it("knows when a trading day's bar is complete", () => {
