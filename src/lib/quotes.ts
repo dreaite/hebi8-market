@@ -11,11 +11,11 @@ import { runAlerts } from "./alerts";
 import { loadDaily } from "./bars";
 import { allItems, findItem, type Config } from "./config";
 import type { Bar } from "./series";
-import { QUOTE_ROUND_MS, QUOTE_SLOW_MS, quoteIsCurrent } from "./session";
+import { QUOTE_ROUND_MS, QUOTE_SLOW_MS, quoteIsCurrent, scheduledSession } from "./session";
 import { adapters } from "./sources";
 import type { Quote, QuoteSession } from "./sources/types";
 import { computeStats, type Stats } from "./stats";
-import { getSymbol, listSymbols, readDaily, readQuotes, writeQuotes, type QuoteRow, type SymbolRow } from "./store";
+import { calendarOfRow, getSymbol, listSymbols, readDaily, readQuotes, writeQuotes, type QuoteRow, type SymbolRow } from "./store";
 import { isSynthetic, isValidKey, parseKey, type Source } from "./symbols";
 import { parseSynth } from "./synth";
 import { loadVaults, type VaultConfig } from "./sync";
@@ -195,11 +195,13 @@ async function fetchSource(source: Source, keys: string[], now: number): Promise
   answers.forEach((answer, i) => {
     if (answer.status === "rejected") return;
     for (const [ticker, key] of chunks[i]) {
-      const q = answer.value[ticker];
+      const sent = answer.value[ticker];
+      const meta = getSymbol(key);
+      // a source that does not report the session: open on a trading day of the symbol's calendar
+      const q = sent && { ...sent, session: sent.session ?? scheduledSession(receivedAt, calendarOfRow(meta)) };
       // a symbol the source left out is asked again with the slow ones
       state.seen.set(key, { at: now, session: q?.session ?? "closed" });
       if (!q) continue;
-      const meta = getSymbol(key);
       remember(key, q, meta?.timezone ?? "UTC", meta?.kind ?? undefined);
       rows.push({ key, ...q, fetchedAt: receivedAt });
     }

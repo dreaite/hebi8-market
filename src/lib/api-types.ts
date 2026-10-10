@@ -1,4 +1,5 @@
 import type { RefSeries } from "@/indicators/formula";
+import type { TradingCalendar } from "./session";
 import type { QuoteSession } from "./sources/types";
 import type { Source } from "./symbols";
 
@@ -52,9 +53,8 @@ export interface BarsSymbol extends SymbolStatus {
   currency: string | null;
   exchange: string | null;
   bench: string | null;
-  /** The exchange's timezone and its regular session on that clock (`HHMM-HHMM` or `24x7`), for the countdown to the bar's close */
-  timezone: string | null;
-  hours: string | null;
+  /** The trading calendar (the exchange's timezone, its regular hours, holidays and half days), for the countdown to the bar's close */
+  calendar: TradingCalendar;
   /** The last daily bar's day (ms, UTC midnight); weekly and longer bars carry their bucket's start */
   lastDay: number;
 }

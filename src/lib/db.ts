@@ -150,6 +150,13 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
       ALTER TABLE quotes ADD COLUMN day_volume REAL;
       ALTER TABLE symbols ADD COLUMN hours TEXT;
     `),
+  (db) =>
+    db.exec(`
+      -- The trading calendar that comes with the hours: days without trading (20261126,20261225)
+      -- and days with other hours (0930-1300:20261127;dayoff:20250109), last year's and later.
+      ALTER TABLE symbols ADD COLUMN holidays TEXT;
+      ALTER TABLE symbols ADD COLUMN corrections TEXT;
+    `),
 ];
 
 const dbFile = () => process.env.HEBI8_DB ?? path.join(process.cwd(), "data", "hebi8.db");

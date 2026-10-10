@@ -9,7 +9,7 @@ declare module "@mathieuc/tradingview" {
     volume: number;
   }
 
-  interface MarketInfos {
+  export interface MarketInfos {
     name?: string;
     description?: string;
     exchange?: string;
@@ -18,6 +18,12 @@ declare module "@mathieuc/tradingview" {
     type?: string;
     /** The regular session on the exchange's clock: `0930-1600`, `1700-1600`, `24x7` */
     session?: string;
+    /** Days without trading, `20261126,20261225`, past years included */
+    session_holidays?: string;
+    /** Which of `subsessions` `session` is: `regular` */
+    subsession_id?: string;
+    /** `session-correction`: days with other hours, `0930-1300:20261127,20261224;dayoff:20250109` */
+    subsessions?: { id: string; session?: string; "session-correction"?: string }[];
   }
 
   interface ChartSession {
@@ -28,6 +34,8 @@ declare module "@mathieuc/tradingview" {
       options?: { timeframe?: string; range?: number; adjustment?: "splits" | "dividends" },
     ): void;
     onUpdate(callback: () => void): void;
+    /** The symbol info (`infos`) arrived, before any bars */
+    onSymbolLoaded(callback: () => void): void;
     onError(callback: (...args: unknown[]) => void): void;
     delete(): void;
   }

@@ -155,6 +155,8 @@ CREATE TABLE symbols (
   source     TEXT NOT NULL, ticker TEXT NOT NULL,
   name       TEXT, exchange TEXT, currency TEXT, timezone TEXT, kind TEXT,  -- 来自数据源的元数据
   hours      TEXT,              -- 常规交易时段，交易所当地时钟：HHMM-HHMM（1700-1600 是跨夜）或 24x7；倒计时用（§5.2）
+  holidays   TEXT,              -- 交易日历（§2.6）：休市日 20261126,20261225
+  corrections TEXT,             -- 交易日历：改了时段的日子（半日市）0930-1300:20261127,20261224;dayoff:20250109
   synced_at  INTEGER, sync_error TEXT, first_t INTEGER, last_t INTEGER
 );
 CREATE TABLE bars (
@@ -341,7 +343,7 @@ date,open,high,low,close,volume
 | `close` | 日线收盘 | 只在日线同步收尾时 | 只看已经收盘的日线：最后一根的交易日还没走完就不算它，看前一根 |
 
 - 默认值：写了 `key` 的是 `price`，没写的是 `close`，等于默认值时不写进 yaml（所以以前的 yaml 一个字不用改）。两种警报都可以改成另一种：对全部自选选「盘中价格」，就每轮对每个自选标的判断（自选都在轮询里）；盯一个标的选「日线收盘」，它的标的不为它进轮询。
-- 「已经收盘」怎么判断（`closedReader()`、`dayCloseAt()`）：全天交易的（`hours` 是 `24x7`）到那个 UTC 日结束；交易所的到那一天常规时段的收盘时刻（`hours` 按那天的星期取，交易所时区）；`hours` 还没同步出来的，到交易所日历上那一天结束；`data:` 数据集的行是发布出来的值，全部算已收盘。合成标的和公式里引用的别的标的（`close(QQQ)`、`bench`）各按自己的已收盘日线。
+- 「已经收盘」怎么判断（`closedReader()`、`dayCloseAt()`）：全天交易的（`hours` 是 `24x7`）到那个 UTC 日结束；交易所的到那一天的收盘时刻（交易日历里那天的时段，半日市就是提前的那个时刻，§2.6；交易所时区）；`hours` 还没同步出来的，到交易所日历上那一天结束；假日没有新 K 线，不影响判断（库里真有一根落在日历写的假日上，就按平常那个星期的时段算）；`data:` 数据集的行是发布出来的值，全部算已收盘。合成标的和公式里引用的别的标的（`close(QQQ)`、`bench`）各按自己的已收盘日线。
 - 和以前的差别：以前对全部自选的警报在同步收尾时用的是库里全部日线，同步时还没收完的那根也算。现在（它们默认是日线收盘）不算。实际受影响的是同步时正在交易的品种：加密（07:30 / 17:30 同步时 UTC 日都没走完，以前看的是当天到同步那一刻的价，现在看前一个 UTC 日的收盘）、跨夜的期货 / 外汇 / 贵金属（早上同步时新的交易日刚开始），以及盘中手动点「刷新」时的任何品种。同步时已经收盘的股票不变。
 
 `when` 就是布尔公式，能用别名、`close(X)`、`bench`，tf 默认 D。
@@ -429,8 +431,14 @@ date,open,high,low,close,volume
 - `always`（加密）和 `open`（交易所在常规交易时段）：每 5 分钟。
 - `pre` / `post` / `closed`：每小时。
 - 新加进来的标的立刻取一次。连续 3 轮没有任何回应的源退避到每小时，日志里记一次，不刷屏。
-- 同一个源的标的一次批量请求：Yahoo 用 `quote()`（开盘 `regularMarketOpen`、成交量 `regularMarketVolume`），Binance 用 `/api/v3/ticker/tradingDay?symbols=…`（UTC 自然日的开高低量，和它的日线一致；滚动 24 小时的 `ticker/24hr` 不能当日线用），TradingView 用库的 quote 会话（`open_price`、`volume`；一轮开一个客户端，取完就关）。源报不出交易时段时，工作日按 `open`、周末按 `closed`。成交量为 0（外汇、CFD）或 TradingView 的 1e100（收益率）按没有记。
-- **交易时段**（`symbols.hours`）在日线同步时存：Yahoo 取 chart meta 的 `currentTradingPeriod.regular` 换成交易所当地的 `HHMM-HHMM`，TradingView 取 symbol info 的 `session`（`0930-1600`、跨夜的 `1700-1600`、`24x7`），Binance 固定 `24x7`。只用于图表的倒计时（§5.2）。
+- 同一个源的标的一次批量请求：Yahoo 用 `quote()`（开盘 `regularMarketOpen`、成交量 `regularMarketVolume`），Binance 用 `/api/v3/ticker/tradingDay?symbols=…`（UTC 自然日的开高低量，和它的日线一致；滚动 24 小时的 `ticker/24hr` 不能当日线用），TradingView 用库的 quote 会话（`open_price`、`volume`；一轮开一个客户端，取完就关）。源报不出时段（盘中 / 休市）时适配器不填，由轮询器按这个标的的交易日历填：当地日期是交易日算 `open`，周末和假日算 `closed`；连交易时段都不知道的，工作日算 `open`。成交量为 0（外汇、CFD）或 TradingView 的 1e100（收益率）按没有记。
+- **交易时段**（`symbols.hours`）在日线同步时存：Yahoo 取 chart meta 的 `currentTradingPeriod.regular` 换成交易所当地的 `HHMM-HHMM`，TradingView 取 symbol info 的 `session`（`0930-1600`、跨夜的 `1700-1600`、`24x7`），Binance 固定 `24x7`。
+- **交易日历**（`symbols.holidays`、`symbols.corrections`，和 `hours`、`timezone` 一起是 `TradingCalendar`，`src/lib/session.ts`）也在日线同步时存，不用人工每年维护：
+  - **TradingView 的标的**用自己 symbol info 里的两张表：`session_holidays`（休市日，`20261126,20261225`）和常规时段那个 subsession 的 `session-correction`（改了时段的日子，`0930-1300:20261127,20261224;dayoff:20250109`）。原样存，只留去年 1 月 1 日以后的日期；`session` 里带日期的历史版本（`A#20070312/B#…`，布伦特原油每次夏令时切换一个）同样只留去年以后的。
+  - **Yahoo 的标的**没有假日表（chart meta 只有当天的时段），按 Yahoo 的交易所代码借 TradingView 上同一交易所一个代表标的的日历（`src/lib/sources/calendar.ts` 的 `EXCHANGE_SYMBOL`：美股各板块和指数 → `NASDAQ:AAPL`，`HKG` → `HKEX:700`，`SHH` / `SHZ` → `SSE:600519` / `SZSE:000001`，`JPX` / `OSA` → `TSE:7203`，另有伦敦、法兰克福、巴黎、多伦多、悉尼、首尔、台北、印度、新加坡）。每个交易所一次请求，进程里缓存 6 小时，计入 `upstream` 的 tv。外汇、加密、期货（`CCY` / `CCC` / `CME`）和表里没有的交易所没有日历。
+  - **取不到时**（这台机器连不上 TradingView，或那次请求失败）不报错：这次同步不写这两列，原来存的留着；从来没有的就是不知道假日，每个工作日都当完整交易日，和接日历之前一样。
+  - **覆盖范围**取决于 TradingView：美股系（股票、指数、TVC 的贵金属 / 原油 / 美债 / 美元指数、CME 期货）到明年年底，港股、日本、欧洲多数到今年年底，A 股到已经公布的假期；每天同步都重读，新一年的表 TradingView 有了就有。外汇只有圣诞节。港股的半日市（平安夜、除夕、农历除夕）TradingView 没有，按全天算。
+  - **读法**（`sessionsOn()`）：某一天先看 `corrections` 有没有这一天（有就用它的时段，`dayoff` 是休市；它压过假日表：CME 期货在多数假日照常或缩短交易，就是这么表示的），再看是不是 `holidays`，最后按星期取 `hours` 里的时段；周末没有点名就不交易。用在三处：倒计时（§5.2）、「日线收盘」警报的已收盘判断（§2.5）、源不报时段时的兜底（上一条）。轮询节奏不看日历，照旧跟着数据源报的时段走。
 
 **适配器接口**加一个可选方法：
 
@@ -639,8 +647,8 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 - **最后一根自己动**：图表页在前台时，每轮报价后（上一次报价时间 + 5 分钟 + 20 秒）读一次 `GET /api/status?key=&tf=&prices=&with=`，拿到状态条要的同步 / 报价时间，和当前周期最后一根 K 线（`tail`：K 线本身、对比 / 公式引用 / 基准在这一根上的值、最后一个交易日）。K 线走 KLineChart 的 `subscribeBar` 回调：时间戳相同就替换最后一根，更大就追加一根（新的一天 / 周 / 月），指标、对比线、基准线随之重算，图例和价格线跟着变；`refs` 的对应位置原地改。不重新请求 `/api/bars`，所以缩放和滚动位置不动。同一时间只有一个状态请求在路上（发新的之前取消上一个），后发先至不会把旧价放回去。`tail.prev` 是倒数第二根的时间：它比图表手里的最后一根还新，说明页面睡过了不止一根（电脑合盖两天），这时才整份重新请求 `/api/bars`，免得中间缺一根。下一轮状态请求照常排着，这次重拉失败的话下一轮再试。
 - **倒计时**在右侧最新价标签下面（KLineChart 的 `priceMark.last.extendTexts`，和价格标签同底色，每秒重画），显示距离当前这根 K 线收盘的时间：一天以上 `2d 5h`，一小时以上 `05:12:09`，否则 `12:09`。时间由纯函数 `barCloseAt()`（`src/lib/session.ts`）在浏览器里算：
   - 全天交易（报价时段 `always`，或 `hours` 是 `24x7`）：日线到下一个 UTC 0 点，周线到下周一 0 点，月 / 季线到下个月 / 季度 1 日 0 点。
-  - 交易所：只在报价是当前的、时段是盘中（`open`）时显示；日线到报价之后的第一个收盘时刻（`hours` 最后一段的结束时间，按交易所时区；跨夜品种因此落在所属交易日的收盘），周线到那一周的周五收盘，月 / 季线到当月 / 当季最后一个工作日收盘。`hours` 按星期给了不同时段时（TradingView 的 `1700-1600:2345|1700-1500:6`，`:` 后是星期，1 = 周日）取目标交易日那一天的：点名这一天的优先，其次是没写星期的（默认周一到周五）。
-  - 报价「当前」的窗口（`quoteIsCurrent()`，和服务端同一个函数）在浏览器里每秒也判一次：状态请求一直失败时，倒计时过了窗口自己消失，不靠上一次响应里的时段。节假日和提前收盘不知道，所以长假前的周线、月线会多算；收盘时刻一过倒计时就消失，不会接着数到第二天。
+  - 交易所：只在报价是当前的、时段是盘中（`open`）时显示；日线到报价之后的第一个收盘时刻（那个交易日最后一段的结束时间，按交易所时区；跨夜品种因此落在所属交易日的收盘；半日市当天就是提前的那个时刻；当天已收盘、后面是假日的跨夜品种跳到下一个交易日），周 / 月 / 季线到这一周（周一到周日）/ 当月 / 当季**最后一个交易日**的收盘：从周期最后一天往回找，跳过周末和假日，那天是半日市就用它提前的收盘。假日和半日市来自交易日历（§2.6）；没有日历的标的每个工作日都当完整交易日。`hours` 按星期给了不同时段时（TradingView 的 `1700-1600:2345|1700-1500:6`，`:` 后是星期，1 = 周日）取目标交易日那一天的：点名这一天的优先，其次是没写星期的（默认周一到周五）。
+  - 报价「当前」的窗口（`quoteIsCurrent()`，和服务端同一个函数）在浏览器里每秒也判一次：状态请求一直失败时，倒计时过了窗口自己消失，不靠上一次响应里的时段。收盘时刻一过倒计时就消失，不会接着数到第二天。
   - 盘前、盘后、休市，报价过期，合成标的，还没同步出 `hours` 的标的：不显示。
 - **状态条**（窄屏底部，iPhone home bar 那一条）：交易所 · 时段 · 最新日期 · 新鲜度，数据同上。
 
@@ -901,7 +909,7 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 **Route Handlers（只读 JSON）**
 
 - `GET /api/bars?key=&tf=D|W|M|Q&prices=split|total&with=k1,k2`
-  → `{ symbol: {key, name, source, ticker, currency, exchange, bench, timezone, hours, syncedAt, syncError, quotedAt, session, lastDay}, pricePrecision, bars: [{timestamp, open, high, low, close, volume}], refs: { [key]: { c: (number|null)[], o?, h?, l?, v? } } }`，`refs` 与 `bars` 等长对齐。响应按 viewer 的 yaml 解析名字、基准和合成别名，`Cache-Control: no-store`，不做条件请求。
+  → `{ symbol: {key, name, source, ticker, currency, exchange, bench, calendar: {hours, timezone, holidays, corrections}, syncedAt, syncError, quotedAt, session, lastDay}, pricePrecision, bars: [{timestamp, open, high, low, close, volume}], refs: { [key]: { c: (number|null)[], o?, h?, l?, v? } } }`，`refs` 与 `bars` 等长对齐。响应按 viewer 的 yaml 解析名字、基准和合成别名，`Cache-Control: no-store`，不做条件请求。
 - `GET /api/status?key=&tf=&prices=&with=`（参数同 `/api/bars`）→ `{ syncedAt, syncError, quotedAt, session, tail: { bar, prev, refs: { [key]: {o,h,l,c,v} }, lastDay } | null }`：打开着的图表每轮报价后读它来更新最后一根 K 线和状态条（§5.2），只读缓存。
 - `GET /api/search?q=` → 外部结果 `SearchResult[]`（§5.4；本地层在浏览器里算）。
 - `GET /api/help` → 反馈页签和通知设置抽屉要的登录状态与反馈设置（§5.8，只读本地）。

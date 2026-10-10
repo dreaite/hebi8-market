@@ -2,7 +2,8 @@ import YahooFinance from "yahoo-finance2";
 import { dedupeBars, type Bar } from "../series";
 import { tradingDay } from "../time";
 import { partsIn } from "../tz";
-import { weekdaySession, type Quote, type QuoteSession, type SourceAdapter } from "./types";
+import { exchangeCalendar } from "./calendar";
+import type { QuoteSession, SourceAdapter, SourceQuote } from "./types";
 
 const SESSIONS: Record<string, QuoteSession> = { REGULAR: "open", PRE: "pre", PREPRE: "pre", POST: "post", POSTPOST: "post", CLOSED: "closed" };
 
@@ -40,6 +41,7 @@ export const yahoo: SourceAdapter = {
       });
     }
     const meta = result.meta;
+    const calendar = await exchangeCalendar(meta.exchangeName);
     return {
       bars: dedupeBars(bars),
       meta: {
@@ -49,6 +51,7 @@ export const yahoo: SourceAdapter = {
         timezone: timeZone,
         kind: meta.instrumentType?.toLowerCase(),
         ...(meta.currentTradingPeriod ? { hours: clockHours(meta.currentTradingPeriod.regular, timeZone) } : {}),
+        ...calendar,
       },
       mode: "replace",
     };
@@ -60,10 +63,10 @@ export const yahoo: SourceAdapter = {
       return: "array",
       fields: ["symbol", "regularMarketPrice", "regularMarketTime", "regularMarketOpen", "regularMarketDayHigh", "regularMarketDayLow", "regularMarketVolume", "marketState", "quoteType"],
     });
-    const out: Record<string, Quote> = {};
+    const out: Record<string, SourceQuote> = {};
     for (const q of rows) {
       if (q.regularMarketPrice == null || !q.regularMarketTime) continue;
-      const session = q.quoteType === "CRYPTOCURRENCY" ? "always" : (SESSIONS[q.marketState ?? ""] ?? weekdaySession(Date.now()));
+      const session = q.quoteType === "CRYPTOCURRENCY" ? "always" : SESSIONS[q.marketState ?? ""];
       out[q.symbol] = {
         price: q.regularMarketPrice,
         time: Math.floor(q.regularMarketTime.getTime() / 1000),
@@ -72,7 +75,7 @@ export const yahoo: SourceAdapter = {
         ...(q.regularMarketDayLow != null ? { dayLow: q.regularMarketDayLow } : {}),
         // FX reports 0: no volume, as in its daily bars
         ...(q.regularMarketVolume ? { dayVolume: q.regularMarketVolume } : {}),
-        session,
+        ...(session ? { session } : {}),
       };
     }
     return out;

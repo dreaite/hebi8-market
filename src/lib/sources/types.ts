@@ -9,6 +9,9 @@ export interface SourceMeta {
   kind?: string;
   /** The regular session by the exchange's clock, `HHMM-HHMM` (TradingView's notation, `1700-1600` runs overnight) or `24x7` */
   hours?: string;
+  /** Days without trading (`20261126,20261225`) and days with other hours (`0930-1300:20261127;dayoff:20250109`), see `TradingCalendar` */
+  holidays?: string;
+  corrections?: string;
 }
 
 export interface FetchResult {
@@ -50,14 +53,14 @@ export interface Quote {
   session: QuoteSession;
 }
 
+/** A quote as an adapter returns it: the session is left out when the source does not say, and comes from the calendar then. */
+export type SourceQuote = Omit<Quote, "session"> & { session?: QuoteSession };
+
 export interface SourceAdapter {
   /** @param since time of the latest stored bar, for incremental sources */
   fetchDaily(ticker: string, since: number | null): Promise<FetchResult>;
   /** @param filter source-specific category, e.g. TradingView's `index` / `cfd` / `stock` / `bond` */
   search?(query: string, filter?: string): Promise<SearchHit[]>;
   /** Latest prices for many tickers in one request; tickers the source does not know are left out */
-  quotes?(tickers: string[]): Promise<Record<string, Quote>>;
+  quotes?(tickers: string[]): Promise<Record<string, SourceQuote>>;
 }
-
-/** When a source does not say: weekdays count as trading, weekends as closed. */
-export const weekdaySession = (nowMs: number): QuoteSession => ([0, 6].includes(new Date(nowMs).getUTCDay()) ? "closed" : "open");

@@ -4,7 +4,7 @@ import type { BarsTail, ChartBar } from "./api-types";
 import { findItem, type Config } from "./config";
 import { aggregate, align, applyPrices, type Bar, type Prices } from "./series";
 import { dayCloseAt } from "./session";
-import { getSymbol, readDaily } from "./store";
+import { calendarOfRow, getSymbol, readDaily } from "./store";
 import { isSynthetic, parseKey, type Timeframe } from "./symbols";
 import { evalSynth, parseSynth } from "./synth";
 
@@ -13,7 +13,7 @@ export type DailyReader = (key: string) => Bar[];
 
 /**
  * Daily bars that are done: the last one is left out while its trading day is still going (the
- * exchange has not closed, the UTC day is not over for crypto). A dataset's rows are published
+ * exchange has not closed, at the earlier time on a half day; the UTC day is not over for crypto). A dataset's rows are published
  * values, taken as they are.
  */
 export function closedReader(now = Date.now()): DailyReader {
@@ -21,8 +21,7 @@ export function closedReader(now = Date.now()): DailyReader {
     const bars = readDaily(key);
     const last = bars.at(-1);
     if (!last || parseKey(key).source === "data") return bars;
-    const meta = getSymbol(key);
-    return dayCloseAt(last.t, meta?.hours ?? null, meta?.timezone ?? null) > now ? bars.slice(0, -1) : bars;
+    return dayCloseAt(last.t, calendarOfRow(getSymbol(key))) > now ? bars.slice(0, -1) : bars;
   };
 }
 

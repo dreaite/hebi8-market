@@ -1,7 +1,7 @@
-import TradingView from "@mathieuc/tradingview";
+import TradingView, { type MarketInfos } from "@mathieuc/tradingview";
 import { dedupeBars } from "../series";
 import { tradingDay } from "../time";
-import { weekdaySession, type FetchResult, type Quote, type QuoteSession, type SearchHit, type SourceAdapter } from "./types";
+import type { FetchResult, QuoteSession, SearchHit, SourceAdapter, SourceMeta, SourceQuote } from "./types";
 
 /** More bars than any symbol has (DJI since 1896 is ~33k): the server returns its whole history, no login needed. */
 const RANGE = 100_000;
@@ -22,6 +22,58 @@ function release() {
     void shared.client.end();
     shared = null;
   }
+}
+
+/**
+ * When a symbol trades, from its symbol info: the regular hours, the holidays and the days with
+ * other hours (half days). The lists go back decades, and so do the earlier versions of the hours
+ * (`A#20070312/B#…`); only last year's and later are kept, enough for the bars and countdowns
+ * that still move.
+ */
+export function calendarOf(infos: MarketInfos, now = Date.now()): Pick<SourceMeta, "hours" | "holidays" | "corrections"> {
+  const from = `${new Date(now).getUTCFullYear() - 1}0101`;
+  const recent = (dates: string) => dates.split(",").filter((d) => d >= from).join(",");
+  const corrections = infos.subsessions?.find((s) => s.id === infos.subsession_id)?.["session-correction"] ?? "";
+  return {
+    hours: infos.session
+      ?.split("/")
+      .filter((version) => (/#(\d{8})$/.exec(version)?.[1] ?? "99999999") >= from)
+      .join("/"),
+    holidays: recent(infos.session_holidays ?? ""),
+    corrections: corrections
+      .split(";")
+      .map((entry) => [entry.slice(0, entry.lastIndexOf(":")), recent(entry.slice(entry.lastIndexOf(":") + 1))])
+      .filter(([, dates]) => dates)
+      .map((entry) => entry.join(":"))
+      .join(";"),
+  };
+}
+
+/** The calendar of a symbol without loading its bars: what a Yahoo symbol borrows from its exchange (calendar.ts). */
+export function fetchCalendar(ticker: string): Promise<Pick<SourceMeta, "hours" | "holidays" | "corrections">> {
+  return new Promise((resolve, reject) => {
+    const client = acquire();
+    const chart = new client.Session.Chart();
+    let settled = false;
+    const finish = (error: Error | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const calendar = error ? null : calendarOf(chart.infos);
+      try {
+        chart.delete();
+      } catch {
+        // the session may already be gone after an error
+      }
+      release();
+      if (calendar) resolve(calendar);
+      else reject(error!);
+    };
+    const timer = setTimeout(() => finish(new Error(`TradingView timeout: ${ticker}`)), QUOTE_TIMEOUT_MS);
+    chart.onError((...args) => finish(new Error(`TradingView: ${args.map(String).join(" ")}`)));
+    chart.onSymbolLoaded(() => finish(null));
+    chart.setMarket(ticker, { timeframe: "D", range: 1 });
+  });
 }
 
 function fetchChart(ticker: string): Promise<FetchResult> {
@@ -69,7 +121,7 @@ function fetchChart(ticker: string): Promise<FetchResult> {
           currency: infos.currency_code,
           timezone: timeZone,
           kind: infos.type,
-          hours: infos.session,
+          ...calendarOf(infos),
         },
         mode: "replace",
       });
@@ -87,7 +139,7 @@ const QUOTE_TIMEOUT_MS = 20_000;
  * for one round, closed when every symbol has answered or the timeout hits. Whatever arrived by
  * then is returned; nothing at all is an error.
  */
-function fetchQuotes(tickers: string[]): Promise<Record<string, Quote>> {
+function fetchQuotes(tickers: string[]): Promise<Record<string, SourceQuote>> {
   return new Promise((resolve, reject) => {
     const client = new TradingView.Client();
     const session = new client.Session.Quote({ customFields: ["lp", "lp_time", "open_price", "high_price", "low_price", "volume", "current_session"] });
@@ -103,7 +155,7 @@ function fetchQuotes(tickers: string[]): Promise<Record<string, Quote>> {
       void client.end();
       // end() leaves a socket that is still connecting (a handshake that timed out) open: close it once it connects
       if (!client.isOpen) client.onConnected(() => void client.end());
-      const out: Record<string, Quote> = {};
+      const out: Record<string, SourceQuote> = {};
       for (const [ticker, d] of Object.entries(data)) {
         const price = d.lp;
         if (typeof price !== "number" || !Number.isFinite(price)) continue;
@@ -115,7 +167,7 @@ function fetchQuotes(tickers: string[]): Promise<Record<string, Quote>> {
           ...(typeof d.low_price === "number" ? { dayLow: d.low_price } : {}),
           // 0 (a CFD) and 1e100 (a yield) stand for no volume
           ...(typeof d.volume === "number" && d.volume > 0 && d.volume < 1e99 ? { dayVolume: d.volume } : {}),
-          session: typeof d.current_session === "string" ? (SESSIONS[d.current_session] ?? "closed") : weekdaySession(Date.now()),
+          ...(typeof d.current_session === "string" ? { session: SESSIONS[d.current_session] ?? "closed" } : {}),
         };
       }
       if (Object.keys(out).length === 0 && tickers.length > 0) reject(new Error("TradingView quote: no data"));

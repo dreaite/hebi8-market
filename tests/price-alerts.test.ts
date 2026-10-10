@@ -371,6 +371,30 @@ describe("quote polling", () => {
       expect(Object.keys(readQuotes())).toHaveLength(250);
     });
 
+    it("a quote without a session is open on a trading day of the symbol's calendar, closed on its holidays", async () => {
+      const { adapters } = await import("@/lib/sources");
+      const { quoteRound } = await import("@/lib/quotes");
+      const { readQuotes } = await import("@/lib/store");
+      const { getDb } = await import("@/lib/db");
+      const QQQ = "yahoo:QQQ";
+      const { ensureSymbol } = await import("@/lib/store");
+      ensureSymbol(QQQ);
+      // Thanksgiving 2026, noon in New York: SPY has the exchange's calendar, QQQ only knows its timezone
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.UTC(2026, 10, 26, 17));
+      const calendar = getDb().prepare("UPDATE symbols SET timezone = 'America/New_York', hours = ?, holidays = ? WHERE key = ?");
+      calendar.run("0930-1600", "20261126,20261225", SPY);
+      calendar.run(null, null, QQQ);
+      vi.spyOn(adapters.yahoo, "quotes").mockImplementation(async (tickers) => Object.fromEntries(tickers.map((t) => [t, { price: 500, time: Math.floor(Date.now() / 1000) }])));
+      const vault = { id: "", dir: root, config: normalizeConfig({ groups: [{ name: "美股", symbols: [SPY, QQQ] }] }) };
+      fs.writeFileSync(path.join(root, "hebi8.yaml"), "alerts: []\n");
+      await quoteRound(Date.now(), [vault]);
+      vi.useRealTimers();
+      calendar.run(null, null, SPY);
+      expect(readQuotes()[SPY].session).toBe("closed");
+      expect(readQuotes()[QQQ].session).toBe("open");
+    });
+
     it("stamps a quote when it arrives, so a daily sync that ends during the request does not hide it", async () => {
       const { adapters } = await import("@/lib/sources");
       const { quoteRound, liveReader } = await import("@/lib/quotes");

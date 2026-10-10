@@ -1,5 +1,6 @@
 import { getDb } from "./db";
 import type { Bar } from "./series";
+import type { TradingCalendar } from "./session";
 import type { Quote, QuoteSession, SourceMeta } from "./sources/types";
 import type { Stats } from "./stats";
 import { parseKey, type Source } from "./symbols";
@@ -14,8 +15,10 @@ export interface SymbolRow {
   currency: string | null;
   timezone: string | null;
   kind: string | null;
-  /** The regular session on the exchange's clock, `HHMM-HHMM` or `24x7` */
+  /** The regular session on the exchange's clock, `HHMM-HHMM` or `24x7`, with the days without trading and the days with other hours (`TradingCalendar`) */
   hours: string | null;
+  holidays: string | null;
+  corrections: string | null;
   syncedAt: number | null;
   syncError: string | null;
   firstT: number | null;
@@ -32,6 +35,8 @@ interface RawRow {
   timezone: string | null;
   kind: string | null;
   hours: string | null;
+  holidays: string | null;
+  corrections: string | null;
   synced_at: number | null;
   sync_error: string | null;
   first_t: number | null;
@@ -48,10 +53,20 @@ const toRow = (r: RawRow): SymbolRow => ({
   timezone: r.timezone,
   kind: r.kind,
   hours: r.hours,
+  holidays: r.holidays,
+  corrections: r.corrections,
   syncedAt: r.synced_at,
   syncError: r.sync_error,
   firstT: r.first_t,
   lastT: r.last_t,
+});
+
+/** A symbol's trading calendar as far as its source gave one; nulls for a symbol that is not cached. */
+export const calendarOfRow = (row: SymbolRow | null | undefined): TradingCalendar => ({
+  hours: row?.hours ?? null,
+  timezone: row?.timezone ?? null,
+  holidays: row?.holidays ?? null,
+  corrections: row?.corrections ?? null,
 });
 
 export function getSymbol(key: string): SymbolRow | null {
@@ -95,7 +110,8 @@ export function markSynced(key: string, meta: SourceMeta): void {
     .prepare(
       `UPDATE symbols SET synced_at = @now, sync_error = NULL,
          name = coalesce(@name, name), exchange = coalesce(@exchange, exchange), currency = coalesce(@currency, currency),
-         timezone = coalesce(@timezone, timezone), kind = coalesce(@kind, kind), hours = coalesce(@hours, hours)
+         timezone = coalesce(@timezone, timezone), kind = coalesce(@kind, kind), hours = coalesce(@hours, hours),
+         holidays = coalesce(@holidays, holidays), corrections = coalesce(@corrections, corrections)
        WHERE key = @key`,
     )
     .run({
@@ -107,6 +123,8 @@ export function markSynced(key: string, meta: SourceMeta): void {
       timezone: meta.timezone ?? null,
       kind: meta.kind ?? null,
       hours: meta.hours ?? null,
+      holidays: meta.holidays ?? null,
+      corrections: meta.corrections ?? null,
     });
 }
 

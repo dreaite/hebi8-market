@@ -4,7 +4,7 @@ import { loadChart, synthNoData, type ChartData } from "@/lib/bars";
 import { findItem } from "@/lib/config";
 import { pricePrecision } from "@/lib/stats";
 import { liveReader, symbolStatus } from "@/lib/quotes";
-import { getSymbol } from "@/lib/store";
+import { calendarOfRow, getSymbol } from "@/lib/store";
 import { isSynthetic, parseKey } from "@/lib/symbols";
 import { synthName } from "@/lib/synth";
 import { SESSION_COOKIE } from "@/lib/github";
@@ -47,8 +47,7 @@ export async function GET(request: NextRequest) {
       currency: row?.currency ?? null,
       exchange: row?.exchange ?? null,
       bench: item?.bench ?? null,
-      timezone: row?.timezone ?? null,
-      hours: row?.hours ?? null,
+      calendar: calendarOfRow(row),
       ...symbolStatus(key, config.aliases),
       lastDay: daily[daily.length - 1].t * 1000,
     },

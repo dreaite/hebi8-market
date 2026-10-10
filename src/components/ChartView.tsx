@@ -507,8 +507,8 @@ export function ChartView({
   const { tail = null, ...liveStatus } = live ?? {};
   const shown = meta && { ...meta, ...liveStatus, lastDay: tail?.lastDay ?? meta.lastDay };
   const status = shown ? statusLine(shown) : "";
-  const [session, quotedAt, hours, timezone] = [shown?.session ?? null, shown?.quotedAt ?? null, meta?.hours ?? null, meta?.timezone ?? null];
-  const clock = useMemo(() => ({ session, quotedAt, hours, timezone }), [session, quotedAt, hours, timezone]);
+  const [session, quotedAt, calendar] = [shown?.session ?? null, shown?.quotedAt ?? null, meta?.calendar];
+  const clock = useMemo(() => ({ hours: null, timezone: null, holidays: null, corrections: null, ...calendar, session, quotedAt }), [session, quotedAt, calendar]);
   const subtitle = [
     TF_LABELS[dataTf],
     ...(sourceLabel ? [sourceLabel] : []),
