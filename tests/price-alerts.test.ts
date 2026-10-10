@@ -172,6 +172,17 @@ describe("quote polling", () => {
     expect(quoteKeys([cfg]).sort()).toEqual([BTC, "tv:TVC:GOLD", "yahoo:QQQ", SPY].sort());
   });
 
+  it("polls every watched symbol and its benchmark, alerts or not", async () => {
+    const { quoteKeys } = await import("@/lib/quotes");
+    const mine = normalizeConfig({
+      aliases: { BTC, GOLD: "tv:TVC:GOLD" },
+      groups: [{ name: "a", symbols: [{ key: SPY, bench: "yahoo:QQQ" }, "=BTC/GOLD", "data:gpu/4090"] }],
+      alerts: [{ cond: "moving_up_pct", value: { pct: 5, bars: 1 } }],
+    });
+    const theirs = normalizeConfig({ groups: [{ name: "b", symbols: ["yahoo:NVDA", SPY] }] });
+    expect(quoteKeys([mine, theirs]).sort()).toEqual([BTC, "tv:TVC:GOLD", "yahoo:NVDA", "yahoo:QQQ", SPY].sort());
+  });
+
   it("asks new symbols at once, open and always ones every 5 minutes, the rest hourly", async () => {
     const { dueKeys } = await import("@/lib/quotes");
     const now = 1_800_000_000_000;
@@ -327,6 +338,31 @@ describe("quote polling", () => {
       await quoteRound(now + 3 * 5 * 60_000 + 60 * 60_000, vaults);
       expect(calls.filter((c) => c.source === "yahoo")).toHaveLength(4);
       logs.mockRestore();
+    });
+
+    it("asks a long list 100 symbols per request; the symbols of a request that failed are due again next round", async () => {
+      const { adapters } = await import("@/lib/sources");
+      const { quoteRound } = await import("@/lib/quotes");
+      const { readQuotes } = await import("@/lib/store");
+      const tickers = Array.from({ length: 250 }, (_, i) => `T${String(i).padStart(3, "0")}USDT`);
+      const vault = { id: "", dir: root, config: normalizeConfig({ groups: [{ name: "all", symbols: tickers.map((t) => `binance:${t}`) }] }) };
+      fs.writeFileSync(path.join(root, "hebi8.yaml"), "alerts: []\n");
+      let down = true;
+      vi.spyOn(adapters.binance, "quotes").mockImplementation(async (asked) => {
+        calls.push({ source: "binance", tickers: asked });
+        if (down && asked.includes("T100USDT")) throw new Error("binance down");
+        return Object.fromEntries(asked.map((t) => [t, { price: 1, time: Math.floor(Date.now() / 1000), session: "always" as const }]));
+      });
+      const now = Date.now();
+      await quoteRound(now, [vault]);
+      expect(calls.map((c) => c.tickers.length)).toEqual([100, 100, 50]);
+      expect(Object.keys(readQuotes())).toHaveLength(150);
+      // a minute later nothing but the failed request's symbols is due
+      calls = [];
+      down = false;
+      await quoteRound(now + 60_000, [vault]);
+      expect(calls.map((c) => c.tickers)).toEqual([tickers.slice(100, 200)]);
+      expect(Object.keys(readQuotes())).toHaveLength(250);
     });
 
     it("stamps a quote when it arrives, so a daily sync that ends during the request does not hide it", async () => {
@@ -523,14 +559,47 @@ describe("quote polling", () => {
         // older than GOLD's daily sync: the synced bar wins
         { key: GOLD, price: 5000, time: day, session: "closed", fetchedAt: getSymbol(GOLD)!.syncedAt! - 1000 },
       ]);
-      const live = liveStats([BTC, SPY, GOLD, "yahoo:QQQ"], vaults[0].config);
-      expect(Object.keys(live).sort()).toEqual([BTC, SPY].sort());
+      const cfg = normalizeConfig({ aliases: { BTC, GOLD }, groups: [{ name: "all", symbols: ["BTC", SPY, GOLD, "yahoo:QQQ", "=BTC/GOLD"] }] });
+      const live = liveStats("", cfg);
+      expect(Object.keys(live).sort()).toEqual([BTC, SPY, "=BTC/GOLD"].sort());
       expect(live[BTC].status.session).toBe("always");
       expect(live[BTC].stats.last).toBe(105);
       expect(live[BTC].stats.changes["1W"]).toBeCloseTo(105 / 101 - 1);
       expect(live[SPY].status).toMatchObject({ session: null, quotedAt: twoHoursAgo });
       expect(live[SPY].stats.last).toBe(500);
+      // a synthetic row moves with its operands' quotes, as on its chart: as old as the oldest one taken, no session
+      expect(live["=BTC/GOLD"].stats.last).toBeCloseTo(105 / 4100);
+      expect(live["=BTC/GOLD"].status).toEqual({ syncedAt: null, syncError: null, session: null, quotedAt: live[BTC].status.quotedAt });
       expect(readAllStats("")[BTC]?.last).not.toBe(105);
+    });
+
+    it("the overview's live stats are computed once per quote round or sync and vault, not per page view", async () => {
+      const { liveStats } = await import("@/lib/quotes");
+      const store = await import("@/lib/store");
+      const { getDb } = await import("@/lib/db");
+      store.writeBars(BTC, closes(100, 101), "replace");
+      const quote = { key: BTC, price: 105, time: Math.floor(Date.now() / 1000), session: "always" as const, fetchedAt: Date.now() };
+      store.writeQuotes([quote]);
+      const cfg = normalizeConfig({ groups: [{ name: "all", symbols: [BTC] }] });
+      const reads = vi.spyOn(getDb(), "prepare");
+      const barReads = () => reads.mock.calls.filter(([sql]) => sql.includes("FROM bars")).length;
+      const first = liveStats("", cfg);
+      expect(barReads()).toBe(1);
+      // the same view again, and another person's page with the same list: no bars read for the first, once for the other
+      expect(liveStats("", cfg)[BTC].stats).toBe(first[BTC].stats);
+      expect(barReads()).toBe(1);
+      expect(liveStats("bob", cfg)[BTC].stats).toEqual(first[BTC].stats);
+      expect(barReads()).toBe(2);
+      // a new quote, another prices mode, another list: computed again
+      store.writeQuotes([{ ...quote, price: 110, fetchedAt: quote.fetchedAt + 1 }]);
+      expect(liveStats("", cfg)[BTC].stats.last).toBe(110);
+      expect(liveStats("", { ...cfg, prices: "total" })[BTC].stats).not.toBe(liveStats("", cfg)[BTC].stats);
+      // a daily sync after the quote: the synced bar is the price again
+      const before = barReads();
+      store.markSynced(BTC, {});
+      expect(liveStats("", cfg)).toEqual({});
+      expect(barReads()).toBe(before);
+      reads.mockRestore();
     });
 
     it("the overview leaves a quote for a day before the last bar alone: no tag, the daily close", async () => {
@@ -541,8 +610,7 @@ describe("quote polling", () => {
       writeBars(SPY, closes(110, 120), "replace");
       getDb().prepare("UPDATE symbols SET synced_at = ? WHERE key = ?").run(Date.now() - 60_000, SPY);
       writeQuotes([{ key: SPY, price: 115, time: T0 + 15 * 3600, session: "open", fetchedAt: Date.now() }]);
-      const cfg = normalizeConfig({});
-      expect(liveStats([SPY], cfg)).toEqual({});
+      expect(liveStats("", normalizeConfig({ groups: [{ name: "all", symbols: [SPY] }] }))).toEqual({});
       expect(liveReader()(SPY).at(-1)?.c).toBe(120);
     });
 

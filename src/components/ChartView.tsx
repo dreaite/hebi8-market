@@ -75,7 +75,7 @@ type DialogState =
   | { kind: "alert"; alert: AlertView | null; price: number | null }
   | null;
 
-/** src/lib/quotes.ts polls alert symbols every 5 minutes; the strip reads again just after a round */
+/** src/lib/quotes.ts polls watched symbols every 5 minutes; the chart reads its status and last bar again just after a round */
 const QUOTE_ROUND_MS = 5 * 60_000;
 
 /** The status strip's line: the exchange (or 按需合成), the quote's session, the last day, how fresh. */
@@ -86,7 +86,8 @@ function statusLine(meta: BarsSymbol): string {
     synth ? "按需合成" : meta.exchange,
     meta.session && SESSION_LABELS[meta.session],
     `最新 ${day.getUTCMonth() + 1}/${day.getUTCDate()}`,
-    synth ? null : meta.syncError ? "同步失败" : (meta.quotedAt ?? 0) > (meta.syncedAt ?? 0) ? fmtAgo(meta.quotedAt, "报价") : fmtAgo(meta.syncedAt),
+    // a synthetic symbol is as fresh as the oldest quote behind it, and has no sync of its own
+    meta.syncError ? "同步失败" : (meta.quotedAt ?? 0) > (meta.syncedAt ?? 0) ? fmtAgo(meta.quotedAt, "报价") : synth ? null : fmtAgo(meta.syncedAt),
   ]
     .filter(Boolean)
     .join(" · ");
@@ -276,7 +277,7 @@ export function ChartView({
   // The status strip follows the quote rounds while the page is in view, and catches up when it comes back.
   const symbol = data?.symbol;
   useEffect(() => {
-    if (!symbol || symbol.source === "expr") return;
+    if (!symbol) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
     const schedule = (s: SymbolStatus) => {

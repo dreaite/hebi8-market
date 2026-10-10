@@ -33,7 +33,7 @@ export interface BarsTail {
   lastDay: number;
 }
 
-/** How fresh a symbol's data is: the daily sync and the quote polling */
+/** How fresh a symbol's data is: the daily sync and the quote polling (a synthetic key: the oldest quote its operands' prices come from) */
 export interface SymbolStatus {
   syncedAt: number | null;
   syncError: string | null;

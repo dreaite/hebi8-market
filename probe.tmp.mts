@@ -1,0 +1,16 @@
+import { adapters } from "./src/lib/sources";
+const nas = "AAPL MSFT NVDA AMZN GOOGL GOOG META TSLA AVGO COST NFLX AMD PEP ADBE CSCO TMUS INTC QCOM TXN AMGN INTU AMAT ISRG HON BKNG SBUX VRTX GILD ADI MDLZ REGN ADP LRCX PANW MU KLAC SNPS CDNS MELI CSX MAR ORLY ASML CRWD ABNB FTNT NXPI CTAS PCAR WDAY ROP MNST PAYX ODFL CPRT ROST KDP AEP FAST DXCM EA VRSK CTSH BKR XEL EXC GEHC KHC LULU CSGP IDXX TTD DDOG ZS ANSS ON TEAM MRVL CDW BIIB WBD ILMN MDB SIRI DLTR EBAY ALGN ENPH ZM LCID RIVN OKTA DOCU PTON ROKU MSTR COIN HOOD PLTR SOFI".split(" ");
+const nyse = "JPM V MA UNH XOM JNJ PG HD CVX MRK ABBV KO BAC PFE WMT CRM DIS MCD ABT TMO ACN DHR VZ NKE WFC PM IBM GE CAT UNP RTX BA GS MS BLK AXP LOW SPGI T C DE NEE PLD LMT SYK ELV MDT CB BMY SCHW MMC ZTS CI SO DUK".split(" ");
+const time = async <T,>(label: string, fn: () => Promise<T>) => { const t = Date.now(); try { const r = await fn(); console.log(label, Date.now() - t, "ms", typeof r === "object" && r ? Object.keys(r).length : r); return r; } catch (e) { console.log(label, Date.now() - t, "ms FAILED", String(e).slice(0, 200)); } };
+const y = [...nas, ...nyse];
+await time(`yahoo ${y.length}`, () => adapters.yahoo.quotes!(y));
+await time(`yahoo 100`, () => adapters.yahoo.quotes!(y.slice(0, 100)));
+const tv = [...nas.map((s) => `NASDAQ:${s}`), ...nyse.map((s) => `NYSE:${s}`)];
+await time(`tv 30`, () => adapters.tv.quotes!(tv.slice(0, 30)));
+await time(`tv 100`, () => adapters.tv.quotes!(tv.slice(0, 100)));
+await time(`tv ${tv.length}`, () => adapters.tv.quotes!(tv));
+await time(`tv 2x80 parallel`, async () => Object.assign({}, ...(await Promise.all([adapters.tv.quotes!(tv.slice(0, 80)), adapters.tv.quotes!(tv.slice(80, 160))]))));
+const bn = "BTC ETH SOL BNB XRP ADA DOGE AVAX DOT LINK LTC TRX ATOM UNI NEAR APT ARB OP FIL ETC XLM ALGO AAVE SAND MANA GRT EGLD THETA AXS FLOW CHZ CRV SNX COMP MKR ZEC DASH KSM RUNE ENJ BAT ZIL QTUM ONT IOTA NEO WAVES KAVA CELO ROSE ONE HBAR ICP VET FTM GALA IMX LDO INJ SUI SEI TIA PEPE SHIB WIF BONK FET RNDR STX CFX MINA DYDX GMX SSV PENDLE JTO PYTH JUP ENA ORDI WLD BLUR ASTR API3 ANKR 1INCH SUSHI YFI BAL KNC ZRX STORJ SKL CELR CTSI BAND OGN RLC NKN".split(" ").map((s) => s + "USDT");
+console.log("binance url length", `https://api.binance.com/api/v3/ticker/tradingDay?type=MINI&symbols=${encodeURIComponent(JSON.stringify(bn.slice(0, 100)))}`.length, bn.length);
+for (const n of [100, 50]) await time(`binance ${n}`, async () => { try { return await adapters.binance.quotes!(bn.slice(0, n)); } catch (e) { throw e; } });
+process.exit(0);

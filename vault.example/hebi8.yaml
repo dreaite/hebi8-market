@@ -51,7 +51,7 @@ datasets: {}                   # 自定义数据集：名字 → git 地址或�
 
 # 警报：总览「警报」列按你起的名字显示，触发时推到通知通道（~/.config/hebi8/market/notify.json 或页头「通知设置」）。
 # 在图表顶栏「警报」或总览行菜单「添加警报…」里建，建好的就是下面这种写法。
-# 写 key 的只看这个标的，有警报的标的盘中每 5 分钟取一次最新价判断：
+# 写 key 的只看这个标的，盘中每 5 分钟取一次最新价判断：
 #   cond：crossing 穿过 / crossing_up 上穿 / crossing_down 下穿 / greater 大于 / less 小于（value 是价格）
 #         entering 进入通道 / exiting 离开通道 / inside 在通道内 / outside 在通道外（value 是 [低, 高]）
 #         moving_up_pct 上涨 % / moving_down_pct 下跌 %（value 是 { pct, bars }）

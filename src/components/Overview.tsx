@@ -101,7 +101,7 @@ const SINCE: Record<ChangePeriod, string> = {
 
 const HINTS = {
   name: "标的名称，下一行是代码 · 数据源 · 币种。拖动行或分组标题调整顺序，顺序写回 hebi8.yaml",
-  last: "最新价：最近一根日线的收盘价。\n有警报的标的另取报价（盘中每 5 分钟，盘前、盘后、休市每小时），价格下面标着时段和多久前取的，涨跌幅也按这个价算",
+  last: "最新价：最近一根日线的收盘价。\n自选里的标的另取报价（盘中每 5 分钟，盘前、盘后、休市每小时），价格下面标着时段和多久前取的，涨跌幅也按这个价算",
   high: "距高点：最新价比历史最高收盘低多少，0% 就是在历史高点。\n下面的短条是 52 周区间位置：最左是近 52 周最低价，最右是最高价，竖线是现在的价格",
   spark: "近两年的周收盘走势",
 };
@@ -109,7 +109,7 @@ const HINTS = {
 /** Under or beside a quoted price: its session while the quote is current and how old it is, 「盘后 · 40 分钟前」 or just 「3 小时前」. */
 function QuoteTag({ quote, className = "" }: { quote: SymbolStatus; className?: string }) {
   const session = quote.session && SESSION_LABELS[quote.session];
-  const how = !quote.session ? "有警报的标的盘中每 5 分钟、其余时段每小时取一次" : quote.session === "open" || quote.session === "always" ? "每 5 分钟取一次" : "盘中以外每小时取一次";
+  const how = !quote.session ? "盘中每 5 分钟、其余时段每小时取一次" : quote.session === "open" || quote.session === "always" ? "每 5 分钟取一次" : "盘中以外每小时取一次";
   return (
     <span className={`text-[11px] whitespace-nowrap text-muted ${className}`} title={`${session ? `${session} · ` : ""}${fmtAgo(quote.quotedAt, "报价")}\n${how}，涨跌幅按这个价算`}>
       {session && `${session} · `}

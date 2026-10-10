@@ -22,8 +22,8 @@ export default async function Home() {
 
   const symbols = listSymbols();
   const stats = statsFor(viewer.vault, config);
-  // symbols whose price comes from a quote show it, their changes recomputed on read
-  const live = liveStats(config.groups.flatMap((g) => g.symbols.map((s) => s.key)), config);
+  // rows whose price comes from a quote show it, with their changes on today's live bar
+  const live = liveStats(viewer.vault, config, symbols);
   const firstRun = !hasBars();
   if (firstRun) void syncAll().catch(() => undefined);
   // alerts are personal like notes: a visitor sees none

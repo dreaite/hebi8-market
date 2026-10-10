@@ -26,6 +26,6 @@ export function GET(request: NextRequest) {
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 400 });
   }
-  const body: StatusResponse = { ...symbolStatus(key), tail };
+  const body: StatusResponse = { ...symbolStatus(key, config.aliases), tail };
   return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
 }
