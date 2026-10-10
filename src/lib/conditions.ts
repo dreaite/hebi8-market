@@ -9,7 +9,12 @@ import type { Timeframe } from "./symbols";
 export const toOhlcv = (bars: Bar[]): OhlcvBar[] =>
   bars.map((b) => ({ open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v ?? undefined }));
 
-const flag = (v: number | undefined): boolean | null => (v === undefined || Number.isNaN(v) ? null : v !== 0);
+/**
+ * What a formula's value on a bar counts as: nothing where it has none (NaN: not enough bars, a
+ * symbol without data), else true unless it is 0. An infinite value (a division by zero) is a
+ * value, and true. Alerts, `scan` and `test_formula` all go by this one.
+ */
+export const holds = (v: number | undefined): boolean | null => (v === undefined || Number.isNaN(v) ? null : v !== 0);
 
 /** Series per timeframe for one key, loaded once and shared by every rule on that key. */
 export type SeriesCache = Map<Timeframe, Bar[]>;
@@ -26,7 +31,7 @@ export function evalRule(key: string, formula: string, tf: Timeframe, cfg: Confi
     const refs = loadRefs(bars, program.refs, tf, cfg.prices, cfg, read);
     const line = evaluate(program, { bars: toOhlcv(bars), refs }).at(-1)!;
     const t = bars.at(-1)?.t;
-    return { now: flag(line.at(-1)), prev: flag(line.at(-2)), ...(t !== undefined ? { t } : {}) };
+    return { now: holds(line.at(-1)), prev: holds(line.at(-2)), ...(t !== undefined ? { t } : {}) };
   } catch (err) {
     return { now: null, prev: null, error: describeError(err) };
   }

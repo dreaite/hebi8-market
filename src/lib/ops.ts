@@ -191,6 +191,8 @@ export interface AlertInput {
 /** Who is saving: the person on the page, or an agent through `/mcp`, which may not put an alert on the whole watchlist into effect (§2.5). */
 export type AlertOrigin = "page" | "agent";
 
+const AGENT_EDITS_WATCHLIST = "这条对全部自选的警报不是草稿，agent 不能改：不带 id 另存一条新的（会存成草稿），旧的继续生效，用户确认新的之后再删旧的";
+
 /** Set one field of a yaml map; a scalar is changed in place so the comment on its line stays. */
 function setField(doc: Document, map: YAMLMap, field: string, value: unknown): void {
   const old = map.get(field, true);
@@ -209,8 +211,10 @@ function setField(doc: Document, map: YAMLMap, field: string, value: unknown): v
  * ones for `check: close`), so the overview shows where it holds without waiting for the next sync.
  *
  * From an agent the entry is marked `by: agent`, and one on the whole watchlist is written as a
- * draft whatever it was before: it is judged only after the person confirms it on the page. An
- * edit on the page leaves both marks as they are.
+ * draft: it is judged only after the person confirms it on the page. An agent may edit its draft,
+ * but not an alert on the whole watchlist that is not one: that would take a watch the person
+ * confirmed out of effect until they confirm again, so the agent leaves it running and saves a new
+ * draft beside it. An edit on the page leaves both marks as they are.
  */
 export async function saveAlert({ dir, vault }: Viewer, input: AlertInput, origin: AlertOrigin = "page"): Promise<{ id: string; draft: boolean }> {
   const saved = await serializeAlerts(() => {
@@ -219,6 +223,7 @@ export async function saveAlert({ dir, vault }: Viewer, input: AlertInput, origi
     adoptConditionState(vault, cfg);
     const key = input.key == null ? null : resolveKey(str(input.key), cfg.aliases);
     if (key !== null && !isValidKey(key)) throw new Error("无效的 key");
+    if (origin === "agent" && cfg.alerts.some((a) => a.id === input.id && !a.key && !a.draft)) throw new Error(AGENT_EDITS_WATCHLIST);
     // written the way a person would: the alias when there is one
     const entry: Record<string, unknown> = key ? { key: Object.entries(cfg.aliases).find(([, k]) => k === key)?.[0] ?? key } : {};
     if (input.cond === "formula") {

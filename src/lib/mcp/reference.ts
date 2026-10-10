@@ -82,6 +82,6 @@ An event compares two consecutive checks (crossing up: above the level now, on o
 ## What an agent may do
 
 - An alert on one symbol (\`key\` given) takes effect as soon as it is saved.
-- An alert on the whole watchlist (no \`key\`) is always saved as a draft: the user confirms it on the page before it is judged. Editing one turns it back into a draft; a stopped one can only be resumed by the user. Deleting and stopping are allowed.
+- An alert on the whole watchlist (no \`key\`) is always saved as a draft: the user confirms it on the page before it is judged. You can edit your draft (it stays a draft), but not one the user has in effect or stopped: saving with its \`id\` is refused, so save a new draft without \`id\` and leave the old one running. A stopped one can only be resumed by the user. Deleting and stopping are allowed.
 `;
 }

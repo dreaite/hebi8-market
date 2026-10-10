@@ -8,7 +8,7 @@ import { compile, evaluate, type Program } from "@/indicators/formula";
 import { describeError } from "@/indicators/formula-indicators";
 import type { AlertCheck } from "./alert-conds";
 import { closedReader, loadRefs, loadSeries, type DailyReader } from "./bars";
-import { toOhlcv } from "./conditions";
+import { holds, toOhlcv } from "./conditions";
 import { findItem, type Config } from "./config";
 import { fmtDate } from "./format";
 import { nameOf } from "./names";
@@ -20,8 +20,14 @@ import { isSynthetic, type Timeframe } from "./symbols";
 /** The bars an alert with this `check` is judged on: with today's unfinished bar, or closed daily bars only. */
 export const readerFor = (check: AlertCheck): DailyReader => (check === "close" ? closedReader() : liveReader());
 
-/** NaN (not enough bars, a symbol without data) is no value; float noise is trimmed. */
-const value = (v: number | undefined): number | null => (v === undefined || !Number.isFinite(v) ? null : Number(v.toPrecision(10)));
+/**
+ * A formula's value as a reply can carry it. JSON has no infinity, so an infinite value (a
+ * division by zero) is the string `"Infinity"` or `"-Infinity"`: it is a value, and true like any
+ * other that is not 0 (`holds`). null is no value at all: not enough bars, a symbol without data.
+ */
+export type ScanValue = number | "Infinity" | "-Infinity" | null;
+
+const shown = (v: number | undefined): ScanValue => (v === undefined || Number.isNaN(v) ? null : v === Infinity ? "Infinity" : v === -Infinity ? "-Infinity" : Number(v.toPrecision(10)));
 
 function checked(formula: string, cfg: Config, bench?: string | null): Program {
   try {
@@ -43,9 +49,12 @@ function run(key: string, formula: string, tf: Timeframe, cfg: Config, read: Dai
 export interface ScanRow {
   key: string;
   name: string;
-  /** On the last bar and the one before it; null where the formula has no value */
-  value: number | null;
-  prev: number | null;
+  /** On the last bar and the one before it */
+  value: ScanValue;
+  prev: ScanValue;
+  /** Whether it is true on the last bar and was on the one before, as an alert judges it (`holds`); null without a value */
+  holds: boolean | null;
+  held: boolean | null;
   /** The last bar's date (the start of its week, month or quarter) */
   date: string | null;
   error?: string;
@@ -65,9 +74,9 @@ export function scan(cfg: Config, keys: string[], formula: string, tf: Timeframe
     const name = nameOf(cfg, key, getSymbol(key)?.name);
     try {
       const { bars, line } = run(key, formula, tf, cfg, read);
-      return { key, name, value: value(line.at(-1)), prev: value(line.at(-2)), date: fmtDate(bars.at(-1)!.t) };
+      return { key, name, value: shown(line.at(-1)), prev: shown(line.at(-2)), holds: holds(line.at(-1)), held: holds(line.at(-2)), date: fmtDate(bars.at(-1)!.t) };
     } catch (err) {
-      return { key, name, value: null, prev: null, date: null, error: describeError(err) };
+      return { key, name, value: null, prev: null, holds: null, held: null, date: null, error: describeError(err) };
     }
   });
   return { rows, uncached: program.refs.filter((k) => !isSynthetic(k) && read(k).length === 0) };
@@ -83,9 +92,9 @@ export interface FormulaTest {
   bars: number;
   from: string;
   to: string;
-  value: number | null;
-  prev: number | null;
-  /** Bars in the window where the formula is true (not 0), and where it has no value */
+  value: ScanValue;
+  prev: ScanValue;
+  /** Bars in the window where the formula is true (`holds`), and where it has no value */
   trueBars: number;
   unknownBars: number;
   /** Bars where it turned true after being false: when a `when` alert would have fired */
@@ -93,7 +102,7 @@ export interface FormulaTest {
   /** Runs of true bars, newest last */
   trueRanges: { count: number; ranges: { from: string; to: string; bars: number }[] };
   /** The last few values, oldest first */
-  recent: { date: string; value: number | null }[];
+  recent: { date: string; value: ScanValue }[];
 }
 
 /**
@@ -116,8 +125,7 @@ export function testFormula(cfg: Config, key: string, formula: string, tf: Timef
     open = null;
   };
   for (let i = 0; i < bars.length; i++) {
-    const v = value(line[i]);
-    const now = v === null ? null : v !== 0;
+    const now = holds(line[i]);
     if (i >= start) {
       if (now === null) unknownBars++;
       if (now) {
@@ -136,12 +144,12 @@ export function testFormula(cfg: Config, key: string, formula: string, tf: Timef
     bars: bars.length - start,
     from: date(start),
     to: date(bars.length - 1),
-    value: value(line.at(-1)),
-    prev: value(line.at(-2)),
+    value: shown(line.at(-1)),
+    prev: shown(line.at(-2)),
     trueBars,
     unknownBars,
     turnedTrue: { count: turned.length, dates: turned.slice(-MAX_LISTED) },
     trueRanges: { count: ranges.length, ranges: ranges.slice(-MAX_LISTED) },
-    recent: bars.slice(-10).map((b, i, last) => ({ date: fmtDate(b.t), value: value(line[bars.length - last.length + i]) })),
+    recent: bars.slice(-10).map((b, i, last) => ({ date: fmtDate(b.t), value: shown(line[bars.length - last.length + i]) })),
   };
 }

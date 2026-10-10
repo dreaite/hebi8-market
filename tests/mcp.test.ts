@@ -138,8 +138,8 @@ describe("scan and test_formula read cached bars only", () => {
     const { data } = await call(viewer, "scan", { formula: "close > 105" });
     expect(data).toMatchObject({ tf: "D", check: "price", scanned: 3, true_now: 1, turned_true: [BTC], failed: 1 });
     expect(data.rows).toEqual([
-      { key: BTC, alias: "BTC", name: expect.any(String), value: 1, prev: 0, date: day(5) },
-      { key: ETH, name: expect.any(String), value: 0, prev: 0, date: day(5) },
+      { key: BTC, alias: "BTC", name: expect.any(String), value: 1, prev: 0, holds: true, date: day(5) },
+      { key: ETH, name: expect.any(String), value: 0, prev: 0, holds: false, date: day(5) },
       // never synced: reported, not fetched
       { key: "yahoo:SPY", name: expect.any(String), value: null, prev: null, date: null, error: "没有缓存的日线" },
     ]);
@@ -203,6 +203,72 @@ describe("scan and test_formula read cached bars only", () => {
     expect(overview.groups[1].symbols[0]).toMatchObject({ key: "yahoo:SPY", bench: BTC, price: null });
   });
 
+  it("true is what an alert takes for true: an infinite value holds, and is told from no value", async () => {
+    const { decide } = await import("@/lib/alerts");
+    const { evalRule } = await import("@/lib/conditions");
+    const { ensureSymbol, writeBars } = await import("@/lib/store");
+    const { readConfig } = await import("@/lib/vault");
+    const SOL = "binance:SOLUSDT";
+    const FORMULA = "1 / (close - ref(close, 1)) - 1";
+    ensureSymbol(SOL);
+    const closes = [100, 101, 101];
+    // what the alert does, bar by bar: no value, false (0), then 1 / 0: true, and it fires
+    const judged = closes.map((_, i) => {
+      writeBars(SOL, bars(closes.slice(0, i + 1)), "replace");
+      return evalRule(SOL, FORMULA, "D", readConfig(root));
+    });
+    expect(judged.map((r) => r.now)).toEqual([null, false, true]);
+    expect(decide({ state: 0, firedBar: null }, judged[2]).fire).toBe(true);
+
+    const viewer = await agent("dreaife", false);
+    const tested = (await call(viewer, "test_formula", { key: SOL, formula: FORMULA })).data;
+    expect(tested).toMatchObject({ value: "Infinity", prev: 0, true_bars: 1, no_value_bars: 1, turned_true: 1, turned_true_dates: [day(2)], true_ranges: [{ from: day(2), to: day(2), bars: 1 }] });
+    expect(tested.recent).toEqual([
+      [day(0), null],
+      [day(1), 0],
+      [day(2), "Infinity"],
+    ]);
+    const scanned = (await call(viewer, "scan", { formula: FORMULA, keys: [SOL, ETH], only_true: true })).data;
+    expect(scanned).toMatchObject({ scanned: 2, true_now: 1, turned_true: [SOL] });
+    expect(scanned.rows).toEqual([{ key: SOL, name: expect.any(String), value: "Infinity", prev: 0, holds: true, date: day(2) }]);
+    expect((await call(viewer, "scan", { formula: `-(${FORMULA})`, keys: [SOL] })).data.rows[0]).toMatchObject({ value: "-Infinity", holds: true });
+  });
+
+  it("get_bars: the last daily bar is closed when its trading day is over, whatever a later quote made of its price", async () => {
+    const { ensureSymbol, markSynced, writeBars, writeQuotes } = await import("@/lib/store");
+    const XRP = "binance:XRPUSDT";
+    const D9 = Date.UTC(2026, 9, 9) / 1000;
+    const at = (h: number, m = 0) => (D9 + h * 3600 + m * 60) * 1000;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      // synced on the 9th with that day's bar at 100, then a quote the same day at 101
+      vi.setSystemTime(at(20));
+      ensureSymbol(XRP);
+      writeBars(XRP, [{ t: D9 - DAY, o: 99, h: 99, l: 99, c: 99, v: 1, adj: 1 }, { t: D9, o: 100, h: 100, l: 100, c: 100, v: 1, adj: 1 }], "replace");
+      markSynced(XRP, { hours: "24x7", timezone: "UTC" });
+      writeQuotes([{ key: XRP, price: 101, time: at(21) / 1000, session: "always", fetchedAt: at(21) }]);
+      const viewer = await agent("dreaife", false);
+      // still the 9th: the bar carries the quote and is not done
+      vi.setSystemTime(at(22));
+      const open = (await call(viewer, "get_bars", { key: XRP, limit: 1 })).data;
+      expect(open.bars[0].slice(0, 5)).toEqual(["2026-10-09", 100, 101, 100, 101]);
+      expect(open.last_daily_bar).toEqual({ date: "2026-10-09", closed: false });
+      // 12:31 UTC on the 10th: the same bar, the quote's price still on it, and the day is over
+      vi.setSystemTime(at(36, 31));
+      const done = (await call(viewer, "get_bars", { key: XRP, limit: 1 })).data;
+      expect(done.bars[0].slice(0, 5)).toEqual(["2026-10-09", 100, 101, 100, 101]);
+      expect(done.last_daily_bar).toEqual({ date: "2026-10-09", closed: true });
+      // a synthetic bar is done when the bars it is made of are
+      writeBars(BTC, [...bars([100, 101, 106, 107, 103, 108]), { t: D9, o: 50, h: 50, l: 50, c: 50, v: 1, adj: 1 }], "replace");
+      expect((await call(viewer, "get_bars", { key: `=${XRP}/binance:BTCUSDT`, limit: 1 })).data).toMatchObject({ last_daily_bar: { date: "2026-10-09", closed: true }, bars: [["2026-10-09", 2, 2.02, 2, 2.02, null]] });
+      vi.setSystemTime(at(22));
+      expect((await call(viewer, "get_bars", { key: `=${XRP}/binance:BTCUSDT`, limit: 1 })).data.last_daily_bar.closed).toBe(false);
+    } finally {
+      writeBars(BTC, bars([100, 101, 106, 107, 103, 108]), "replace");
+      vi.useRealTimers();
+    }
+  });
+
   it("the reference lists what the engine has", async () => {
     const { FUNCTIONS, SERIES_VARS } = await import("@/indicators/formula");
     const { ALERT_CONDS } = await import("@/lib/alert-conds");
@@ -246,7 +312,7 @@ describe("alerts an agent saves", () => {
     expect((await call(viewer, "overview")).data.groups[0].symbols[0].alerts).toMatchObject([{ id: saved.id, label: "站上 105" }]);
   });
 
-  it("an agent cannot put one on the whole watchlist into effect: no resuming, and an edit is a draft again", async () => {
+  it("an agent cannot put one on the whole watchlist into effect, nor take one out of it by editing: no resuming, no edit of one that is not a draft", async () => {
     const { readState } = await import("@/lib/alerts");
     const { confirmAlert } = await import("@/lib/ops");
     const { readConfig } = await import("@/lib/vault");
@@ -261,11 +327,30 @@ describe("alerts an agent saves", () => {
     expect((await call(viewer, "set_alert_enabled", { id, enabled: true })).error).toBe("对全部自选的警报只能由用户在页面上恢复");
     expect(readConfig(root).alerts[0].enabled).toBe(false);
 
-    // an edit: a draft again, its state gone
-    const edited = (await call(viewer, "save_alert", { id, when: "close > 106", tf: "W" })).data;
+    // an edit of one that is not a draft, stopped or running, is refused and changes nothing
+    const refused = "这条对全部自选的警报不是草稿，agent 不能改：不带 id 另存一条新的（会存成草稿），旧的继续生效，用户确认新的之后再删旧的";
+    expect((await call(viewer, "save_alert", { id, when: "close > 106", tf: "W" })).error).toBe(refused);
+    await confirmAlert(viewer, id);
+    const before = readYaml();
+    expect((await call(viewer, "save_alert", { id, when: "close > 106", tf: "W" })).error).toBe(refused);
+    // nor may it become an alert on one symbol
+    expect((await call(viewer, "save_alert", { id, key: "BTC", when: "close > 106" })).error).toBe(refused);
+    expect(readYaml()).toBe(before);
+    expect(readConfig(root).alerts).toMatchObject([{ id, when: "close > 105", draft: false, enabled: true }]);
+    expect(readState("").size).toBe(2);
+
+    // the way to change it: a new draft beside it, which the agent may go on editing
+    const next = (await call(viewer, "save_alert", { when: "close > 106", tf: "W" })).data;
+    expect(next.status).toBe("draft");
+    const edited = (await call(viewer, "save_alert", { id: next.id, when: "close > 107", tf: "W", label: "站上 107" })).data;
     expect(edited.status).toBe("draft");
-    expect(readConfig(root).alerts).toMatchObject([{ id: edited.id, when: "close > 106", tf: "W", draft: true, by: "agent", enabled: true }]);
-    expect(readState("").size).toBe(0);
+    expect(readConfig(root).alerts).toMatchObject([
+      { id, when: "close > 105", draft: false },
+      { id: edited.id, when: "close > 107", tf: "W", label: "站上 107", draft: true, by: "agent", enabled: true },
+    ]);
+    expect(readState("").size).toBe(2);
+    // stopping and deleting the one in effect stay allowed
+    expect((await call(viewer, "delete_alert", { id })).error).toBeNull();
 
     // a price condition needs a symbol, as on the page
     expect((await call(viewer, "save_alert", { cond: "greater", value: 1 })).error).toContain("价格和通道条件要写 key");

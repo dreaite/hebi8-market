@@ -12,17 +12,34 @@ import { evalSynth, parseSynth } from "./synth";
 export type DailyReader = (key: string) => Bar[];
 
 /**
- * Daily bars that are done: the last one is left out while its trading day is still going (the
- * exchange has not closed, at the earlier time on a half day; the UTC day is not over for crypto). A dataset's rows are published
- * values, taken as they are.
+ * Whether a real key's daily bar of trading day `t` is done: its exchange has closed that day (at
+ * the earlier time on a half day), or the UTC day is over for crypto. A dataset's rows are
+ * published values, done as they are.
  */
+export function dayClosed(key: string, t: number, now = Date.now()): boolean {
+  return parseKey(key).source === "data" || dayCloseAt(t, calendarOfRow(getSymbol(key))) <= now;
+}
+
+/** Daily bars that are done: the last one is left out while its trading day is still going (`dayClosed`). */
 export function closedReader(now = Date.now()): DailyReader {
   return (key) => {
     const bars = readDaily(key);
     const last = bars.at(-1);
-    if (!last || parseKey(key).source === "data") return bars;
-    return dayCloseAt(last.t, calendarOfRow(getSymbol(key))) > now ? bars.slice(0, -1) : bars;
+    return last && !dayClosed(key, last.t, now) ? bars.slice(0, -1) : bars;
   };
+}
+
+/**
+ * Whether the daily bar of day `t` of any key is done. A synthetic bar is made of its operands'
+ * bars on or before that day (the first operand's own, the others forward filled) as `read` gives
+ * them, and is done when each of those is.
+ */
+export function barClosed(key: string, t: number, cfg: Config, read: DailyReader = readDaily, now = Date.now()): boolean {
+  if (!isSynthetic(key)) return dayClosed(key, t, now);
+  return parseSynth(key.slice(1), cfg.aliases).keys.every((k) => {
+    const used = read(k).findLast((b) => b.t <= t);
+    return !used || dayClosed(k, used.t, now);
+  });
 }
 
 export function loadDaily(key: string, prices: Prices, cfg: Config, read: DailyReader = readDaily): Bar[] {

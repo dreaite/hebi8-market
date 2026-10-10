@@ -19,7 +19,7 @@ const INSTRUCTIONS = `hebi8/market is one person's market watchlist: daily bars 
 - Daily bars are the smallest unit. Weekly, monthly and quarterly bars are built from them. There are no intraday bars, so nothing below one day can be computed or alerted on.
 - Everything is the vault of the person whose token you carry: their watchlist, aliases, alerts, notes and journal.
 - A typical flow: overview → formula_reference → scan (which symbols does it hold on now) → test_formula (how often did it turn true before) → save_alert.
-- An alert on one symbol is active as soon as you save it. An alert on the whole watchlist is saved as a draft and only the user can confirm it, on the page; tell them when you leave one.
+- An alert on one symbol is active as soon as you save it. An alert on the whole watchlist is saved as a draft and only the user can confirm it, on the page; tell them when you leave one. One that is already in effect cannot be edited by you: save a new draft beside it.
 - Notes and the journal are append-only for you.
 - Errors come back in Chinese, as the app shows them to the user.`;
 

@@ -9,7 +9,7 @@ import { z } from "zod";
 import { ALERT_CONDS, type AlertCond, type AlertCondition } from "../alert-conds";
 import { alertBadges, alertViews } from "../alert-view";
 import { adoptConditionState, alertKeys, readState, stateId } from "../alerts";
-import { closedReader, loadDaily, synthNoData } from "../bars";
+import { barClosed, loadDaily, synthNoData } from "../bars";
 import { allItems, findItem, resolveKey, type Config } from "../config";
 import { fmtDate } from "../format";
 import { nameOf } from "../names";
@@ -124,7 +124,7 @@ export const TOOLS: Tool[] = [
   tool({
     name: "get_bars",
     description:
-      "OHLCV bars of one symbol from the cache, oldest first, the newest `limit` of them. Daily bars are the smallest unit (no intraday bars); W, M and Q are aggregated from them and their last bar is the period so far. The last daily bar is today's unfinished one when a quote is newer than the last sync (`last_daily_bar.closed` says which). Prices follow the user's `prices` setting. Only cached symbols have bars: every watched symbol, its benchmark and anything an alert or formula refers to; add_symbol caches a new one.",
+      "OHLCV bars of one symbol from the cache, oldest first, the newest `limit` of them. Daily bars are the smallest unit (no intraday bars); W, M and Q are aggregated from them and their last bar is the period so far. The last daily bar is today's unfinished one when a quote is newer than the last sync; `last_daily_bar.closed` says whether that bar's trading day is over (the exchange has closed, or the UTC day ended for crypto), whatever its price came from. Prices follow the user's `prices` setting. Only cached symbols have bars: every watched symbol, its benchmark and anything an alert or formula refers to; add_symbol caches a new one.",
     input: {
       key: z.string().describe(`The symbol: ${KEY}`),
       tf,
@@ -133,10 +133,10 @@ export const TOOLS: Tool[] = [
     run: ({ dir }, args) => {
       const cfg = readConfig(dir);
       const key = keyOf(cfg, args.key);
-      const daily = loadDaily(key, cfg.prices, cfg, liveReader());
+      const live = liveReader();
+      const daily = loadDaily(key, cfg.prices, cfg, live);
       const last = daily.at(-1);
       if (!last) throw new Error(isSynthetic(key) ? synthNoData(key, cfg, (k) => getSymbol(k)?.syncError ?? null) : (getSymbol(key)?.syncError ?? "没有缓存的日线：这个标的不在自选里，也没有被引用过"));
-      const done = loadDaily(key, cfg.prices, cfg, closedReader()).at(-1);
       const bars = aggregate(daily, args.tf);
       return {
         key,
@@ -144,7 +144,7 @@ export const TOOLS: Tool[] = [
         tf: args.tf,
         currency: getSymbol(key)?.currency ?? undefined,
         total_bars: bars.length,
-        last_daily_bar: { date: fmtDate(last.t), closed: done?.t === last.t && done.c === last.c },
+        last_daily_bar: { date: fmtDate(last.t), closed: barClosed(key, last.t, cfg, live) },
         columns: ["date", "open", "high", "low", "close", "volume"],
         bars: bars.slice(-args.limit).map((b) => [fmtDate(b.t), num(b.o), num(b.h), num(b.l), num(b.c), b.v]),
       };
@@ -154,14 +154,14 @@ export const TOOLS: Tool[] = [
   tool({
     name: "scan",
     description:
-      "Evaluate one formula on many symbols at once and return, per symbol, its value on the last bar and on the bar before (a boolean formula gives 1 or 0; null where it has no value yet) or why it failed. By default every watched symbol; narrow it with `group` or `keys`. Only cached bars are read and nothing is fetched: a symbol that was never synced comes back with an error instead of a value. Use this to find which symbols a condition holds on right now; use test_formula to see how it behaved in the past. See formula_reference for the language.",
+      "Evaluate one formula on many symbols at once and return, per symbol, its value on the last bar and on the bar before, whether it holds on the last bar, or why it failed. A boolean formula gives 1 or 0. `holds` is how an alert would judge the value: true for anything that is not 0, absent where there is no value. A value is null where there is none yet (not enough bars, a referenced symbol without data); an infinite value (a division by zero) is the string \"Infinity\" or \"-Infinity\", which is a value and holds. `true_now` counts the symbols where it holds and `turned_true` lists those where it holds now and did not on the bar before. By default every watched symbol; narrow it with `group` or `keys`. Only cached bars are read and nothing is fetched: a symbol that was never synced comes back with an error instead of a value. Use this to find which symbols a condition holds on right now; use test_formula to see how it behaved in the past. See formula_reference for the language.",
     input: {
       formula: z.string().describe("Boolean or numeric formula, e.g. `close < sma(close, 200)` or `(close / sma(close, 40) - 1) * 100`"),
       tf,
       group: z.string().optional().describe("Only the symbols of this watchlist group (its name as in overview)"),
       keys: z.array(z.string()).max(200).optional().describe(`Only these symbols instead of the watchlist; each is ${KEY}. They need not be watched, but must be cached.`),
       check,
-      only_true: z.boolean().default(false).describe("Leave out the symbols where the value is false or missing: only the ones where it is true (not 0) and the ones that failed are returned. The counts still cover all of them."),
+      only_true: z.boolean().default(false).describe("Leave out the symbols where the formula is false or has no value: only the ones where it holds and the ones that failed are returned. The counts still cover all of them."),
     },
     run: ({ dir }, args) => {
       const cfg = readConfig(dir);
@@ -173,16 +173,15 @@ export const TOOLS: Tool[] = [
         keys = group.symbols.map((s) => s.key);
       } else keys = allItems(cfg).map((i) => i.key);
       const { rows, uncached } = scan(cfg, keys, args.formula, args.tf, readerFor(args.check));
-      const isTrue = (v: number | null) => v !== null && v !== 0;
       return {
         tf: args.tf,
         check: args.check,
         scanned: rows.length,
-        true_now: rows.filter((r) => isTrue(r.value)).length,
-        turned_true: rows.filter((r) => isTrue(r.value) && r.prev === 0).map((r) => r.key),
+        true_now: rows.filter((r) => r.holds).length,
+        turned_true: rows.filter((r) => r.holds && r.held === false).map((r) => r.key),
         failed: rows.filter((r) => r.error).length,
         uncached_references: uncached.length ? uncached : undefined,
-        rows: (args.only_true ? rows.filter((r) => isTrue(r.value) || r.error) : rows).map((r) => ({ ...r, alias: aliasOf(cfg, r.key) })),
+        rows: (args.only_true ? rows.filter((r) => r.holds || r.error) : rows).map((r) => ({ key: r.key, alias: aliasOf(cfg, r.key), name: r.name, value: r.value, prev: r.prev, holds: r.holds ?? undefined, date: r.date, error: r.error })),
       };
     },
   }),
@@ -190,10 +189,10 @@ export const TOOLS: Tool[] = [
   tool({
     name: "test_formula",
     description:
-      "How a formula behaved on one symbol over its last `bars` bars: on how many bars it was true, the runs of bars where it held, and each bar on which it turned from false to true, which is when an alert with this formula as `when` would have fired. Check a formula with this before saving it as an alert: one that never turned true, or does on most bars, is probably not what the user means. History is judged bar by bar on final values; a live `check: price` alert can also fire on an unfinished bar that later closes false. Cached bars only.",
+      "How a formula behaved on one symbol over its last `bars` bars: on how many bars it was true, the runs of bars where it held, and each bar on which it turned from false to true, which is when an alert with this formula as `when` would have fired. Check a formula with this before saving it as an alert: one that never turned true, or does on most bars, is probably not what the user means. True means what it means to an alert: any value that is not 0, an infinite one (shown as the string \"Infinity\" or \"-Infinity\") included; null is no value and changes nothing. History is judged bar by bar on final values; a live `check: price` alert can also fire on an unfinished bar that later closes false. Cached bars only.",
     input: {
       key: z.string().describe(`The symbol: ${KEY}`),
-      formula: z.string().describe("The formula; a numeric one counts as true where it is not 0"),
+      formula: z.string().describe("The formula; a numeric one counts as true wherever it is not 0"),
       tf,
       bars: z.number().int().min(2).max(3000).default(250).describe("How many of the newest bars to look at (default 250, about a year of daily bars)"),
       check,
@@ -309,9 +308,9 @@ export const TOOLS: Tool[] = [
     name: "save_alert",
     write: true,
     description:
-      "Create an alert, or with `id` replace an existing one (pass every field again: what is left out goes back to its default, and an edited alert starts over). Give either `when` (a boolean formula) or `cond` + `value`. With `key` the alert watches that one symbol and is active at once: the server judges it after every quote round (`check: price`, about every 5 minutes in market hours) or after each daily sync (`check: close`) and pushes to the user's channels when it fires. Without `key` it covers every watched symbol and is ALWAYS saved as a draft that the user must confirm on the page; you cannot activate it, so say so in your reply. Only daily and higher timeframes exist. Run test_formula first.",
+      "Create an alert, or with `id` replace an existing one (pass every field again: what is left out goes back to its default, and an edited alert starts over). Give either `when` (a boolean formula) or `cond` + `value`. With `key` the alert watches that one symbol and is active at once: the server judges it after every quote round (`check: price`, about every 5 minutes in market hours) or after each daily sync (`check: close`) and pushes to the user's channels when it fires. Without `key` it covers every watched symbol and is ALWAYS saved as a draft that the user must confirm on the page; you cannot activate it, so say so in your reply. With `id` you can replace an alert on one symbol or a draft, but not a whole-watchlist alert that is not a draft (`status` other than `draft` in list_alerts): that is refused and the alert keeps running, so save your new version without `id` as a new draft and let the user confirm it and delete the old one. Only daily and higher timeframes exist. Run test_formula first.",
     input: {
-      id: z.string().optional().describe("The id of the alert to replace, from list_alerts (`alert:…`). Omit to create one."),
+      id: z.string().optional().describe("The id of the alert to replace, from list_alerts (`alert:…`): one on a single symbol, or a draft. Omit to create one."),
       key: z.string().nullish().describe(`The symbol to watch: ${KEY}. Omit (or null) for every watched symbol, which is saved as a draft.`),
       when: z.string().optional().describe("Boolean formula; fires when it turns true, at most once per bar of `tf`"),
       tf: z.enum(TIMEFRAMES).optional().describe("Timeframe of `when` (default D); conditions are always daily"),
