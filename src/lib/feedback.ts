@@ -66,8 +66,23 @@ const MAX_DESCRIPTION = 20000;
 const MAX_CONTEXT = 20000;
 export const FOOTER = "<sub>来自 hebi8/market 应用内反馈</sub>";
 
+/**
+ * The page address a report may carry: path and query, without the help drawer's own `help` and
+ * without the one-time code of `/claim` (design §5.8). Issues are public, and that code would
+ * still log in whoever read it there first.
+ */
+export function reportablePage(page: string): string {
+  const at = page.indexOf("?");
+  const path = at < 0 ? page : page.slice(0, at);
+  const query = new URLSearchParams(at < 0 ? "" : page.slice(at + 1));
+  query.delete("help");
+  if (path.replace(/\/+$/, "") === "/claim") query.delete("c");
+  const search = query.toString();
+  return search ? `${path}?${search}` : path;
+}
+
 export function feedbackContext(type: FeedbackType, autoFix: boolean, page: PageInfo | null): FeedbackContext {
-  return { v: 1, type, autoFix, ...(page ?? {}) };
+  return { v: 1, type, autoFix, ...(page ? { ...page, page: reportablePage(page.page) } : {}) };
 }
 
 /** The issue body: description, the context block in a `<details>`, the footer. */
@@ -156,6 +171,8 @@ export function parseFeedbackInput(raw: unknown): FeedbackInput {
     void _t;
     void _a;
     page = rest as Partial<PageInfo>;
+    // whatever the client sent: a login code never goes into a public issue
+    if (typeof page.page === "string") page.page = reportablePage(page.page);
   }
   // type and autoFix come from the form itself, whatever the client put in the context
   const context: FeedbackContext = { v: 1, type: r.type, autoFix, ...page };

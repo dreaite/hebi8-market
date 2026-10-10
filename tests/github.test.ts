@@ -14,7 +14,7 @@ import { GET as loginGET } from "@/app/api/github/login/route";
 import { POST as logoutPOST } from "@/app/api/github/logout/route";
 import { GITHUB_APP_CLIENT_ID, feedbackRepo, githubClientId } from "@/lib/app-info";
 import { createClaim, dropClaims, peekClaim, resetClaims, takeClaim } from "@/lib/claim";
-import { MAX_WEB_URL, TRUNCATED_NOTE, buildIssueBody, feedbackContext, parseFeedbackInput, parseIssueContext, webIssueUrl, type FeedbackContext, type PageInfo } from "@/lib/feedback";
+import { MAX_WEB_URL, TRUNCATED_NOTE, buildIssueBody, feedbackContext, parseFeedbackInput, parseIssueContext, reportablePage, webIssueUrl, type FeedbackContext, type PageInfo } from "@/lib/feedback";
 import { GitHubError, LOGIN_COOKIE, SESSION_COOKIE, pollDeviceFlow, requestOrigin, resetGitHubCaches, safeNext, startDeviceFlow, userToken, webLoginClient } from "@/lib/github";
 import { createSession, getSession, liveSessions, touchSession, writeJson } from "@/lib/secrets";
 import { proxy } from "@/proxy";
@@ -61,6 +61,33 @@ describe("issue body", () => {
     expect(input.context).toMatchObject({ v: 1, type: "ux", autoFix: true, page: "/chart/yahoo%3ASPY" });
     expect(parseFeedbackInput({ type: "idea", title: "x", context: null }).context).toEqual({ v: 1, type: "idea", autoFix: false });
     expect(() => parseFeedbackInput({ type: "idea", title: "x", context: { junk: "x".repeat(30000) } })).toThrow("太大");
+  });
+});
+
+describe("reported page address", () => {
+  const CODE = "FkjZSQzabJX3x0YaZeUavZuSGJI6c7HSwcaSClqIhTU";
+
+  it("keeps the path and query, minus the drawer's own parameter and the login code of /claim", () => {
+    expect(reportablePage("/chart/yahoo%3ASPY")).toBe("/chart/yahoo%3ASPY");
+    expect(reportablePage("/chart/yahoo%3ASPY?tf=W&help=feedback")).toBe("/chart/yahoo%3ASPY?tf=W");
+    expect(reportablePage(`/claim?c=${CODE}`)).toBe("/claim");
+    expect(reportablePage(`/claim/?help=feedback&c=${CODE}&x=1`)).toBe("/claim/?x=1");
+    // `c` means nothing anywhere else
+    expect(reportablePage("/review?c=1")).toBe("/review?c=1");
+  });
+
+  it("the preview, the github.com form and the in-app body all come from a context without the code", () => {
+    const context = feedbackContext("bug", false, { ...page, page: `/claim?c=${CODE}&help=feedback` });
+    expect(context.page).toBe("/claim");
+    expect(JSON.stringify(context)).not.toContain(CODE);
+    expect(decodeURIComponent(webIssueUrl("Hebi8/hebi8-market", "登录页有问题", "按钮点不了", context))).not.toContain(CODE);
+    expect(buildIssueBody("按钮点不了", context)).not.toContain(CODE);
+  });
+
+  it("the server drops the code from whatever context a client submits", () => {
+    const input = parseFeedbackInput({ type: "bug", title: "x", context: { v: 1, type: "bug", autoFix: false, page: `/claim?c=${CODE}`, userAgent: "old tab" } });
+    expect(input.context).toMatchObject({ page: "/claim", userAgent: "old tab" });
+    expect(buildIssueBody("", input.context)).not.toContain(CODE);
   });
 });
 
@@ -712,6 +739,16 @@ describe("issues", () => {
     expect(body.webFallback).toBe(true);
     // the login itself is fine
     expect(getSession(id)).not.toBeNull();
+  });
+
+  it("a report sent from /claim does not carry the login code into the issue", async () => {
+    const code = "FkjZSQzabJX3x0YaZeUavZuSGJI6c7HSwcaSClqIhTU";
+    routes[`POST ${ISSUES}`] = () => json({ number: 9, html_url: "u", title: "t" }, 201);
+    const res = await submit({ [SESSION_COOKIE]: login() }, { type: "bug", title: "登录页有问题", description: "", context: { ...ctx, page: `/claim?c=${code}` }, autoFix: false });
+    expect(res.status).toBe(200);
+    const sent = calls[0].body as { title: string; body: string };
+    expect(JSON.stringify(sent)).not.toContain(code);
+    expect(parseIssueContext(sent.body)).toMatchObject({ page: "/claim" });
   });
 
   it("a web login through the feedback App is refused for the same reasons as the device flow's", async () => {

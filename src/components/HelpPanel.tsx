@@ -54,19 +54,13 @@ const SHORTCUTS: { group: string; rows: [string, string][] }[] = [
   { group: "反馈", rows: [["Ctrl/Cmd+Enter", "提交"]] },
 ];
 
-/** Current URL minus the panel's own query parameters. */
-function pagePath(): string {
-  const url = new URL(window.location.href);
-  url.searchParams.delete("help");
-  return `${url.pathname}${url.search}`;
-}
-
 /** Everything attached under 页面信息; collected in the browser at the moment the form opens. */
 function collectPageInfo(): PageInfo {
   const chart = getChartContext();
   return {
     app: { version: APP_INFO.version, commit: APP_INFO.commit, builtAt: APP_INFO.builtAt },
-    page: pagePath(),
+    // path and query; `feedbackContext` drops what must not be reported (the drawer's own parameter, a login code)
+    page: `${window.location.pathname}${window.location.search}`,
     ...(chart && window.location.pathname.startsWith("/chart/") ? { chart } : {}),
     viewport: { width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio },
     colorScheme: window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
