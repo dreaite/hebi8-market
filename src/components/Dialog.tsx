@@ -65,15 +65,19 @@ export function Dropdown({
       if (e.key === "Escape") setPos(null);
     };
     const onMove = () => setPos(null);
+    // the page moving under the menu closes it; a long menu scrolling in itself does not
+    const onScroll = (e: Event) => {
+      if (!menuRef.current?.contains(e.target as Node)) setPos(null);
+    };
     document.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
     window.addEventListener("resize", onMove);
-    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("scroll", onScroll, true);
     return () => {
       document.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", onMove);
-      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }, [pos]);
   // a menu wider than the room right of its button moves left, so it stays on screen
