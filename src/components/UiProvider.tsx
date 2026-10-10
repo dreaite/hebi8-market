@@ -34,6 +34,8 @@ interface UiValue {
   login: () => void;
   /** 通知设置: the account drawer (the only place channels are set) */
   openNotify: () => void;
+  /** 在其他设备上登录: the account drawer, with the one-time link made right away */
+  openDevice: () => void;
   /** The three-step how-to (opens by itself on the first visit to the overview) */
   openGuide: () => void;
 }
@@ -101,7 +103,7 @@ export function UiProvider({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [help, setHelp] = useState<{ tab: HelpTab | null; notice: string | null; seq: number } | null>(null);
-  const [account, setAccount] = useState<{ autoLogin: boolean; seq: number } | null>(null);
+  const [account, setAccount] = useState<{ start: "login" | "device" | null; seq: number } | null>(null);
   const [guide, setGuide] = useState(false);
   const seq = useRef(0);
 
@@ -124,16 +126,17 @@ export function UiProvider({
     setHelp({ tab: tab ?? null, notice, seq: ++seq.current });
   }, []);
   const closeHelp = useCallback(() => setHelp(null), []);
-  const openAccount = useCallback((autoLogin: boolean) => {
+  const openAccount = useCallback((start: "login" | "device" | null) => {
     setSearch(null);
     setHelp(null);
-    setAccount({ autoLogin, seq: ++seq.current });
+    setAccount({ start, seq: ++seq.current });
   }, []);
   const login = useCallback(() => {
     if (webLogin) startWebLogin();
-    else openAccount(true);
+    else openAccount("login");
   }, [webLogin, openAccount]);
-  const openNotify = useCallback(() => openAccount(false), [openAccount]);
+  const openNotify = useCallback(() => openAccount(null), [openAccount]);
+  const openDevice = useCallback(() => openAccount("device"), [openAccount]);
   const closeAccount = useCallback(() => setAccount(null), []);
   const openGuide = useCallback(() => {
     setSearch(null);
@@ -228,8 +231,8 @@ export function UiProvider({
   };
 
   const value = useMemo<UiValue>(
-    () => ({ searchCtx: ctx, openSearch, toast, openHelp: (tab?: HelpTab) => openHelp(tab), login, openNotify, openGuide }),
-    [ctx, openSearch, toast, openHelp, login, openNotify, openGuide],
+    () => ({ searchCtx: ctx, openSearch, toast, openHelp: (tab?: HelpTab) => openHelp(tab), login, openNotify, openDevice, openGuide }),
+    [ctx, openSearch, toast, openHelp, login, openNotify, openDevice, openGuide],
   );
 
   return (
@@ -258,7 +261,7 @@ export function UiProvider({
         />
       )}
       {help && <HelpPanel key={help.seq} tab={help.tab} notice={help.notice} onClose={closeHelp} toast={toast} />}
-      {account && <AccountPanel key={account.seq} autoLogin={account.autoLogin} onClose={closeAccount} toast={toast} />}
+      {account && <AccountPanel key={account.seq} autoLogin={account.start === "login"} autoDevice={account.start === "device"} onClose={closeAccount} toast={toast} />}
       {toasts.length > 0 && (
         <div className="pointer-events-none fixed inset-x-0 bottom-5 z-50 flex flex-col items-center gap-2 px-3">
           {toasts.map((t) => (
@@ -340,7 +343,7 @@ export function LoginButton() {
 
 /** The header's identity on a shared instance: 登录, or the avatar and login with a menu. */
 export function Account({ user, enabled, owner = false }: { user: { login: string; avatarUrl: string } | null; enabled: boolean; owner?: boolean }) {
-  const { login, openNotify } = useUi();
+  const { login, openNotify, openDevice } = useUi();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -392,6 +395,16 @@ export function Account({ user, enabled, owner = false }: { user: { login: strin
             className="menu-item"
           >
             通知设置
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              openDevice();
+            }}
+            className="menu-item"
+          >
+            在其他设备上登录
           </button>
           {owner && (
             <button

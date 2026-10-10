@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { copyText } from "@/lib/copy-text";
 import type { BotSummary, ChannelSummary } from "@/lib/notify";
 import { IconExternal } from "./chart-icons";
@@ -11,11 +11,22 @@ import type { ToastOptions } from "./UiProvider";
 
 /**
  * 登录 and 通知设置 (design §2.5), the one place for both: the header's 登录 and the account
- * menu's 通知设置 open it. Logged out it is the GitHub login (the device flow; an origin with the
+ * menu's 通知设置 and 在其他设备上登录 open it. Logged out it is the GitHub login (the device flow; an origin with the
  * web login goes straight to github.com instead of here); logged in it is this person's channels,
  * plus the instance's bot for an owner. Only a shared instance has logins.
  */
-export function AccountPanel({ autoLogin, onClose, toast }: { autoLogin: boolean; onClose: () => void; toast: (message: string, opts?: ToastOptions) => void }) {
+export function AccountPanel({
+  autoLogin,
+  autoDevice,
+  onClose,
+  toast,
+}: {
+  autoLogin: boolean;
+  /** Opened by the menu's 在其他设备上登录: the link is made right away */
+  autoDevice: boolean;
+  onClose: () => void;
+  toast: (message: string, opts?: ToastOptions) => void;
+}) {
   const { info, error, reload } = useHelpInfo();
   // a new bot changes what the channel settings can offer, so they reload
   const [botVersion, setBotVersion] = useState(0);
@@ -38,7 +49,7 @@ export function AccountPanel({ autoLogin, onClose, toast }: { autoLogin: boolean
             toast={toast}
             intro="登录后用你自己的自选、笔记和复盘，并设置你自己的通知：你的警报触发时，推到你绑定的 Telegram、webhook 或开了推送的设备。"
           />
-          {user && info.shared && <OtherDevice toast={toast} />}
+          {user && info.shared && <OtherDevice autoStart={autoDevice} toast={toast} />}
           {user && <NotifySettings key={`${user.login}:${botVersion}`} toast={toast} />}
           {user && info.canSetBot && (
             <div className="mt-5">
@@ -55,7 +66,7 @@ export function AccountPanel({ autoLogin, onClose, toast }: { autoLogin: boolean
  * 在其他设备上登录 (§5.8): a one-time link, also as a QR code, that logs another device in as this
  * person once they confirm on it. Good for two minutes; the QR is drawn by this server.
  */
-function OtherDevice({ toast }: { toast: (message: string, opts?: ToastOptions) => void }) {
+function OtherDevice({ autoStart, toast }: { autoStart: boolean; toast: (message: string, opts?: ToastOptions) => void }) {
   const [link, setLink] = useState<{ url: string; qr: string; expiresAt: number } | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [busy, setBusy] = useState(false);
@@ -67,7 +78,7 @@ function OtherDevice({ toast }: { toast: (message: string, opts?: ToastOptions) 
     return () => window.clearInterval(id);
   }, [link]);
 
-  const create = async () => {
+  const create = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
@@ -79,7 +90,15 @@ function OtherDevice({ toast }: { toast: (message: string, opts?: ToastOptions) 
     } finally {
       setBusy(false);
     }
-  };
+  }, []);
+
+  // 在其他设备上登录 in the header's menu: show the code at once instead of another button to press
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!autoStart || autoStarted.current) return;
+    autoStarted.current = true;
+    void create();
+  }, [autoStart, create]);
 
   if (!link) {
     return (

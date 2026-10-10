@@ -20,7 +20,7 @@ export default async function ClaimPage({ searchParams }: { searchParams: Promis
     return (
       <main className="mx-auto flex w-full max-w-[1400px] flex-col items-start gap-2 px-5 py-10 text-sm">
         <p>这个登录链接无效，或者已经过期。</p>
-        <p className="text-muted">链接生成后 2 分钟内有效，只能用一次。回到已登录的设备，在页头头像菜单的「通知设置」里重新点「在其他设备上登录」。</p>
+        <p className="text-muted">链接生成后 2 分钟内有效，只能用一次。回到已登录的设备，在页头的头像菜单里重新点「在其他设备上登录」。</p>
         <Link href="/" className="btn btn-secondary">
           回首页
         </Link>
