@@ -168,6 +168,7 @@ vault/
 | 未登录 | owner 的总览和图表（含画线） | 不能改；笔记和复盘要登录后看自己的 |
 
 - 页头右侧的「登录」打开登录抽屉，走 GitHub device flow（和反馈共用会话，用着就一直有效，连续 30 天不用才过期）；配了[网页登录](#网页登录可选)的入口上是跳到 GitHub、授权后回到原来的页面；登录后显示头像和用户名，菜单里有「通知设置」、owner 才有的「使用情况」和「退出」。「通知设置」打开的是同一个抽屉，登录后它就是设置通知的地方。退出只删会话，不动 vault。
+- 换一台设备、换一个浏览器不用再登录一遍：在已登录的设备上打开页头菜单的「通知设置」，点「在其他设备上登录」，用另一台设备扫二维码或打开链接（2 分钟内有效，只能用一次），在打开的页面上确认即可。这样带过去的登录没有 GitHub 的授权，要在应用里提交反馈时再用 GitHub 登录一次。
 - 第一次登录的人从根 vault 的 `hebi8.yaml` 复制一份起点，去掉 `owner`、`sync`、`datasets`、`alerts`（以及旧的 `conditions`），警报不会替谁预置；笔记、复盘、画线从空开始。之后两边互不影响。
 - `owner`、`sync`、`datasets` 是实例设置，只认根 vault 的；写在自己 yaml 里会被忽略，总览上会提示。
 - 同步拉的是所有人引用到的标的的并集；同步后每个人的统计和通知各算各的。
@@ -305,6 +306,7 @@ src/
 │   ├── chart/[key]/page.tsx  图表页 /chart/yahoo%3ASPY
 │   ├── review/page.tsx       复盘
 │   ├── settings/page.tsx     设置：从 TradingView 导入自选和画线、导出自选
+│   ├── claim/page.tsx        「在其他设备上登录」的确认页
 │   ├── actions.ts            Server Actions：写 yaml / 笔记 / 日志 / 图表状态，刷新
 │   ├── tv-actions.ts         Server Actions：TradingView 导入（tv-import.ts / tv-drawings.ts / tv-layout.ts 在 lib）
 │   └── api/
@@ -312,7 +314,7 @@ src/
 │       ├── search/           外部搜索（Yahoo / TradingView / Binance），本地匹配在浏览器里
 │       ├── help/             帮助与登录抽屉的数据：登录状态、反馈设置（只读本地）
 │       ├── notify/           当前登录者的通知通道：摘要、Telegram 绑定、webhook、推送订阅、测试消息
-│       └── github/           网页登录（login、callback）、device flow 登录、退出、提交 / 列出反馈 issue
+│       └── github/           网页登录（login、callback）、device flow 登录、把登录带到另一台设备（claim）、退出、提交 / 列出反馈 issue
 ├── instrumentation.ts        启动应用内调度器
 ├── components/               TvImport（设置页的导入导出）/ UiProvider（搜索浮层、帮助与登录抽屉、toast、快捷键）/ HelpPanel（使用、反馈）/ AccountPanel（登录、通知设置）/ Guide / SymbolSearch / Overview / RowMenu / ChartView / KChart / ChartLegend / IndicatorDialog / CompareDialog / WatchlistPanel / FormulaEditor / NotesPanel …
 ├── indicators/               指标目录、代码指标、公式引擎（formula.ts）、纯计算函数
@@ -320,6 +322,7 @@ src/
     ├── search.ts wellknown.ts 搜索的纯函数（匹配、过滤、去重、排序、分组推断）与内置字典
     ├── use-autosave.ts       笔记 / 复盘的自动保存
     ├── github.ts secrets.ts  GitHub 调用（网页登录、device flow 登录、刷新、issue）与 ~/.config/hebi8/market 里的登录会话
+    ├── claim.ts              「在其他设备上登录」的一次性码（只在内存里，2 分钟）
     ├── feedback.ts           反馈 issue 的正文、hebi8-context 格式与 GitHub 网页预填链接
     ├── sources/              yahoo / binance / tradingview / dataset（自定义数据集）适配器
     ├── vault.ts config.ts    vault 的读写层（按目录，根 vault 或 users/<login>/）、hebi8.yaml 的类型与校验

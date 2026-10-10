@@ -19,7 +19,7 @@ const failure = (err: unknown) => {
  */
 export async function GET(request: NextRequest) {
   const session = getSession(request.cookies.get(SESSION_COOKIE)?.value);
-  const token = session && (!session.access_expires_at || session.access_expires_at > Date.now()) ? session.access_token : null;
+  const token = session?.access_token && (!session.access_expires_at || session.access_expires_at > Date.now()) ? session.access_token : null;
   try {
     return NextResponse.json({ issues: await recentFromAppIssues(feedbackRepo(), token) });
   } catch (err) {

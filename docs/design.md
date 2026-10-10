@@ -241,6 +241,7 @@ CREATE TABLE usage_alerts (kind TEXT NOT NULL, day INTEGER NOT NULL, PRIMARY KEY
 - **页头**：右侧显示当前身份。未登录是「登录」按钮：当前入口提供网页登录时整页跳到 GitHub、授权后回到原来的页面，否则打开登录抽屉开始 device flow（§5.8）；登录后是头像 + login，菜单里有「通知设置」（同一个抽屉，§2.5）、owner 才有的「使用情况」（§1.7）和「退出」。owner 模式下未登录时，总览标题是「示例列表」（内容就是 owner 的列表）。
 - **怎么用**：第一次打开总览时弹出一个三步引导面板（扫描 / 深看 / 记录），每步一张循环小动画，←/→ 翻页；关掉后记在浏览器 localStorage，不再自动出现，帮助抽屉「使用」页签里的「打开三步引导」可以再打开。访客的最后一步是「用 GitHub 登录」和「先看看示例」。
 - 登录会话和反馈共用（§5.8）；退出只删会话，不动 vault。
+- **在其他设备上登录**（只在共用模式有）：已登录的人在账号抽屉里生成一个 2 分钟有效、只能用一次的链接（也画成二维码），另一台设备打开、在页面上确认后，以同一个人的身份得到一条自己的会话，不用再过一遍 GitHub（§5.8）。
 - **会话滑动续期**：会话连续 30 天（`SESSION_DAYS`）没用过才过期，按最后使用时间 `seen_at` 算，不看登录时间，也不看 GitHub token（token 过期只影响应用内提交，§5.8）。续期在 proxy 里做（`src/proxy.ts`，和流量计数同一处，§1.7）：请求带着有效会话、`seen_at` 距今超过一天时，把 `seen_at` 写成现在，并在响应上把 cookie 重新设成 30 天。所以一条会话一天最多写一次 `sessions.json`；没带会话 cookie 的请求不读这个文件。`/api/github/*` 不续：这些接口自己设置或清除会话 cookie。
 - 会话 cookie 经 HTTPS 来的请求（隧道，`X-Forwarded-Proto: https`）带 `Secure`；Tailscale 直连是 http，不带，照样能登录。两边 Host 不同，cookie 各存各的；网页登录只在登记了回调地址的入口提供（默认只有公开地址），其他入口用 device flow。
 
@@ -808,7 +809,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 **版本**：`package.json` version + 构建时的 `git rev-parse --short HEAD` + 构建时间（`next.config.ts` 的 `env` 注入 `HEBI8_VERSION / HEBI8_COMMIT / HEBI8_BUILT_AT`，取不到 commit 时为 `unknown`）。只出现在反馈的 `hebi8-context` 里和 owner 的 `/usage` 上。
 
-**`GET /api/help`**（只读本地）：`{ shared, canSetBot, issuesUrl, github: { enabled, webLogin, feedbackRepo, user } }`，反馈页签和通知设置抽屉共用。`webLogin` 是这个请求的入口能不能网页登录，由服务端按请求的 origin 算；根 layout 也算一次传给 `UiProvider`，客户端不自己判断。
+**`GET /api/help`**（只读本地）：`{ shared, canSetBot, issuesUrl, github: { enabled, webLogin, feedbackRepo, user: { login, avatarUrl, token } } }`，反馈页签和通知设置抽屉共用。`user.token` 是这条会话有没有 GitHub token（从其他设备带过来的登录没有）。`webLogin` 是这个请求的入口能不能网页登录，由服务端按请求的 origin 算；根 layout 也算一次传给 `UiProvider`，客户端不自己判断。
 
 **配置**（`src/lib/app-info.ts`，服务端读，环境变量可覆盖，供 fork 用自己的 App / 仓库）：
 
@@ -839,6 +840,7 @@ client id 不是秘密（device flow 的设计就是给拿不住密钥的客户�
 - **未登录**：「用 GitHub 登录」+ 说明会以你的名义提交到哪个仓库；表单下方是次要按钮「在 GitHub 网页上提交」。入口提供网页登录时，按钮是整页跳转（`next` 是当前页面加 `?help=feedback`，回来后抽屉重新打开在反馈页签）；跳走前把未发送的表单存进 sessionStorage（`hebi8m:feedback-draft`），页面再加载时取回并删掉。
 - **登录中**（只有 device flow）：大号、可复制的 user code（复制不用 async clipboard——内网是 http，没有安全上下文——而是隐藏 textarea + `execCommand("copy")`，焦点留在抽屉里）、「打开 github.com/login/device」（新标签页，地址来自 GitHub 的 `verification_uri`，只接受 `https://github.com/…`）、状态行（等待授权 / GitHub 要求放慢）+ 倒计时、「取消」。进行中的登录记在模块变量里，关掉再打开抽屉会接着轮询。
 - **已登录**：头像 + 用户名 +「退出」；「提交」按钮下注明「以你的 GitHub 账号提交到 <repo>」。`Ctrl/Cmd+Enter` 提交，成功 toast「已提交 #123」（链到 issue）并清空；GitHub 返回 403 / 404 / 410 时显示中文原因并给出「在 GitHub 网页上提交」。未登录 / 未启用时 `Ctrl/Cmd+Enter` 打开网页版。
+- **已登录但会话没有 token**（从其他设备带过来的登录）：头像 + 用户名 +「退出」下面多一块说明「这台设备的登录是从其他设备带过来的，没有 GitHub 的授权」和「用 GitHub 登录」（网页登录或 device flow，登录后换成带 token 的新会话）；表单下方和未登录时一样是「在 GitHub 网页上提交」。服务端同样把关：这种会话调 `POST /api/github/issues` 得到 403 和同样的说明，会话保留。
 
 下方列出最近 5 条 `from-app` issue。
 
@@ -862,11 +864,18 @@ client id 不是秘密（device flow 的设计就是给拿不住密钥的客户�
 - `POST /api/github/logout` 删会话。
 - 写操作的接口都拒绝跨站 `Origin`；两个 GET（`login`、`callback`）靠 `state` 和 SameSite=Lax 的临时 cookie。
 
+**在其他设备上登录**（`src/lib/claim.ts`；账号抽屉里、用户名下面的按钮，单用户模式不显示）：
+
+1. `POST /api/github/claim`（要求已登录，拒绝跨站）→ 32 字节随机码，放服务端内存（`globalThis` 上的 Map，和 device flow 的做法一样），记下发起人的 login 和头像，2 分钟过期；一个人同时只有一个码，再生成就作废上一个；最多 20 个并发，过期的在下次生成时清掉 → 返回 `{ url: "<当前 origin>/claim?c=<码>", qr, expires_in }`。`qr` 是服务端用 `uqr`（MIT，零依赖，只在服务端用，不进浏览器的包）画的 SVG，抽屉里以 data URL 显示，不请求任何外部服务。抽屉显示二维码、可复制的链接、倒计时、「重新生成」和「关闭」（`DELETE /api/github/claim`，链接随之失效）。
+2. 另一台设备打开 `/claim?c=<码>`。**GET 不登录**：聊天软件的链接预览、扫码应用的预取都会请求这个地址，一次性码不能被它们用掉；别人发来的链接也不能让人不知不觉登上他的账号。页面只读不取（`peekClaim`），显示「以 <头像> <login> 的身份登录这台设备？」、一句后果说明（这台设备上看到和改动的都是这个人的内容）、已经登录着别人时的提示，以及「登录」「取消」。码无效或过期时说明原因，给「回首页」。页面 `noindex, nofollow`、`referrer: same-origin`，不在 sitemap 里；流量统计只记路径，不记查询串。
+3. 「登录」是一个普通表单，`POST /api/github/claim/redeem`（拒绝跨站）→ `takeClaim` 把码用掉 → 建一条**新会话**（自己的 id，login 和头像来自发起人，`access_token` 等四个 token 字段都是 null），设 cookie，303 到 `/?login=ok`；码已经没了就 303 回 `/claim`。**不复制 token**：GitHub App 的 refresh token 每用一次就换新的，两条会话共用一份会互相作废。
+4. 没有 token 的会话身份完全正常（vault、通知、警报都照常），只有应用内提交要用 GitHub 登录一次（见上面反馈页签的状态）。
+
 **提交**：`POST /api/github/issues` → 用**用户** token `POST /repos/<repo>/issues`，只有 title + body，不带标签（非协作者带的标签会被 GitHub 静默丢掉）。用户 token 只能访问用户和 App 都能访问的资源，所以 App 必须安装在反馈仓库上；没装（404）、账号被仓库限制（403）、仓库关了 issue（410）都映射成中文说明并提供网页版。网页登录默认不带 scope，OAuth App 的这种 token 开不了 issue（GitHub 回 403 或 404）：会话有 `web_client` 时这两个状态的说明是「这次登录的授权不能在 <repo> 上开 issue（网页登录只确认身份，没有开 issue 的权限）」，同样提供网页版；不为此多发探测请求。`GET /api/github/issues`：`from-app` 标签、`state=all`、去掉 PR、前 5 条；登录时用用户 token（被拒就匿名重试），否则匿名（公开仓库）；服务端按仓库缓存 60 秒，提交成功后清缓存。
 
 **网页版**（`webIssueUrl()`，纯函数，浏览器里算）：`https://github.com/<repo>/issues/new?title=…&body=…`，body 与应用内提交的完全一样（含 context 块）。URL 上限 7000 字符（GitHub 约 8 KB 起报 414）：超了先把 JSON 压成一行，再去掉 `errors`、`userAgent`，再只留 `{ v, type, autoFix }`，最后才从尾部截断描述并注明「网页版已截断」。
 
-**会话存储**：不在仓库、vault、data 里。目录 `HEBI8_SECRETS`（默认 `~/.config/hebi8/market`，权限 700），只有 `sessions.json`（原子写入，权限 600）：会话 id → login、avatar_url、access_token、access_expires_at、refresh_token、refresh_expires_at、created_at、seen_at（最后使用时间，一天最多更新一次；没有这个字段的旧会话按 created_at 算）、web_client（网页登录的 client id；device flow 的会话没有这个字段）。超过 30 天没用的会话在每次写入时清掉；token 过没过期不影响会话。
+**会话存储**：不在仓库、vault、data 里。目录 `HEBI8_SECRETS`（默认 `~/.config/hebi8/market`，权限 700），只有 `sessions.json`（原子写入，权限 600）：会话 id → login、avatar_url、access_token（从其他设备带过来的登录是 null）、access_expires_at、refresh_token、refresh_expires_at、created_at、seen_at（最后使用时间，一天最多更新一次；没有这个字段的旧会话按 created_at 算）、web_client（网页登录的 client id；device flow 的会话没有这个字段）。超过 30 天没用的会话在每次写入时清掉；token 过没过期不影响会话。
 
 **issue 格式**：标题是用户填的；正文
 
@@ -935,7 +944,7 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 
 - **公开地址**：`HEBI8_PUBLIC_URL`（`app-info.ts` 的 `publicUrl()`，须是 http(s) 地址，否则用默认 `https://market-hebi8.dreaife.tokyo`）。根 layout 的 `generateMetadata` 用它做 `metadataBase`，请求时读取，所以换地址只要改环境变量重启。
 - **根 layout**：`title` 模板 `%s · hebi8/market`（默认 `hebi8/market`）、`description`、`applicationName`、`openGraph`（website、站点名、zh_CN）、`twitter: summary_large_image`。文字常量在 `src/lib/brand.ts`（`BRAND`、`SLOGAN`、`TAGLINE`、`DESCRIPTION`、社交图用的深色 `DARK`），页头也用它们。
-- **页面标题**：图表页 `generateMetadata` 给「名称 代码 · 周线」（viewer 的名字和存的周期）、描述、canonical、openGraph / twitter 标题；复盘、设置、使用情况是「复盘」「设置」「使用情况」并且 `robots: noindex, nofollow`；隐私说明是「隐私说明」。
+- **页面标题**：图表页 `generateMetadata` 给「名称 代码 · 周线」（viewer 的名字和存的周期）、描述、canonical、openGraph / twitter 标题；复盘、设置、使用情况是「复盘」「设置」「使用情况」并且 `robots: noindex, nofollow`；`/claim`（§5.8）是「登录这台设备」，同样 noindex；隐私说明是「隐私说明」。
 - **图标**：`icon.svg`（带 `width`/`height`，canvas 和 Firefox 才能画它）、`apple-icon.tsx`（180px PNG，icon.svg 铺满深色方块，iOS 自己切圆角）、`pwa-icon/[file]`（192 / 512 和 maskable，§2.7）、`manifest.ts`（standalone，深色底）。
 - **分享卡片**（`opengraph-image.tsx`，next/og，1200×630，深色主题，`force-dynamic`）：站点卡片是大 logo +「hebi8/market」+ 标语 + 一句话介绍 + 公开域名；图表卡片（`/chart/[key]/opengraph-image`）是名称和代码、源 · 币种 · 近半年涨跌、最新收盘和日涨跌 + 日期、近 130 根日线收盘的折线和渐变填充（涨跌色看半年涨跌），底部是和导出图片同样的 logo +「hebi8/market」+ 地址。涨跌色取根 yaml 的 `updown`。
 - **卡片不泄露个人内容**：抓取方没有会话，卡片也不读 cookie：名字、配色、合成表达式的别名只从根 vault 的 yaml 读（未登录访客本来就看这个），K 线只从公共缓存读，不碰任何 `users/<login>/`、画线、笔记、警报。没缓存的 key 显示「暂无缓存的日线」，读取不会触发同步。
@@ -955,6 +964,7 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 - `GET /api/search?q=` → 外部结果 `SearchResult[]`（§5.4；本地层在浏览器里算）。
 - `GET /api/help` → 反馈页签和通知设置抽屉要的登录状态与反馈设置（§5.8，只读本地）。
 - `/api/github/login`（GET，跳到 GitHub 的授权页）、`/api/github/callback`（GET，GitHub 跳回来，建会话）、`/api/github/device`（POST 开始 device flow / DELETE 取消）、`/api/github/device/poll`（POST）、`/api/github/logout`（POST）、`/api/github/issues`（GET 最近反馈 / POST 提交）：§5.8，唯一会碰 GitHub 网络的接口（`login` 自己不联网，只是重定向），都是打开反馈页签或用户动作触发。
+- `/api/github/claim`（POST 生成「在其他设备上登录」的一次性链接和二维码 / DELETE 作废）、`/api/github/claim/redeem`（POST，确认页的表单，建会话）：§5.8，不联网。
 
 **Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench?, alias? })`、`loadSymbol(key)`（只拉缓存，§2.3）、`removeSymbol(key)`、`moveSymbol(key, group, index?)`（index 不算被移动的那个，省略 = 末尾）、`moveGroup(name, index)`、`addGroup(name)`、`renameGroup(name, next)`、`deleteGroup(name)`（标的并入相邻组）、`renameSymbol(key, name)`、`setBench(key, bench | null)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveAlert({ id?, key | null, cond, value? | when + tf?, trigger, label?, notify? })` / `deleteAlert(id)` / `setAlertEnabled(id, enabled)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`、`setUsageLimits({ visitors, limited })`（owner，§1.7）；`src/app/tv-actions.ts` 里的 `importTvList({ text, fallback, mode })`、`listTvLayouts({ sessionid, sign })`、`previewTvDrawings(来源)`、`importTvDrawings({ drawings, add })`（§5.5，`listTvLayouts` 和 `previewTvDrawings` 是仅有的带用户 TradingView cookie 访问外网的地方：`/my-charts/`；`/markets/`、`/chart-token`、charts-storage）。Server Action 在客户端是**串行派发**的，自动保存靠去抖合并，不并行发。
 

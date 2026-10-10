@@ -269,6 +269,7 @@ function FeedbackTab({
       ) : (
         <AccountBlock
           info={info}
+          authorize
           next={feedbackHref}
           onStart={() => {
             setNotice(null);
@@ -287,7 +288,7 @@ function FeedbackTab({
       )}
       <FeedbackForm
         info={info}
-        canSubmit={gh.enabled && Boolean(gh.user)}
+        canSubmit={gh.enabled && Boolean(gh.user?.token)}
         toast={toast}
         onSubmitted={() => setIssuesVersion((n) => n + 1)}
         onLoggedOut={(message) => {
@@ -308,7 +309,7 @@ function FeedbackForm({
   onLoggedOut,
 }: {
   info: HelpInfo;
-  /** Logged in with a configured App: 提交 creates the issue; otherwise only the github.com form */
+  /** Logged in with a GitHub token and a configured App: 提交 creates the issue; otherwise only the github.com form */
   canSubmit: boolean;
   toast: (message: string, opts?: ToastOptions) => void;
   onSubmitted: () => void;

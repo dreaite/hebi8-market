@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { copyText } from "@/lib/copy-text";
 import type { BotSummary, ChannelSummary } from "@/lib/notify";
 import { IconExternal } from "./chart-icons";
 import { Drawer, Row, Section, errorText, request, useHelpInfo } from "./Drawer";
@@ -37,6 +38,7 @@ export function AccountPanel({ autoLogin, onClose, toast }: { autoLogin: boolean
             toast={toast}
             intro="登录后用你自己的自选、笔记和复盘，并设置你自己的通知：你的警报触发时，推到你绑定的 Telegram、webhook 或开了推送的设备。"
           />
+          {user && info.shared && <OtherDevice toast={toast} />}
           {user && <NotifySettings key={`${user.login}:${botVersion}`} toast={toast} />}
           {user && info.canSetBot && (
             <div className="mt-5">
@@ -46,6 +48,90 @@ export function AccountPanel({ autoLogin, onClose, toast }: { autoLogin: boolean
         </>
       )}
     </Drawer>
+  );
+}
+
+/**
+ * 在其他设备上登录 (§5.8): a one-time link, also as a QR code, that logs another device in as this
+ * person once they confirm on it. Good for two minutes; the QR is drawn by this server.
+ */
+function OtherDevice({ toast }: { toast: (message: string, opts?: ToastOptions) => void }) {
+  const [link, setLink] = useState<{ url: string; qr: string; expiresAt: number } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!link) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [link]);
+
+  const create = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await request<{ url: string; qr: string; expires_in: number }>("/api/github/claim", "POST", {});
+      setNow(Date.now());
+      setLink({ url: next.url, qr: next.qr, expiresAt: Date.now() + next.expires_in * 1000 });
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!link) {
+    return (
+      <div className="mb-5">
+        <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void create()}>
+          在其他设备上登录
+        </button>
+        {error && <p className="mt-1 text-down">{error}</p>}
+      </div>
+    );
+  }
+  const left = Math.max(0, Math.round((link.expiresAt - now) / 1000));
+  return (
+    <div className="mb-5 flex flex-col gap-2 rounded border border-line px-3 py-2.5" aria-live="polite">
+      <p className="leading-relaxed">用另一台设备扫这个二维码，或者在那台设备上打开下面的链接，在打开的页面上确认，它就以你的身份登录。</p>
+      {left > 0 ? (
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element -- an SVG the server just drew, inlined as a data URL */}
+          <img src={`data:image/svg+xml,${encodeURIComponent(link.qr)}`} alt="登录链接的二维码" width={176} height={176} className="rounded" />
+          <div className="flex items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded bg-fg/5 px-2 py-1 font-mono text-[11px] select-all" aria-label="登录链接">
+              {link.url}
+            </code>
+            <button type="button" className="btn btn-secondary" onClick={() => toast(copyText(link.url) ? "已复制登录链接" : "复制失败，请手动选中链接", { duration: 2500 })}>
+              复制
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className="text-down">链接已过期</p>
+      )}
+      {error && <p className="text-down">{error}</p>}
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void create()}>
+          重新生成
+        </button>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => {
+            setLink(null);
+            // the link must stop working too, not just disappear from here
+            void request("/api/github/claim", "DELETE").catch(() => undefined);
+          }}
+        >
+          关闭
+        </button>
+      </div>
+      <p className="text-[11px] text-muted">
+        只能用一次{left > 0 && ` · 剩余 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`}
+      </p>
+    </div>
   );
 }
 

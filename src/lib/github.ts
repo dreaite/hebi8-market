@@ -441,6 +441,7 @@ const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 export async function userToken(clientId: string, sessionId: string | undefined): Promise<{ token: string; session: Session }> {
   const session = getSession(sessionId);
   if (!session || !sessionId) throw new GitHubError(401, "还没有登录 GitHub");
+  if (!session.access_token) throw new GitHubError(403, "这台设备的登录是从其他设备带过来的，没有 GitHub 的授权：用 GitHub 登录一次才能在应用里提交。也可以改在 GitHub 网页上提交", true);
   if (!session.access_expires_at || session.access_expires_at - REFRESH_MARGIN_MS > Date.now()) return { token: session.access_token, session };
   if (!session.refresh_token || (session.refresh_expires_at && session.refresh_expires_at < Date.now())) {
     throw new GitHubError(401, "GitHub 返回 401：登录已过期，请重新登录");

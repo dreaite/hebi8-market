@@ -64,6 +64,7 @@ export function originOf(host: string | null): Origin {
 export const ROUTES = new Set([
   "/",
   "/review",
+  "/claim",
   "/privacy",
   "/usage",
   "/settings",
@@ -72,6 +73,8 @@ export const ROUTES = new Set([
   "/api/help",
   "/api/status",
   "/api/github/callback",
+  "/api/github/claim",
+  "/api/github/claim/redeem",
   "/api/github/device",
   "/api/github/device/poll",
   "/api/github/issues",

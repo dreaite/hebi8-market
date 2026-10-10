@@ -16,11 +16,12 @@ export interface HelpInfo {
     webLogin: boolean;
     /** Where feedback goes (`owner/name`) */
     feedbackRepo: string;
-    user: { login: string; avatarUrl: string } | null;
+    /** `token`: the session holds a GitHub token, so feedback can be submitted in the app (a login carried over from another device has none) */
+    user: { login: string; avatarUrl: string; token: boolean } | null;
   };
 }
 
-export function helpInfo(viewer: Viewer, { webLogin }: { webLogin: boolean }): HelpInfo {
+export function helpInfo(viewer: Viewer, { webLogin, token }: { webLogin: boolean; token: boolean }): HelpInfo {
   const enabled = Boolean(githubClientId());
   const repo = feedbackRepo();
   return {
@@ -31,7 +32,7 @@ export function helpInfo(viewer: Viewer, { webLogin }: { webLogin: boolean }): H
       enabled,
       webLogin,
       feedbackRepo: repo,
-      user: enabled && viewer.login ? { login: viewer.login, avatarUrl: viewer.avatarUrl ?? "" } : null,
+      user: enabled && viewer.login ? { login: viewer.login, avatarUrl: viewer.avatarUrl ?? "", token } : null,
     },
   };
 }

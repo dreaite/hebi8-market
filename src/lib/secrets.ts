@@ -42,7 +42,8 @@ export function writeJson(name: string, value: unknown): void {
 export interface Session {
   login: string;
   avatar_url: string;
-  access_token: string;
+  /** null for a login carried over from another device (`src/lib/claim.ts`): who it is holds, in-app feedback needs a GitHub login */
+  access_token: string | null;
   /** ms; null when the App does not expire user tokens */
   access_expires_at: number | null;
   refresh_token: string | null;

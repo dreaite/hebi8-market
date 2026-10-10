@@ -5,12 +5,15 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as callbackGET } from "@/app/api/github/callback/route";
+import { POST as redeemPOST } from "@/app/api/github/claim/redeem/route";
+import { DELETE as claimDELETE, POST as claimPOST } from "@/app/api/github/claim/route";
 import { DELETE as deviceDELETE, POST as devicePOST } from "@/app/api/github/device/route";
 import { POST as pollPOST } from "@/app/api/github/device/poll/route";
 import { GET as issuesGET, POST as issuesPOST } from "@/app/api/github/issues/route";
 import { GET as loginGET } from "@/app/api/github/login/route";
 import { POST as logoutPOST } from "@/app/api/github/logout/route";
 import { GITHUB_APP_CLIENT_ID, feedbackRepo, githubClientId } from "@/lib/app-info";
+import { createClaim, dropClaims, peekClaim, resetClaims, takeClaim } from "@/lib/claim";
 import { MAX_WEB_URL, TRUNCATED_NOTE, buildIssueBody, feedbackContext, parseFeedbackInput, parseIssueContext, webIssueUrl, type FeedbackContext, type PageInfo } from "@/lib/feedback";
 import { GitHubError, LOGIN_COOKIE, SESSION_COOKIE, pollDeviceFlow, requestOrigin, resetGitHubCaches, safeNext, startDeviceFlow, userToken, webLoginClient } from "@/lib/github";
 import { createSession, getSession, liveSessions, touchSession, writeJson } from "@/lib/secrets";
@@ -137,6 +140,7 @@ beforeEach(() => {
   process.env.HEBI8_SECRETS = path.join(dir, "secrets");
   process.env.HEBI8_GITHUB_CLIENT_ID = CLIENT_ID;
   resetGitHubCaches();
+  resetClaims();
   routes = {};
   calls = [];
   vi.stubGlobal("fetch", async (input: string | URL, init: RequestInit = {}) => {
@@ -562,6 +566,110 @@ describe("sessions", () => {
     expect(proxy(page())).toBeUndefined();
     expect(read.mock.calls.filter(([file]) => String(file).endsWith("sessions.json"))).toHaveLength(0);
     read.mockRestore();
+  });
+});
+
+describe("login on another device", () => {
+  const alice = { login: "alice", avatarUrl: "https://avatars.githubusercontent.com/u/1" };
+  const loggedIn = () => createSession({ login: "alice", avatar_url: alice.avatarUrl, access_token: "ghu_alice", access_expires_at: Date.now() + 3600_000, refresh_token: "ghr_alice", refresh_expires_at: null });
+  const redeem = (code: string, init: { cookies?: Record<string, string>; origin?: string } = {}) => {
+    const headers = new Headers({ host: "100.92.194.31:8809", origin: init.origin ?? ORIGIN, "content-type": "application/x-www-form-urlencoded" });
+    if (init.cookies) headers.set("cookie", Object.entries(init.cookies).map(([k, v]) => `${k}=${v}`).join("; "));
+    return redeemPOST(new NextRequest(`${ORIGIN}/api/github/claim/redeem`, { method: "POST", headers, body: new URLSearchParams({ c: code }).toString() }));
+  };
+
+  it("a code shows whose it is without being used, works once, and lasts two minutes", () => {
+    const code = createClaim(alice, T0)!;
+    expect(code).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(peekClaim(code, T0 + 1000)).toMatchObject(alice);
+    expect(peekClaim(code, T0 + 119_000)).toMatchObject(alice);
+    expect(takeClaim(code, T0 + 119_000)).toMatchObject(alice);
+    expect(peekClaim(code, T0 + 119_000)).toBeNull();
+    expect(takeClaim(code, T0 + 119_000)).toBeNull();
+
+    const late = createClaim(alice, T0)!;
+    expect(peekClaim(late, T0 + 120_000)).toBeNull();
+    expect(takeClaim(late, T0 + 120_000)).toBeNull();
+    expect(peekClaim(undefined)).toBeNull();
+    expect(peekClaim("nope")).toBeNull();
+  });
+
+  it("a person has one code at a time, and only so many wait at once", () => {
+    const first = createClaim(alice, T0)!;
+    const second = createClaim(alice, T0 + 1000)!;
+    expect(peekClaim(first, T0 + 1000)).toBeNull();
+    expect(peekClaim(second, T0 + 1000)).not.toBeNull();
+    dropClaims("alice");
+    expect(peekClaim(second, T0 + 1000)).toBeNull();
+
+    for (let i = 0; i < 20; i++) expect(createClaim({ login: `u${i}`, avatarUrl: "" }, T0)).not.toBeNull();
+    expect(createClaim(alice, T0)).toBeNull();
+    // expired ones make room
+    expect(createClaim(alice, T0 + 120_000)).not.toBeNull();
+  });
+
+  it("claim route: only for someone logged in, from this site; the link goes to this origin's /claim with a QR drawn here", async () => {
+    expect((await claimPOST(req("/api/github/claim", { method: "POST" }))).status).toBe(401);
+    const id = loggedIn();
+    expect((await claimPOST(req("/api/github/claim", { method: "POST", cookies: { [SESSION_COOKIE]: id }, headers: { origin: "http://evil.example" } }))).status).toBe(403);
+
+    const res = await claimPOST(req("/api/github/claim", { method: "POST", cookies: { [SESSION_COOKIE]: id }, headers: { origin: ORIGIN } }));
+    const body = await res.json();
+    expect(body).toEqual({ url: expect.stringMatching(new RegExp(`^${ORIGIN}/claim\\?c=[A-Za-z0-9_-]{43}$`)), qr: expect.stringMatching(/^<svg [^]*<\/svg>$/), expires_in: 120 });
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const code = new URL(body.url).searchParams.get("c")!;
+    expect(peekClaim(code)).toMatchObject(alice);
+    expect(calls).toHaveLength(0);
+
+    // 关闭: the link stops working
+    await claimDELETE(req("/api/github/claim", { method: "DELETE", cookies: { [SESSION_COOKIE]: id }, headers: { origin: ORIGIN } }));
+    expect(peekClaim(code)).toBeNull();
+  });
+
+  it("redeem: a session of its own without the tokens, once; a cross-site post does not use the code up", async () => {
+    const id = loggedIn();
+    const code = createClaim(alice)!;
+
+    const cross = await redeem(code, { origin: "http://evil.example" });
+    expect(cross.status).toBe(403);
+    expect(peekClaim(code)).not.toBeNull();
+
+    const res = await redeem(code);
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/?login=ok");
+    const cookie = res.cookies.get(SESSION_COOKIE)!;
+    expect(cookie).toMatchObject({ httpOnly: true, sameSite: "lax", maxAge: 30 * 86400 });
+    expect(cookie.value).not.toBe(id);
+    expect(getSession(cookie.value)).toMatchObject({ login: "alice", avatar_url: alice.avatarUrl, access_token: null, refresh_token: null });
+    // the device it came from keeps its own session and tokens
+    expect(getSession(id)).toMatchObject({ access_token: "ghu_alice", refresh_token: "ghr_alice" });
+
+    const again = await redeem(code);
+    expect(again.headers.get("location")).toBe("/claim");
+    expect(again.cookies.get(SESSION_COOKIE)).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("redeem: replaces the session this browser had", async () => {
+    const mine = createSession({ login: "bob", avatar_url: "", access_token: "t", access_expires_at: null, refresh_token: null, refresh_expires_at: null });
+    const res = await redeem(createClaim(alice)!, { cookies: { [SESSION_COOKIE]: mine } });
+    expect(getSession(mine)).toBeNull();
+    expect(getSession(res.cookies.get(SESSION_COOKIE)!.value)).toMatchObject({ login: "alice" });
+  });
+
+  it("a carried-over login is who it says, but in-app feedback asks for a GitHub login and keeps the session", async () => {
+    const res = await redeem(createClaim(alice)!);
+    const id = res.cookies.get(SESSION_COOKIE)!.value;
+    const submit = await issuesPOST(req("/api/github/issues", { method: "POST", cookies: { [SESSION_COOKIE]: id }, body: { type: "bug", title: "x" }, headers: { origin: ORIGIN } }));
+    expect(submit.status).toBe(403);
+    expect(await submit.json()).toEqual({ error: expect.stringMatching(/^这台设备的登录是从其他设备带过来的.*用 GitHub 登录一次/), webFallback: true });
+    expect(getSession(id)).not.toBeNull();
+    expect(calls).toHaveLength(0);
+
+    // the list of recent reports is read anonymously
+    routes["GET https://api.github.com/repos/Hebi8/hebi8-market/issues"] = () => json([]);
+    await issuesGET(req("/api/github/issues", { cookies: { [SESSION_COOKIE]: id } }));
+    expect(calls.map((c) => c.auth)).toEqual([undefined]);
   });
 });
 

@@ -43,6 +43,7 @@ export function AccountBlock({
   info,
   intro,
   aside,
+  authorize,
   next,
   autoLogin,
   onStart,
@@ -52,6 +53,8 @@ export function AccountBlock({
   info: HelpInfo;
   intro: ReactNode;
   aside?: string;
+  /** Feedback needs a GitHub token: a login carried over from another device is asked to log in with GitHub once */
+  authorize?: boolean;
   /** Where the web login comes back to, when not just this page */
   next?: () => string;
   /** Opened by 登录: start the device flow right away */
@@ -118,17 +121,30 @@ export function AccountBlock({
     await reload();
   };
 
-  if (user) {
+  if (user && !login) {
     return (
-      <div className="mb-3 flex items-center gap-2">
-        {/* eslint-disable-next-line @next/next/no-img-element -- GitHub avatar, no optimisation wanted */}
-        <img src={`${user.avatarUrl}${user.avatarUrl.includes("?") ? "&" : "?"}s=48`} alt="" width={20} height={20} className="rounded-full" />
-        <span className="font-medium">{user.login}</span>
-        <span className="flex-1" />
-        <button type="button" className="btn" onClick={() => void logout()}>
-          退出
-        </button>
-      </div>
+      <>
+        <div className="mb-3 flex items-center gap-2">
+          {/* eslint-disable-next-line @next/next/no-img-element -- GitHub avatar, no optimisation wanted */}
+          <img src={`${user.avatarUrl}${user.avatarUrl.includes("?") ? "&" : "?"}s=48`} alt="" width={20} height={20} className="rounded-full" />
+          <span className="font-medium">{user.login}</span>
+          <span className="flex-1" />
+          <button type="button" className="btn" onClick={() => void logout()}>
+            退出
+          </button>
+        </div>
+        {authorize && !user.token && (
+          <div className="mb-3 flex flex-col gap-2 rounded border border-line px-3 py-2">
+            <p className="leading-relaxed">这台设备的登录是从其他设备带过来的，没有 GitHub 的授权。要在应用里提交，用 GitHub 登录一次；也可以直接在 GitHub 网页上提交（表单下方）。</p>
+            {loginError && <p className="text-down">{loginError}</p>}
+            <div>
+              <button type="button" className="btn btn-primary" disabled={starting} onClick={() => void startLogin()}>
+                {starting ? "正在联系 GitHub…" : "用 GitHub 登录"}
+              </button>
+            </div>
+          </div>
+        )}
+      </>
     );
   }
   if (login) {
