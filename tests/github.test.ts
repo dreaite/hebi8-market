@@ -1,15 +1,18 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GET as callbackGET } from "@/app/api/github/callback/route";
 import { DELETE as deviceDELETE, POST as devicePOST } from "@/app/api/github/device/route";
 import { POST as pollPOST } from "@/app/api/github/device/poll/route";
 import { GET as issuesGET, POST as issuesPOST } from "@/app/api/github/issues/route";
+import { GET as loginGET } from "@/app/api/github/login/route";
 import { POST as logoutPOST } from "@/app/api/github/logout/route";
 import { GITHUB_APP_CLIENT_ID, feedbackRepo, githubClientId } from "@/lib/app-info";
 import { MAX_WEB_URL, TRUNCATED_NOTE, buildIssueBody, feedbackContext, parseFeedbackInput, parseIssueContext, webIssueUrl, type FeedbackContext, type PageInfo } from "@/lib/feedback";
-import { GitHubError, SESSION_COOKIE, pollDeviceFlow, requestOrigin, resetGitHubCaches, startDeviceFlow, userToken } from "@/lib/github";
+import { GitHubError, LOGIN_COOKIE, SESSION_COOKIE, pollDeviceFlow, requestOrigin, resetGitHubCaches, safeNext, startDeviceFlow, userToken, webLoginClient } from "@/lib/github";
 import { createSession, getSession } from "@/lib/secrets";
 
 const ORIGIN = "http://100.92.194.31:8809";
@@ -152,6 +155,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.HEBI8_SECRETS;
   delete process.env.HEBI8_GITHUB_CLIENT_ID;
+  delete process.env.HEBI8_PUBLIC_URL;
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -282,6 +286,155 @@ describe("device flow", () => {
   });
 });
 
+// ---------------------------------------------------------------------------- web login
+
+const WEB_ORIGIN = "https://m.example";
+const WEB_ID = "Ov23_web";
+const WEB_SECRET = "s3cret_never_shown";
+const AUTHORIZE = "https://github.com/login/oauth/authorize";
+
+/** `github-oauth.json` as the instance's owner writes it. */
+function oauthFile(extra: Record<string, unknown> = {}) {
+  fs.mkdirSync(process.env.HEBI8_SECRETS!, { recursive: true });
+  fs.writeFileSync(path.join(process.env.HEBI8_SECRETS!, "github-oauth.json"), JSON.stringify({ client_id: WEB_ID, client_secret: WEB_SECRET, ...extra }));
+}
+
+/** A request through the tunnel to the public host. */
+const webReq = (url: string, cookies?: Record<string, string>) => req(url, { cookies, headers: { host: "m.example", "x-forwarded-proto": "https" } });
+
+describe("web login", () => {
+  beforeEach(() => {
+    process.env.HEBI8_PUBLIC_URL = WEB_ORIGIN;
+  });
+
+  it("returns only to a path on this site", () => {
+    expect(safeNext("/chart/yahoo%3ASPY?tf=W&help=feedback")).toBe("/chart/yahoo%3ASPY?tf=W&help=feedback");
+    for (const bad of [null, "", "review", "https://evil.example/", "//evil.example", "/\\evil.example", "/a\\b", "/\t/evil.example", "/..//evil.example", "/%2e%2e//evil.example", `/${"x".repeat(1000)}`]) {
+      expect(safeNext(bad)).toBe("/");
+    }
+  });
+
+  it("is offered only with an id and a secret, and only on the origins whose callback is registered", () => {
+    const pub = new Headers({ host: "m.example", "x-forwarded-proto": "https" });
+    const tailnet = new Headers({ host: "100.92.194.31:8809" });
+    expect(webLoginClient(pub)).toBeNull();
+    oauthFile({ client_secret: "" });
+    expect(webLoginClient(pub)).toBeNull();
+
+    // no `origins`: the public address
+    oauthFile();
+    expect(webLoginClient(pub)).toEqual({ clientId: WEB_ID, clientSecret: WEB_SECRET, scope: "", origins: [WEB_ORIGIN] });
+    expect(webLoginClient(tailnet)).toBeNull();
+    expect(webLoginClient(new Headers({ host: "m.example" }))).toBeNull();
+
+    // the file is read on every use
+    oauthFile({ scope: "public_repo", origins: [`${ORIGIN}/`] });
+    expect(webLoginClient(tailnet)).toMatchObject({ scope: "public_repo", origins: [ORIGIN] });
+    expect(webLoginClient(pub)).toBeNull();
+
+    process.env.HEBI8_GITHUB_CLIENT_ID = "off";
+    expect(webLoginClient(tailnet)).toBeNull();
+  });
+
+  it("login route: off to github.com with state and a PKCE challenge, both kept in a 10-minute HttpOnly cookie with the page to return to", async () => {
+    oauthFile();
+    const res = await loginGET(webReq("/api/github/login?next=%2Fchart%2Fyahoo%253ASPY%3Ftf%3DW"));
+    expect(res.status).toBe(302);
+    const cookie = res.cookies.get(LOGIN_COOKIE)!;
+    expect(cookie).toMatchObject({ httpOnly: true, sameSite: "lax", secure: true, maxAge: 600, path: "/" });
+    const pending = JSON.parse(cookie.value);
+    expect(pending).toEqual({ state: expect.stringMatching(/^[A-Za-z0-9_-]{40,}$/), verifier: expect.stringMatching(/^[A-Za-z0-9_-]{43,}$/), next: "/chart/yahoo%3ASPY?tf=W" });
+
+    const to = new URL(res.headers.get("location")!);
+    expect(`${to.origin}${to.pathname}`).toBe(AUTHORIZE);
+    expect(Object.fromEntries(to.searchParams)).toEqual({
+      client_id: WEB_ID,
+      redirect_uri: `${WEB_ORIGIN}/api/github/callback`,
+      state: pending.state,
+      scope: "",
+      code_challenge: crypto.createHash("sha256").update(pending.verifier).digest("base64url"),
+      code_challenge_method: "S256",
+    });
+    expect(res.headers.get("location")).not.toContain(WEB_SECRET);
+    expect(calls).toHaveLength(0);
+
+    // somewhere else is not a place to return to
+    const evil = await loginGET(webReq("/api/github/login?next=%2F%2Fevil.example"));
+    expect(JSON.parse(evil.cookies.get(LOGIN_COOKIE)!.value).next).toBe("/");
+  });
+
+  it("login route: an origin without the web login never leaves for github.com", async () => {
+    oauthFile();
+    const res = await loginGET(req("/api/github/login?next=%2Freview"));
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/review?login=unavailable");
+    expect(res.cookies.get(LOGIN_COOKIE)).toBeUndefined();
+  });
+
+  /** Start a login and hand back what the browser now holds. */
+  async function started(next = "/chart/yahoo%3ASPY?tf=W") {
+    const res = await loginGET(webReq(`/api/github/login?next=${encodeURIComponent(next)}`));
+    const value = res.cookies.get(LOGIN_COOKIE)!.value;
+    return { cookies: { [LOGIN_COOKIE]: encodeURIComponent(value) }, ...(JSON.parse(value) as { state: string; verifier: string }) };
+  }
+
+  it("callback: trades the code with the secret and the verifier, opens a session that remembers its client, and returns to the page", async () => {
+    oauthFile();
+    const { cookies, state, verifier } = await started();
+    tokenReplies({ access_token: "gho_web", token_type: "bearer", scope: "" });
+    routes["GET https://api.github.com/user"] = () => json({ login: "someone", avatar_url: "https://avatars.githubusercontent.com/u/1" });
+
+    const res = await callbackGET(webReq(`/api/github/callback?code=c0de&state=${state}`, cookies));
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/chart/yahoo%3ASPY?tf=W&login=ok");
+    expect(calls[0]).toEqual({
+      method: "POST",
+      url: TOKEN,
+      auth: undefined,
+      body: { client_id: WEB_ID, client_secret: WEB_SECRET, code: "c0de", redirect_uri: `${WEB_ORIGIN}/api/github/callback`, code_verifier: verifier },
+    });
+    expect(calls[1]).toMatchObject({ url: "https://api.github.com/user", auth: "Bearer gho_web" });
+
+    const cookie = res.cookies.get(SESSION_COOKIE)!;
+    expect(cookie).toMatchObject({ httpOnly: true, sameSite: "lax", secure: true, maxAge: 30 * 86400 });
+    // an OAuth App's token has no expiry and no refresh token
+    expect(getSession(cookie.value)).toMatchObject({ login: "someone", access_token: "gho_web", access_expires_at: null, refresh_token: null, web_client: WEB_ID });
+    expect(res.cookies.get(LOGIN_COOKIE)).toMatchObject({ value: "", expires: new Date(0) });
+  });
+
+  it("callback: a state that is not this browser's goes no further", async () => {
+    oauthFile();
+    const { cookies } = await started();
+    const res = await callbackGET(webReq("/api/github/callback?code=c0de&state=someone-elses", cookies));
+    expect(res.headers.get("location")).toBe("/chart/yahoo%3ASPY?tf=W&login=state");
+    expect(res.cookies.get(SESSION_COOKIE)).toBeUndefined();
+    expect(res.cookies.get(LOGIN_COOKIE)).toMatchObject({ value: "", expires: new Date(0) });
+
+    // no cookie at all (the ten minutes ran out, or the link was opened in another browser)
+    const none = await callbackGET(webReq("/api/github/callback?code=c0de&state=x"));
+    expect(none.headers.get("location")).toBe("/?login=state");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("callback: 拒绝 on github.com and a failed exchange come back with the reason and no session", async () => {
+    oauthFile();
+    let { cookies, state } = await started("/review");
+    const denied = await callbackGET(webReq(`/api/github/callback?error=access_denied&error_description=x&state=${state}`, cookies));
+    expect(denied.headers.get("location")).toBe("/review?login=denied");
+    expect(calls).toHaveLength(0);
+
+    ({ cookies, state } = await started("/review"));
+    tokenReplies({ error: "bad_verification_code", error_description: "The code passed is incorrect or expired." });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const failed = await callbackGET(webReq(`/api/github/callback?code=old&state=${state}`, cookies));
+    expect(failed.headers.get("location")).toBe("/review?login=failed");
+    expect(failed.cookies.get(SESSION_COOKIE)).toBeUndefined();
+    expect(warn.mock.calls.flat().join(" ")).toContain("授权码无效或已过期");
+    expect(warn.mock.calls.flat().join(" ")).not.toContain(WEB_SECRET);
+    warn.mockRestore();
+  });
+});
+
 describe("user token refresh", () => {
   it("refreshes a nearly expired token with the client id alone and stores the new pair", async () => {
     const id = createSession({ login: "u", avatar_url: "", access_token: "old", access_expires_at: Date.now() + 60_000, refresh_token: "ghr_1", refresh_expires_at: Date.now() + 86400_000 });
@@ -290,6 +443,20 @@ describe("user token refresh", () => {
     expect(token).toBe("new");
     expect(calls[0].body).toEqual({ client_id: CLIENT_ID, grant_type: "refresh_token", refresh_token: "ghr_1" });
     expect(getSession(id)).toMatchObject({ access_token: "new", refresh_token: "ghr_2" });
+  });
+
+  it("a web login's tokens refresh with its client and the secret; a replaced client cannot renew them", async () => {
+    oauthFile();
+    const id = createSession({ login: "u", avatar_url: "", access_token: "old", access_expires_at: Date.now() + 60_000, refresh_token: "ghr_1", refresh_expires_at: Date.now() + 86400_000, web_client: WEB_ID });
+    tokenReplies({ access_token: "new", expires_in: 28800, refresh_token: "ghr_2", refresh_token_expires_in: 15897600 });
+    expect((await userToken(CLIENT_ID, id)).token).toBe("new");
+    expect(calls[0].body).toEqual({ client_id: WEB_ID, client_secret: WEB_SECRET, grant_type: "refresh_token", refresh_token: "ghr_1" });
+    expect(getSession(id)).toMatchObject({ access_token: "new", refresh_token: "ghr_2", web_client: WEB_ID });
+
+    const other = createSession({ login: "u", avatar_url: "", access_token: "old", access_expires_at: Date.now() - 1000, refresh_token: "ghr_1", refresh_expires_at: null, web_client: "Ov23_gone" });
+    const err = await userToken(CLIENT_ID, other).catch((e) => e);
+    expect(err.status).toBe(401);
+    expect(calls).toHaveLength(1);
   });
 
   it("keeps a token that is not close to expiry", async () => {
@@ -352,6 +519,20 @@ describe("issues", () => {
     expect(body.error).toMatch(/GitHub App 没有安装到这个仓库/);
     expect(body.webFallback).toBe(true);
     // the login itself is fine
+    expect(getSession(id)).not.toBeNull();
+  });
+
+  it("a web login's token opens no issue: the reason says so, and the github.com form is offered", async () => {
+    const id = createSession({ login: "someone", avatar_url: "", access_token: "gho_web", access_expires_at: null, refresh_token: null, refresh_expires_at: null, web_client: "Ov23_web" });
+    for (const [status, message] of [[404, "Not Found"], [403, "Resource not accessible by integration"]] as const) {
+      routes[`POST ${ISSUES}`] = () => json({ message }, status);
+      const res = await submit({ [SESSION_COOKIE]: id }, { type: "bug", title: "x" });
+      const body = await res.json();
+      expect(res.status).toBe(status);
+      expect(body.error).toMatch(new RegExp(`^GitHub 返回 ${status}：这次登录的授权不能在 Hebi8/hebi8-market 上开 issue（网页登录只确认身份`));
+      expect(body.error).not.toContain("GitHub App");
+      expect(body.webFallback).toBe(true);
+    }
     expect(getSession(id)).not.toBeNull();
   });
 

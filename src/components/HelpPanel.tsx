@@ -80,6 +80,37 @@ function collectPageInfo(): PageInfo {
 /** The unsent form survives closing the panel (for this tab's lifetime). */
 const draft = { type: "bug" as FeedbackType, title: "", description: "", attach: true, autoFix: false };
 
+/** The web login leaves the page: the draft waits in sessionStorage and is taken back when the page loads again. */
+const DRAFT_KEY = "hebi8m:feedback-draft";
+
+function stashDraft(): void {
+  try {
+    window.sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  } catch {
+    // storage disabled: the form comes back empty
+  }
+}
+
+if (typeof window !== "undefined") {
+  try {
+    const saved = JSON.parse(window.sessionStorage.getItem(DRAFT_KEY) ?? "null") as Record<string, unknown> | null;
+    window.sessionStorage.removeItem(DRAFT_KEY);
+    if (saved) {
+      for (const key of ["title", "description", "attach", "autoFix"] as const) if (typeof saved[key] === typeof draft[key]) Object.assign(draft, { [key]: saved[key] });
+      if (FEEDBACK_TYPES.some((t) => t.id === saved.type)) draft.type = saved.type as FeedbackType;
+    }
+  } catch {
+    // nothing stashed that can be read
+  }
+}
+
+/** Back from the web login the drawer opens on 反馈 again. */
+function feedbackHref(): string {
+  const url = new URL(window.location.href);
+  url.searchParams.set("help", "feedback");
+  return `${url.pathname}${url.search}`;
+}
+
 export function HelpPanel({
   tab: initialTab,
   notice: initialNotice,
@@ -238,7 +269,11 @@ function FeedbackTab({
       ) : (
         <AccountBlock
           info={info}
-          onStart={() => setNotice(null)}
+          next={feedbackHref}
+          onStart={() => {
+            setNotice(null);
+            stashDraft();
+          }}
           reload={reload}
           toast={toast}
           intro={

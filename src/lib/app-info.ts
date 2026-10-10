@@ -17,8 +17,9 @@ export const FEEDBACK_REPO = REPO_FULL_NAME;
 
 /**
  * Client id of the public GitHub App "hebi8-market" (owned by the Hebi8 org, installed on
- * hebi8-market only). Login uses the device flow, which needs nothing but this id, so no secret
- * is shipped or stored. Empty = in-app login disabled (the 反馈 tab still offers the github.com
+ * hebi8-market only). The device-flow login needs nothing but this id, so no secret is shipped
+ * (an instance may add a web login with its own client, `github-oauth.json`, see
+ * `src/lib/github.ts`). Empty = in-app login disabled (the 反馈 tab still offers the github.com
  * form). A fork with its own App sets `HEBI8_GITHUB_CLIENT_ID`; `HEBI8_GITHUB_CLIENT_ID=off` turns
  * in-app login off.
  */

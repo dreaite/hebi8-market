@@ -41,8 +41,8 @@ export async function POST(request: NextRequest) {
   const sessionId = request.cookies.get(SESSION_COOKIE)?.value;
   const repo = feedbackRepo();
   try {
-    const { token } = await userToken(clientId, sessionId);
-    const issue = await createIssue(token, repo, { title: input.title, body: buildIssueBody(input.description, input.context) });
+    const { token, session } = await userToken(clientId, sessionId);
+    const issue = await createIssue(token, repo, { title: input.title, body: buildIssueBody(input.description, input.context) }, Boolean(session.web_client));
     forgetRecentIssues(repo);
     return NextResponse.json({ number: issue.number, html_url: issue.html_url });
   } catch (err) {

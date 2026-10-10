@@ -10,15 +10,17 @@ export interface HelpInfo {
   /** The feedback repo's in-app reports on github.com */
   issuesUrl: string;
   github: {
-    /** A GitHub App client id is configured, so 用 GitHub 登录 (device flow) is offered */
+    /** A GitHub App client id is configured, so 用 GitHub 登录 is offered */
     enabled: boolean;
+    /** This origin has the web login (a redirect to github.com); without it 用 GitHub 登录 is the device flow */
+    webLogin: boolean;
     /** Where feedback goes (`owner/name`) */
     feedbackRepo: string;
     user: { login: string; avatarUrl: string } | null;
   };
 }
 
-export function helpInfo(viewer: Viewer): HelpInfo {
+export function helpInfo(viewer: Viewer, { webLogin }: { webLogin: boolean }): HelpInfo {
   const enabled = Boolean(githubClientId());
   const repo = feedbackRepo();
   return {
@@ -27,6 +29,7 @@ export function helpInfo(viewer: Viewer): HelpInfo {
     issuesUrl: fromAppIssuesUrl(repo),
     github: {
       enabled,
+      webLogin,
       feedbackRepo: repo,
       user: enabled && viewer.login ? { login: viewer.login, avatarUrl: viewer.avatarUrl ?? "" } : null,
     },

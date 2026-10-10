@@ -29,7 +29,7 @@
 
 ### 应用内反馈
 
-`?` → 反馈：填好标题和描述，点「用 GitHub 登录」，抽屉里会显示一串代码，到 github.com/login/device 输入并授权，回来就能提交——issue 以**你自己的** GitHub 账号开在 `Hebi8/hebi8-market` 上。登录用的是公开 GitHub App「hebi8-market」的 device flow，只需要写在 `src/lib/app-info.ts` 里的 client id，任何人自己部署的 hebi8 都能用，不用配置任何密钥；登录会话存在服务器的 `~/.config/hebi8/market/sessions.json`（`HEBI8_SECRETS` 可改，权限 600）。不想登录、或者 App 还没配置（「反馈未启用」）时，「在 GitHub 网页上提交」会在 github.com 打开预填好同样内容的新 issue。
+`?` → 反馈：填好标题和描述，点「用 GitHub 登录」，抽屉里会显示一串代码，到 github.com/login/device 输入并授权，回来就能提交——issue 以**你自己的** GitHub 账号开在 `Hebi8/hebi8-market` 上。登录用的是公开 GitHub App「hebi8-market」的 device flow，只需要写在 `src/lib/app-info.ts` 里的 client id，任何人自己部署的 hebi8 都能用，不用配置任何密钥；登录会话存在服务器的 `~/.config/hebi8/market/sessions.json`（`HEBI8_SECRETS` 可改，权限 600）。实例配了[网页登录](#网页登录可选)的入口上，「用 GitHub 登录」是跳到 GitHub 再回来，不用输代码；这种登录默认只确认身份，提交时会请你改用「在 GitHub 网页上提交」。不想登录、或者 App 还没配置（「反馈未启用」）时，「在 GitHub 网页上提交」会在 github.com 打开预填好同样内容的新 issue。
 
 标签不由应用加（非协作者开 issue 时 GitHub 会丢掉标签），而是仓库里的 Actions 工作流 `.github/workflows/app-feedback.yml` 读 issue 正文里的 `hebi8-context` 块：加 `from-app` 和类型标签；勾了「可以自动修复」的，作者是仓库 owner / 组织成员 / 协作者才加 `auto-fix-ok`，其他人加 `auto-fix-requested`。
 
@@ -116,7 +116,7 @@ npm run dev        # http://localhost:3000
 | `HEBI8_VAULT` | `./vault` | 用户内容目录 |
 | `HEBI8_DB` | `./data/hebi8.db` | SQLite 缓存，删了会自动重建 |
 | `BINANCE_API_URL` | `https://api.binance.com` | 换成 `https://data-api.binance.vision` 等镜像 |
-| `HEBI8_SECRETS` | `~/.config/hebi8/market` | GitHub 登录会话 `sessions.json`、实例的通知设置 `notify.json`、每个人的通知通道 `notify-users.json`、网页推送的密钥 `vapid.json`（自动生成），权限 700 / 600 |
+| `HEBI8_SECRETS` | `~/.config/hebi8/market` | GitHub 登录会话 `sessions.json`、网页登录的 client `github-oauth.json`（手写，可选）、实例的通知设置 `notify.json`、每个人的通知通道 `notify-users.json`、网页推送的密钥 `vapid.json`（自动生成），权限 700 / 600 |
 | `HEBI8_GITHUB_CLIENT_ID` | `app-info.ts` 的 `GITHUB_APP_CLIENT_ID` | 反馈登录用的 GitHub App client id（fork 用自己的 App 时设）；设为 `off` 关闭应用内登录，反馈只走 GitHub 网页 |
 | `HEBI8_FEEDBACK_REPO` | `Hebi8/hebi8-market` | 反馈 issue 开在哪个仓库（`owner/name`） |
 | `HEBI8_PUBLIC_URL` | `https://market-hebi8.dreaife.tokyo` | 实例的公开地址：页面元数据、分享卡片、`robots.txt`、`sitemap.xml`、复制和分享出去的图表链接、导出图片底部的地址都用它 |
@@ -167,11 +167,26 @@ vault/
 | 其他人登录 | `vault/users/<login>/` | 自己的 vault |
 | 未登录 | owner 的总览和图表（含画线） | 不能改；笔记和复盘要登录后看自己的 |
 
-- 页头右侧的「登录」打开登录抽屉，走 GitHub device flow（和反馈共用会话，30 天）；登录后显示头像和用户名，菜单里有「通知设置」、owner 才有的「使用情况」和「退出」。「通知设置」打开的是同一个抽屉，登录后它就是设置通知的地方。退出只删会话，不动 vault。
+- 页头右侧的「登录」打开登录抽屉，走 GitHub device flow（和反馈共用会话，30 天）；配了[网页登录](#网页登录可选)的入口上是跳到 GitHub、授权后回到原来的页面；登录后显示头像和用户名，菜单里有「通知设置」、owner 才有的「使用情况」和「退出」。「通知设置」打开的是同一个抽屉，登录后它就是设置通知的地方。退出只删会话，不动 vault。
 - 第一次登录的人从根 vault 的 `hebi8.yaml` 复制一份起点，去掉 `owner`、`sync`、`datasets`、`alerts`（以及旧的 `conditions`），警报不会替谁预置；笔记、复盘、画线从空开始。之后两边互不影响。
 - `owner`、`sync`、`datasets` 是实例设置，只认根 vault 的；写在自己 yaml 里会被忽略，总览上会提示。
 - 同步拉的是所有人引用到的标的的并集；同步后每个人的统计和通知各算各的。
 - GitHub 登录只用来区分局域网里的人，不防恶意访问者，不要把实例开到公网。
+
+### 网页登录（可选）
+
+device flow 每次都要复制代码、去 GitHub 粘贴、等轮询。给实例配一个 client secret，就可以改成跳到 GitHub 再回来：浏览器里已经登录 GitHub 的人点一下「登录」就完成。
+
+1. 在 GitHub 上建一个 OAuth App（Settings → Developer settings → OAuth Apps），**Authorization callback URL** 填 `<公开地址>/api/github/callback`，生成一个 client secret。
+2. 在 `HEBI8_SECRETS` 目录（默认 `~/.config/hebi8/market`）里写 `github-oauth.json`，`chmod 600`：
+
+   ```json
+   { "client_id": "Ov23li…", "client_secret": "…" }
+   ```
+
+   还可以写 `scope`（默认空，只确认身份）和 `origins`（提供网页登录的入口，默认只有 `HEBI8_PUBLIC_URL`）。文件每次用到时读，改了不用重启。
+
+GitHub 只跳回登记过的回调地址，所以网页登录只在 `origins` 里的入口提供；从别的入口（比如 Tailscale 的 http 地址）打开时，「登录」还是 device flow。没有这个文件时一切照旧。细节见 [`docs/design.md`](docs/design.md) §5.8。
 
 ## 通知
 
@@ -297,14 +312,14 @@ src/
 │       ├── search/           外部搜索（Yahoo / TradingView / Binance），本地匹配在浏览器里
 │       ├── help/             帮助与登录抽屉的数据：登录状态、反馈设置（只读本地）
 │       ├── notify/           当前登录者的通知通道：摘要、Telegram 绑定、webhook、推送订阅、测试消息
-│       └── github/           device flow 登录、退出、提交 / 列出反馈 issue
+│       └── github/           网页登录（login、callback）、device flow 登录、退出、提交 / 列出反馈 issue
 ├── instrumentation.ts        启动应用内调度器
 ├── components/               TvImport（设置页的导入导出）/ UiProvider（搜索浮层、帮助与登录抽屉、toast、快捷键）/ HelpPanel（使用、反馈）/ AccountPanel（登录、通知设置）/ Guide / SymbolSearch / Overview / RowMenu / ChartView / KChart / ChartLegend / IndicatorDialog / CompareDialog / WatchlistPanel / FormulaEditor / NotesPanel …
 ├── indicators/               指标目录、代码指标、公式引擎（formula.ts）、纯计算函数
 └── lib/
     ├── search.ts wellknown.ts 搜索的纯函数（匹配、过滤、去重、排序、分组推断）与内置字典
     ├── use-autosave.ts       笔记 / 复盘的自动保存
-    ├── github.ts secrets.ts  GitHub 调用（device flow 登录、刷新、issue）与 ~/.config/hebi8/market 里的登录会话
+    ├── github.ts secrets.ts  GitHub 调用（网页登录、device flow 登录、刷新、issue）与 ~/.config/hebi8/market 里的登录会话
     ├── feedback.ts           反馈 issue 的正文、hebi8-context 格式与 GitHub 网页预填链接
     ├── sources/              yahoo / binance / tradingview / dataset（自定义数据集）适配器
     ├── vault.ts config.ts    vault 的读写层（按目录，根 vault 或 users/<login>/）、hebi8.yaml 的类型与校验

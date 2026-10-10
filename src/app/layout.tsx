@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { headers } from "next/headers";
 import Link from "next/link";
 import { ErrorCapture } from "@/components/ErrorCapture";
 import { ServiceWorker } from "@/components/ServiceWorker";
@@ -7,6 +8,7 @@ import { SiteHeader } from "@/components/SiteHeader";
 import { Account, HelpButton, SearchTrigger, UiProvider } from "@/components/UiProvider";
 import { githubClientId, publicUrl } from "@/lib/app-info";
 import { BRAND, DESCRIPTION, SLOGAN, TAGLINE } from "@/lib/brand";
+import { webLoginClient } from "@/lib/github";
 import type { SearchContext } from "@/lib/search";
 import { searchContextFor } from "@/lib/search-context";
 import { readConfigSafe } from "@/lib/vault";
@@ -42,12 +44,14 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   } catch {
     // a broken vault is reported by the page itself
   }
+  // 登录 is a redirect to github.com where this origin has the web login, else the device flow's drawer
+  const webLogin = Boolean(webLoginClient(await headers()));
   return (
     <html lang="zh-CN" data-updown={updown === "red-up" ? "red-up" : undefined}>
       <body className="flex min-h-screen flex-col font-sans antialiased">
         <ErrorCapture />
         <ServiceWorker />
-        <UiProvider ctx={searchCtx} readOnly={!viewer?.canWrite}>
+        <UiProvider ctx={searchCtx} readOnly={!viewer?.canWrite} webLogin={webLogin}>
           <SiteHeader>
             <Link href="/" className="flex shrink-0 items-baseline gap-3" title={TAGLINE}>
               <span className="font-mono text-sm tracking-tight">{BRAND}</span>

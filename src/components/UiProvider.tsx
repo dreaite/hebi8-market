@@ -6,6 +6,7 @@ import { addSymbol, removeSymbol } from "@/app/actions";
 import type { SearchContext } from "@/lib/search";
 import { IconHelp } from "./chart-icons";
 import { AccountPanel } from "./AccountPanel";
+import { startWebLogin } from "./GitHubLogin";
 import { Guide } from "./Guide";
 import { HelpPanel, type HelpTab } from "./HelpPanel";
 import { SymbolSearch, type PickDetail } from "./SymbolSearch";
@@ -29,7 +30,7 @@ interface UiValue {
   toast: (message: string, opts?: ToastOptions) => void;
   /** Open the help drawer, on a given tab or the last one used */
   openHelp: (tab?: HelpTab) => void;
-  /** 登录: the account drawer's GitHub device flow, started right away */
+  /** 登录: off to github.com where this origin has the web login, else the account drawer's device flow, started right away */
   login: () => void;
   /** 通知设置: the account drawer (the only place channels are set) */
   openNotify: () => void;
@@ -46,6 +47,15 @@ export function useUi(): UiValue {
 }
 
 const GUIDE_SEEN = "hebi8m:guide-seen";
+
+/** How the web login ended (`?login=`, set by `/api/github/callback`). */
+const LOGIN_NOTICES: Record<string, { message: string; error?: boolean }> = {
+  ok: { message: "已登录" },
+  denied: { message: "你在 GitHub 上取消了授权", error: true },
+  state: { message: "登录没有完成：这次登录已过期，或不是从这个浏览器发起的，请再试一次", error: true },
+  failed: { message: "登录失败：GitHub 没有给出登录凭据，请再试一次", error: true },
+  unavailable: { message: "这个地址不能跳转到 GitHub 登录，请再点一次「登录」", error: true },
+};
 
 /** This browser has seen the how-to once (closed it, or logged in from it). */
 export function guideSeen(): boolean {
@@ -72,7 +82,18 @@ interface Toast extends ToastOptions {
 }
 
 /** Global search overlay, help drawer, toasts and the keyboard shortcuts that open them. */
-export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; readOnly: boolean; children: ReactNode }) {
+export function UiProvider({
+  ctx,
+  readOnly,
+  webLogin,
+  children,
+}: {
+  ctx: SearchContext;
+  readOnly: boolean;
+  /** This origin has the web login (worked out by the server from the request) */
+  webLogin: boolean;
+  children: ReactNode;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const [search, setSearch] = useState<{ query: string; mode: GlobalSearchMode; seq: number } | null>(null);
@@ -108,7 +129,10 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
     setHelp(null);
     setAccount({ autoLogin, seq: ++seq.current });
   }, []);
-  const login = useCallback(() => openAccount(true), [openAccount]);
+  const login = useCallback(() => {
+    if (webLogin) startWebLogin();
+    else openAccount(true);
+  }, [webLogin, openAccount]);
   const openNotify = useCallback(() => openAccount(false), [openAccount]);
   const closeAccount = useCallback(() => setAccount(null), []);
   const openGuide = useCallback(() => {
@@ -134,16 +158,21 @@ export function UiProvider({ ctx, readOnly, children }: { ctx: SearchContext; re
     if (guide) closeGuide();
   }, [pathname, guide, closeGuide]);
 
-  // `?help=feedback|project` opens the drawer (a link to the feedback form), then leaves the URL
+  // `?help=feedback|project` opens the drawer (a link to the feedback form) and `?login=` says how
+  // the web login ended; both then leave the URL
   useEffect(() => {
     const url = new URL(window.location.href);
     const tab = url.searchParams.get("help");
-    if (tab !== "feedback" && tab !== "project") return;
-    url.searchParams.delete("help");
+    const notice = LOGIN_NOTICES[url.searchParams.get("login") ?? ""];
+    const help = tab === "feedback" || tab === "project";
+    if (!help && !notice) return;
+    if (help) url.searchParams.delete("help");
+    if (notice) url.searchParams.delete("login");
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the query only exists in the browser URL
-    openHelp(tab);
-  }, [pathname, openHelp]);
+    if (help) openHelp(tab);
+    if (notice) toast(notice.message, notice.error ? { kind: "error" } : undefined);
+  }, [pathname, openHelp, toast]);
 
   // `/` or Ctrl/Cmd+K anywhere; on a chart, any letter or digit starts a search with it
   useEffect(() => {
@@ -299,7 +328,7 @@ export function HelpButton() {
   );
 }
 
-/** 登录 as a button anywhere (notes, review): opens the account drawer's device flow. */
+/** 登录 as a button anywhere (notes, review): the web login, or the account drawer's device flow. */
 export function LoginButton() {
   const { login } = useUi();
   return (

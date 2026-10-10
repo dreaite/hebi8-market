@@ -1,12 +1,14 @@
 /**
- * Every GitHub HTTP call goes through here: the device-flow login (with refresh), the user, and
- * the issues API. Only the public App's client id is needed; there is no client secret, private
- * key or installation token anywhere. Failures become `GitHubError` with a Chinese message the
- * UI shows as is. Tokens and device codes never leave the server and are never logged.
+ * Every GitHub HTTP call goes through here: the two logins (the web login's redirect and the
+ * device flow, with refresh), the user, and the issues API. The device flow needs only the public
+ * App's client id; the web login has a client id and secret in the secrets dir
+ * (`github-oauth.json`). There is no private key or installation token anywhere. Failures become
+ * `GitHubError` with a Chinese message the UI shows as is. Tokens, device codes and the client
+ * secret never leave the server and are never logged.
  */
 import crypto from "node:crypto";
-import { FROM_APP_LABEL } from "./app-info";
-import { getSession, updateSession, type Session } from "./secrets";
+import { FROM_APP_LABEL, githubClientId, publicUrl } from "./app-info";
+import { getSession, readJson, updateSession, type Session } from "./secrets";
 
 const API = "https://api.github.com";
 const WEB = "https://github.com";
@@ -25,7 +27,10 @@ export class GitHubError extends Error {
 }
 
 /** The message the UI shows for a failed GitHub API response. */
-export function describeFailure(status: number, { repo, detail, rateLimited = false }: { repo?: string; detail?: string; rateLimited?: boolean } = {}): string {
+export function describeFailure(
+  status: number,
+  { repo, detail, rateLimited = false, web = false }: { repo?: string; detail?: string; rateLimited?: boolean; /** the token came from the web login */ web?: boolean } = {},
+): string {
   const what = detail ? `（${detail}）` : "";
   const where = repo ?? "仓库";
   switch (true) {
@@ -33,6 +38,9 @@ export function describeFailure(status: number, { repo, detail, rateLimited = fa
       return "GitHub 返回 401：登录已过期，请重新登录";
     case status === 403 && rateLimited:
       return "GitHub 返回 403：请求太频繁，稍后再试";
+    // the web login asks for the identity only: its token opens no issue, App installed or not
+    case (status === 403 || status === 404) && web:
+      return `GitHub 返回 ${status}：这次登录的授权不能在 ${where} 上开 issue（网页登录只确认身份，没有开 issue 的权限）${what}。可以改在 GitHub 网页上提交`;
     case status === 403:
       return `GitHub 返回 403：你的账号不能在 ${where} 上开 issue（hebi8/market 的 GitHub App 没装在这个仓库，或账号被仓库限制）${what}。可以改在 GitHub 网页上提交`;
     case status === 404:
@@ -56,8 +64,11 @@ async function send(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
-/** REST API call; non-2xx throws `GitHubError`. `repo` only flavours the error messages. */
-export async function api<T>(path: string, { method = "GET", token, body, repo }: { method?: string; token?: string | null; body?: unknown; repo?: string } = {}): Promise<T> {
+/** REST API call; non-2xx throws `GitHubError`. `repo` and `web` only flavour the error messages. */
+export async function api<T>(
+  path: string,
+  { method = "GET", token, body, repo, web }: { method?: string; token?: string | null; body?: unknown; repo?: string; web?: boolean } = {},
+): Promise<T> {
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
@@ -78,7 +89,7 @@ export async function api<T>(path: string, { method = "GET", token, body, repo }
     const first = detail?.errors?.[0];
     const message = [detail?.message, first?.message ?? (first ? `${first.field ?? ""} ${first.code ?? ""}`.trim() : null)].filter(Boolean).join(" · ");
     const rateLimited = res.headers.get("x-ratelimit-remaining") === "0";
-    throw new GitHubError(res.status, describeFailure(res.status, { repo, detail: message || undefined, rateLimited }), !rateLimited && [403, 404, 410].includes(res.status));
+    throw new GitHubError(res.status, describeFailure(res.status, { repo, detail: message || undefined, rateLimited, web }), !rateLimited && [403, 404, 410].includes(res.status));
   }
   return json as T;
 }
@@ -114,6 +125,24 @@ export const cookieOptions = (maxAgeSec: number, headers: Headers) => ({ httpOnl
 
 export const randomToken = (bytes = 16) => crypto.randomBytes(bytes).toString("base64url");
 
+/** Constant-time comparison of two secrets. */
+export function sameToken(a: string, b: string): boolean {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+/**
+ * Where a login returns to: a path on this site only, else the overview. One leading `/` (browsers
+ * read `/\` as `//`), and still so once the dot segments are resolved (`/..//host` is `//host`).
+ */
+export function safeNext(next: string | null | undefined): string {
+  // no control characters either: URL parsers drop tabs and newlines, so `/\t/host` is `//host`
+  if (!next || next.length > 1000 || !/^\/(?![/\\])[^\\\x00-\x1f]*$/.test(next)) return "/";
+  const url = new URL(next, "http://localhost");
+  return url.pathname.startsWith("//") ? "/" : `${url.pathname}${url.search}${url.hash}`;
+}
+
 // ---------------------------------------------------------------------------- OAuth endpoints
 
 export interface UserTokens {
@@ -148,7 +177,7 @@ async function oauthPost<T extends { error?: string; error_description?: string 
   return { status: res.status, json };
 }
 
-const UNKNOWN_CLIENT = "GitHub 不认识这个 client id（检查 app-info.ts 的 GITHUB_APP_CLIENT_ID 或 HEBI8_GITHUB_CLIENT_ID）";
+const UNKNOWN_CLIENT = "GitHub 不认识这个 client id（检查 app-info.ts 的 GITHUB_APP_CLIENT_ID 或 HEBI8_GITHUB_CLIENT_ID；网页登录检查 github-oauth.json）";
 const DEVICE_STATES = new Set(["authorization_pending", "slow_down", "expired_token", "access_denied"]);
 
 const OAUTH_ERRORS: Record<string, [number, string]> = {
@@ -157,6 +186,8 @@ const OAUTH_ERRORS: Record<string, [number, string]> = {
   bad_refresh_token: [401, "GitHub 返回 401：登录已过期，请重新登录"],
   unverified_user_email: [403, "GitHub 账号的邮箱还没验证"],
   incorrect_device_code: [400, "登录代码无效，请重新登录"],
+  bad_verification_code: [400, "GitHub 的授权码无效或已过期，请重新登录"],
+  redirect_uri_mismatch: [400, "回调地址和 GitHub 上登记的不一致（github-oauth.json 的 origins 和 App 的 callback URL）"],
   unsupported_grant_type: [400, "GitHub 不接受这种登录方式"],
 };
 
@@ -173,6 +204,89 @@ function tokensFrom(json: OAuthReply, now: number): UserTokens {
     refresh_token: json.refresh_token ?? null,
     refresh_expires_at: json.refresh_token_expires_in ? now + Number(json.refresh_token_expires_in) * 1000 : null,
   };
+}
+
+// ---------------------------------------------------------------------------- web login
+
+const OAUTH_FILE = "github-oauth.json";
+/** The pending web login: state, PKCE verifier and where to return, for the 10 minutes GitHub gives a code. */
+export const LOGIN_COOKIE = "hebi8m_login";
+export const LOGIN_MINUTES = 10;
+
+/**
+ * The client of the web login, an OAuth App or a GitHub App alike (same endpoints; a GitHub App's
+ * reply just adds an expiry and a refresh token).
+ */
+export interface WebClient {
+  clientId: string;
+  clientSecret: string;
+  /** Passed to GitHub as is; empty = the identity only */
+  scope: string;
+  /** The origins whose `/api/github/callback` is registered with the client */
+  origins: string[];
+}
+
+/** `github-oauth.json` in the secrets dir, read on every use; null unless it has both the id and the secret. */
+export function webClient(): WebClient | null {
+  const file = readJson<{ client_id?: unknown; client_secret?: unknown; scope?: unknown; origins?: unknown }>(OAUTH_FILE);
+  if (typeof file?.client_id !== "string" || !file.client_id || typeof file.client_secret !== "string" || !file.client_secret) return null;
+  return {
+    clientId: file.client_id,
+    clientSecret: file.client_secret,
+    scope: typeof file.scope === "string" ? file.scope : "",
+    origins: Array.isArray(file.origins) ? file.origins.filter((o): o is string => typeof o === "string").map((o) => o.replace(/\/+$/, "")) : [publicUrl()],
+  };
+}
+
+/**
+ * The web login's client when this request may use it: GitHub only redirects back to a registered
+ * callback, so a login started on any other origin (the tailnet's http address) would land its
+ * cookie on the wrong host. Null there, and those origins keep the device flow.
+ */
+export function webLoginClient(headers: Headers): WebClient | null {
+  const client = githubClientId() ? webClient() : null;
+  if (!client) return null;
+  try {
+    return client.origins.includes(requestOrigin(headers)) ? client : null;
+  } catch {
+    return null;
+  }
+}
+
+/** github.com's authorization page for this login. PKCE (S256) rides along; a client that ignores it loses nothing. */
+export function authorizeUrl(client: WebClient, { redirectUri, state, verifier }: { redirectUri: string; state: string; verifier: string }): string {
+  const url = new URL(`${WEB}/login/oauth/authorize`);
+  url.search = new URLSearchParams({
+    client_id: client.clientId,
+    redirect_uri: redirectUri,
+    state,
+    scope: client.scope,
+    code_challenge: crypto.createHash("sha256").update(verifier).digest("base64url"),
+    code_challenge_method: "S256",
+  }).toString();
+  return url.toString();
+}
+
+/** Trade the code GitHub sent to the callback for the user's tokens. */
+export async function exchangeCode(client: WebClient, { code, redirectUri, verifier }: { code: string; redirectUri: string; verifier: string }, now = Date.now()): Promise<UserTokens> {
+  const { json } = await oauthPost<OAuthReply>("/login/oauth/access_token", {
+    client_id: client.clientId,
+    client_secret: client.clientSecret,
+    code,
+    redirect_uri: redirectUri,
+    code_verifier: verifier,
+  });
+  if (!json?.access_token) throw oauthFailure(json);
+  return tokensFrom(json, now);
+}
+
+/** How a web login ended, told to the page it returns to in `?login=` (the page shows it once and drops the parameter). */
+export type LoginNotice = "ok" | "denied" | "state" | "failed" | "unavailable";
+
+export function loginNotice(next: string, notice: LoginNotice): string {
+  const url = new URL(next, "http://localhost");
+  url.searchParams.set("login", notice);
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
 // ---------------------------------------------------------------------------- device flow
@@ -304,9 +418,14 @@ export function getUser(token: string): Promise<{ login: string; avatar_url: str
   return api<{ login: string; avatar_url: string }>("/user", { token });
 }
 
-/** Device-flow tokens refresh with the client id alone (no client secret). */
-export async function refreshUserToken(clientId: string, refreshToken: string, now = Date.now()): Promise<UserTokens> {
-  const { json } = await oauthPost<OAuthReply>("/login/oauth/access_token", { client_id: clientId, grant_type: "refresh_token", refresh_token: refreshToken });
+/** Device-flow tokens refresh with the client id alone; the web login's need its client secret too. */
+export async function refreshUserToken(clientId: string, clientSecret: string | null, refreshToken: string, now = Date.now()): Promise<UserTokens> {
+  const { json } = await oauthPost<OAuthReply>("/login/oauth/access_token", {
+    client_id: clientId,
+    ...(clientSecret ? { client_secret: clientSecret } : {}),
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+  });
   if (!json?.access_token) throw oauthFailure(json);
   return tokensFrom(json, now);
 }
@@ -314,7 +433,11 @@ export async function refreshUserToken(clientId: string, refreshToken: string, n
 /** Refresh this long before the 8-hour user token actually expires. */
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
-/** The session's user token, refreshed when (nearly) expired; 401 when the login cannot be kept. */
+/**
+ * The session's user token, refreshed when (nearly) expired; 401 when the login cannot be kept.
+ * The client that issued the tokens renews them: the web login's (`session.web_client`) with its
+ * secret, the device flow's (`clientId`) without.
+ */
 export async function userToken(clientId: string, sessionId: string | undefined): Promise<{ token: string; session: Session }> {
   const session = getSession(sessionId);
   if (!session || !sessionId) throw new GitHubError(401, "还没有登录 GitHub");
@@ -322,9 +445,12 @@ export async function userToken(clientId: string, sessionId: string | undefined)
   if (!session.refresh_token || (session.refresh_expires_at && session.refresh_expires_at < Date.now())) {
     throw new GitHubError(401, "GitHub 返回 401：登录已过期，请重新登录");
   }
+  const web = session.web_client ? webClient() : null;
+  // the web login's client was replaced or removed: nothing can renew its tokens
+  if (session.web_client && web?.clientId !== session.web_client) throw new GitHubError(401, "登录已过期，请重新登录");
   let next: UserTokens;
   try {
-    next = await refreshUserToken(clientId, session.refresh_token);
+    next = await refreshUserToken(web?.clientId ?? clientId, web?.clientSecret ?? null, session.refresh_token);
   } catch (err) {
     // anything but a network hiccup means this login is over
     if (err instanceof GitHubError && err.status === 0) throw err;
@@ -343,8 +469,8 @@ export interface CreatedIssue {
 }
 
 /** Open the issue as the logged-in user (they are the author). No labels: the repo's workflow adds them. */
-export function createIssue(token: string, repo: string, issue: { title: string; body: string }): Promise<CreatedIssue> {
-  return api<CreatedIssue>(`/repos/${repo}/issues`, { method: "POST", token, body: { title: issue.title, body: issue.body }, repo });
+export function createIssue(token: string, repo: string, issue: { title: string; body: string }, web = false): Promise<CreatedIssue> {
+  return api<CreatedIssue>(`/repos/${repo}/issues`, { method: "POST", token, body: { title: issue.title, body: issue.body }, repo, web });
 }
 
 export interface IssueSummary {

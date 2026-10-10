@@ -10,8 +10,9 @@ import type { ToastOptions } from "./UiProvider";
 
 /**
  * 登录 and 通知设置 (design §2.5), the one place for both: the header's 登录 and the account
- * menu's 通知设置 open it. Logged out it is the GitHub device flow; logged in it is this person's
- * channels, plus the instance's bot for an owner. Only a shared instance has logins.
+ * menu's 通知设置 open it. Logged out it is the GitHub login (the device flow; an origin with the
+ * web login goes straight to github.com instead of here); logged in it is this person's channels,
+ * plus the instance's bot for an owner. Only a shared instance has logins.
  */
 export function AccountPanel({ autoLogin, onClose, toast }: { autoLogin: boolean; onClose: () => void; toast: (message: string, opts?: ToastOptions) => void }) {
   const { info, error, reload } = useHelpInfo();

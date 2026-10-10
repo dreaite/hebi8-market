@@ -22,17 +22,28 @@ let pendingLogin: PendingLogin | null = null;
 
 const currentLogin = () => (pendingLogin && pendingLogin.expiresAt > Date.now() ? pendingLogin : null);
 
+/**
+ * The web login: a full-page trip to github.com that comes back to `next` (this page by default).
+ * Only where the server said this origin has it.
+ */
+export function startWebLogin(next = `${window.location.pathname}${window.location.search}`): void {
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- a route handler that redirects to github.com, not a page
+  window.location.assign(`/api/github/login?next=${encodeURIComponent(next)}`);
+}
+
 export const postJson = (url: string, body: unknown, method = "POST") =>
   fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" });
 
 /**
- * Who is logged in, or 用 GitHub 登录 and the device flow in progress. Logging in or out changes
- * which vault the pages show on a shared instance, so both refresh the page behind the drawer.
+ * Who is logged in, or 用 GitHub 登录: the web login where this origin has it, else the device
+ * flow, shown here while in progress. Logging in or out changes which vault the pages show on a
+ * shared instance, so both refresh the page behind the drawer.
  */
 export function AccountBlock({
   info,
   intro,
   aside,
+  next,
   autoLogin,
   onStart,
   reload,
@@ -41,6 +52,8 @@ export function AccountBlock({
   info: HelpInfo;
   intro: ReactNode;
   aside?: string;
+  /** Where the web login comes back to, when not just this page */
+  next?: () => string;
   /** Opened by 登录: start the device flow right away */
   autoLogin?: boolean;
   onStart?: () => void;
@@ -54,9 +67,13 @@ export function AccountBlock({
   const user = info.github.user;
 
   const startLogin = useCallback(async () => {
+    onStart?.();
+    if (info.github.webLogin) {
+      startWebLogin(next?.());
+      return;
+    }
     setStarting(true);
     setLoginError(null);
-    onStart?.();
     try {
       const res = await postJson("/api/github/device", {});
       const json = await res.json().catch(() => ({}));
@@ -74,7 +91,7 @@ export function AccountBlock({
     } finally {
       setStarting(false);
     }
-  }, [onStart]);
+  }, [onStart, info.github.webLogin, next]);
 
   // 登录 in the header: show the code at once instead of another button to press
   const autoStarted = useRef(false);

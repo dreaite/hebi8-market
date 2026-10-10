@@ -2,8 +2,8 @@
  * Secrets live outside the repo, the vault and the data dir, in `HEBI8_SECRETS` or
  * `~/.config/hebi8/market` (mode 700): GitHub login sessions in `sessions.json` and each person's
  * notification channels in `notify-users.json`, written atomically with mode 600, and the
- * instance's notification settings in `notify.json`, written by hand. Nothing in here is ever
- * logged or sent to the browser.
+ * instance's notification settings in `notify.json` and the web login's client in
+ * `github-oauth.json`, written by hand. Nothing in here is ever logged or sent to the browser.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -48,6 +48,8 @@ export interface Session {
   refresh_token: string | null;
   refresh_expires_at: number | null;
   created_at: number;
+  /** Client id of the web login (`github-oauth.json`) that issued the tokens; absent = the device flow's client */
+  web_client?: string;
 }
 
 const SESSIONS_FILE = "sessions.json";

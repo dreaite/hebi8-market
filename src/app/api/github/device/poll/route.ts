@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { GitHubError, SESSION_COOKIE, cookieOptions, crossSite, getUser, pollDeviceFlow } from "@/lib/github";
-import { SESSION_DAYS, createSession } from "@/lib/secrets";
+import { SESSION_DAYS, createSession, deleteSession } from "@/lib/secrets";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +17,8 @@ export async function POST(request: NextRequest) {
     const result = await pollDeviceFlow(flowId);
     if (result.status !== "done") return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
     const user = await getUser(result.tokens.access_token);
+    // a login replaces whatever this browser was logged in as
+    deleteSession(request.cookies.get(SESSION_COOKIE)?.value);
     const sessionId = createSession({ login: user.login, avatar_url: user.avatar_url, ...result.tokens });
     const res = NextResponse.json({ status: "done", user: { login: user.login, avatarUrl: user.avatar_url } }, { headers: { "Cache-Control": "no-store" } });
     res.cookies.set(SESSION_COOKIE, sessionId, cookieOptions(SESSION_DAYS * 86400, request.headers));
