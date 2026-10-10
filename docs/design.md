@@ -860,7 +860,7 @@ client id 不是秘密（device flow 的设计就是给拿不住密钥的客户�
 
 **两种方式共用的**：
 
-- GitHub App 的用户 token 8 小时过期；离过期不到 5 分钟时用 `grant_type=refresh_token` + `refresh_token` 续，**由发 token 的那个 client 续**：会话有 `web_client` 的用 `github-oauth.json` 的 `client_id` + `client_secret`（文件里的 client 已经换掉或删掉就续不了）；没有的是 device flow 的会话，用 `githubClientId()`，不带 secret（两种登录用的是同一个 App 时也是这样分）。OAuth App 的 token 不过期，没有 refresh token，不走这一步。续不上（或 GitHub 对用户 token 返回 401）就删会话，面板显示原因和登录按钮。
+- GitHub App 的用户 token 8 小时过期；离过期不到 5 分钟时用 `grant_type=refresh_token` + `refresh_token` 续，**由发 token 的那个 client 续**：会话有 `web_client` 的用 `github-oauth.json` 的 `client_id` + `client_secret`（文件里的 client 已经换掉或删掉就续不了）；没有的是 device flow 的会话，用 `githubClientId()`，不带 secret（两种登录用的是同一个 App 时也是这样分）。OAuth App 的 token 不过期，没有 refresh token，不走这一步。同一条会话同时只续一次：refresh token 用一次就作废，所以进行中的续期按会话 id 记在 `globalThis` 上的 Map 里，同时到来的请求（两个标签页一起提交）等同一个结果，不会各续各的、后一个被拒而把刚续好的会话删掉。续不上（或 GitHub 对用户 token 返回 401）就删会话，面板显示原因和登录按钮。
 - `POST /api/github/logout` 删会话。
 - 写操作的接口都拒绝跨站 `Origin`；两个 GET（`login`、`callback`）靠 `state` 和 SameSite=Lax 的临时 cookie。
 

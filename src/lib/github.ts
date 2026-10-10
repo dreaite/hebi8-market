@@ -312,17 +312,24 @@ interface PendingFlow {
   expiresAt: number;
 }
 
-const g = globalThis as unknown as { hebi8DeviceFlows?: Map<string, PendingFlow>; hebi8RecentIssues?: Map<string, { at: number; issues: IssueSummary[] }> };
+const g = globalThis as unknown as {
+  hebi8DeviceFlows?: Map<string, PendingFlow>;
+  hebi8RecentIssues?: Map<string, { at: number; issues: IssueSummary[] }>;
+  hebi8mRenewals?: Map<string, Promise<UserTokens>>;
+};
 const flows = (g.hebi8DeviceFlows ??= new Map());
 const recentCache = (g.hebi8RecentIssues ??= new Map());
+/** Token renewals under way, by session id */
+const renewals = (g.hebi8mRenewals ??= new Map());
 
 /** At most this many logins pending at once (each is one person in front of github.com/login/device). */
 const MAX_FLOWS = 20;
 
-/** Forget pending logins and the cached issue list (tests). */
+/** Forget pending logins, renewals under way and the cached issue list (tests). */
 export function resetGitHubCaches(): void {
   flows.clear();
   recentCache.clear();
+  renewals.clear();
 }
 
 function pruneFlows(now: number): void {
@@ -443,7 +450,9 @@ const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 /**
  * The session's user token, refreshed when (nearly) expired; 401 when the login cannot be kept.
  * The client that issued the tokens renews them: the web login's (`session.web_client`) with its
- * secret, the device flow's (`clientId`) without.
+ * secret, the device flow's (`clientId`) without. A refresh token works once, so requests that
+ * find the token expired at the same time share one renewal: a second one of its own would be
+ * refused and end the login the first had just kept.
  */
 export async function userToken(clientId: string, sessionId: string | undefined): Promise<{ token: string; session: Session }> {
   const session = getSession(sessionId);
@@ -456,15 +465,24 @@ export async function userToken(clientId: string, sessionId: string | undefined)
   const web = session.web_client ? webClient() : null;
   // the web login's client was replaced or removed: nothing can renew its tokens
   if (session.web_client && web?.clientId !== session.web_client) throw new GitHubError(401, "登录已过期，请重新登录");
+  let renewal = renewals.get(sessionId);
+  if (!renewal) {
+    renewal = refreshUserToken(web?.clientId ?? clientId, web?.clientSecret ?? null, session.refresh_token)
+      .then((tokens) => {
+        updateSession(sessionId, tokens);
+        return tokens;
+      })
+      .finally(() => renewals.delete(sessionId));
+    renewals.set(sessionId, renewal);
+  }
   let next: UserTokens;
   try {
-    next = await refreshUserToken(web?.clientId ?? clientId, web?.clientSecret ?? null, session.refresh_token);
+    next = await renewal;
   } catch (err) {
     // anything but a network hiccup means this login is over
     if (err instanceof GitHubError && err.status === 0) throw err;
     throw new GitHubError(401, "登录已过期，请重新登录");
   }
-  updateSession(sessionId, next);
   return { token: next.access_token, session: { ...session, ...next } };
 }
 

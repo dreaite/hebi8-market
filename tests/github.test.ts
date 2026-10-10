@@ -491,6 +491,25 @@ describe("user token refresh", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("requests that find the token expired together renew it once, and the login stays", async () => {
+    const id = createSession({ login: "u", avatar_url: "", access_token: "old", access_expires_at: Date.now() - 1000, refresh_token: "ghr_1", refresh_expires_at: Date.now() + 86400_000 });
+    // GitHub takes a refresh token once: a second renewal with `ghr_1` is refused
+    tokenReplies({ access_token: "new", expires_in: 28800, refresh_token: "ghr_2", refresh_token_expires_in: 15897600 }, { error: "bad_refresh_token" });
+    routes["POST https://api.github.com/repos/Hebi8/hebi8-market/issues"] = () => json({ number: 1, html_url: "u", title: "t" }, 201);
+    const submit = () => issuesPOST(req("/api/github/issues", { method: "POST", cookies: { [SESSION_COOKIE]: id }, body: { type: "bug", title: "x" }, headers: { origin: ORIGIN } }));
+    const [a, b] = await Promise.all([submit(), submit()]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(calls.filter((c) => c.url === TOKEN)).toHaveLength(1);
+    expect(calls.filter((c) => c.url.endsWith("/issues")).map((c) => c.auth)).toEqual(["Bearer new", "Bearer new"]);
+    expect(getSession(id)).toMatchObject({ access_token: "new", refresh_token: "ghr_2" });
+
+    // the next expiry renews again, with the new refresh token
+    writeJson("sessions.json", { [id]: { ...getSession(id)!, access_expires_at: Date.now() - 1000 } });
+    tokenReplies({ access_token: "newer", expires_in: 28800, refresh_token: "ghr_3", refresh_token_expires_in: 15897600 });
+    expect((await userToken(CLIENT_ID, id)).token).toBe("newer");
+    expect(calls.filter((c) => c.url === TOKEN).map((c) => (c.body as { refresh_token: string }).refresh_token)).toEqual(["ghr_1", "ghr_2"]);
+  });
+
   it("keeps a token that is not close to expiry", async () => {
     const id = createSession({ login: "u", avatar_url: "", access_token: "fresh", access_expires_at: Date.now() + 3600_000, refresh_token: "ghr_1", refresh_expires_at: null });
     expect((await userToken(CLIENT_ID, id)).token).toBe("fresh");
