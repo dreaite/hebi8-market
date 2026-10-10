@@ -58,7 +58,15 @@ export default async function ChartPage({ params }: { params: Promise<{ key: str
   const period = config.periods[0] ?? "1W";
   const watchlist = config.groups.map((g) => ({
     name: g.name,
-    items: g.symbols.map((i) => ({ key: i.key, name: names[i.key], last: stats[i.key]?.last ?? null, change: stats[i.key]?.changes[period] ?? null })),
+    items: g.symbols.map((i) => ({
+      key: i.key,
+      name: names[i.key],
+      // what the yaml says, so a removed symbol comes back as it was
+      yamlName: i.name,
+      bench: i.bench,
+      last: stats[i.key]?.last ?? null,
+      change: stats[i.key]?.changes[period] ?? null,
+    })),
   }));
 
   // alerts are personal like notes: a visitor sees none

@@ -436,21 +436,25 @@ tr[data-drop="into"] > td {
 [data-dragging] {
   opacity: 0.45;
 }
-/* Grips and group menus appear on hover or focus; touch screens have no hover, so they stay. */
+/* Grips, group menus and a row's × appear on hover or focus; touch screens have no hover, so they stay. */
 .dnd-handle,
-.group-menu-btn {
+.group-menu-btn,
+.row-remove-btn {
   opacity: 0;
 }
 [data-dnd-id]:hover .dnd-handle,
 [data-dnd-id]:hover .group-menu-btn,
+[data-dnd-id]:hover .row-remove-btn,
 .dnd-handle:focus-visible,
 .group-menu-btn:focus-visible,
+.row-remove-btn:focus-visible,
 .group-menu-btn[aria-expanded="true"] {
   opacity: 1;
 }
 @media (hover: none) {
   .dnd-handle,
-  .group-menu-btn {
+  .group-menu-btn,
+  .row-remove-btn {
     opacity: 1;
   }
 }

@@ -5,17 +5,18 @@ import { changeColor, fmtPct, fmtPrice } from "@/lib/format";
 import { mergeTarget } from "@/lib/watchlist";
 import { IconClose, IconPlus } from "./chart-icons";
 import { rowAttrs } from "./use-drag-sort";
-import { useWatchlist } from "./use-watchlist";
+import { useWatchlist, type Removable } from "./use-watchlist";
 import { DragHandle, FoldButton, GroupMenu, NewGroup } from "./WatchlistParts";
 
 export interface WatchlistGroup {
   name: string;
-  items: { key: string; name: string; last: number | null; change: number | null }[];
+  items: (Removable & { last: number | null; change: number | null })[];
 }
 
 /**
  * TradingView's right-hand watchlist: sections as in hebi8.yaml, foldable, rows and sections
- * dragged into a new order, the open symbol highlighted.「+」opens the search to add symbols.
+ * dragged into a new order, the open symbol highlighted.「+」opens the search to add symbols, a
+ * row's × takes its symbol off the list.
  */
 export function WatchlistPanel({
   groups: serverGroups,
@@ -39,6 +40,8 @@ export function WatchlistPanel({
 }) {
   const wl = useWatchlist(serverGroups, { readOnly });
   const groups = wl.groups;
+  // the × has its own column after the numbers, wide enough for a finger where it always shows
+  const end = readOnly ? "pr-3" : "pr-5 [@media(hover:none)]:pr-9";
   const activeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
@@ -57,7 +60,7 @@ export function WatchlistPanel({
           <IconClose size={16} />
         </button>
       </div>
-      <div className="flex h-7 shrink-0 items-center gap-2 border-b border-line pr-3 pl-4 text-[11px] text-muted">
+      <div className={`flex h-7 shrink-0 items-center gap-2 border-b border-line pl-4 text-[11px] text-muted ${end}`}>
         <span className="flex-1">标的</span>
         <span className="w-20 text-right">最新价</span>
         <span className="w-14 text-right">{changeLabel}</span>
@@ -92,7 +95,7 @@ export function WatchlistPanel({
                 g.items.map((item) => {
                   const on = item.key === current;
                   return (
-                    <div key={item.key} {...rowAttrs(`s:${item.key}`, g.name, wl.drag)} className="relative">
+                    <div key={item.key} {...rowAttrs(`s:${item.key}`, g.name, wl.drag)} className={`relative ${on ? "bg-fg/10" : "hover:bg-fg/5"}`}>
                       {wl.canDrag && (
                         <DragHandle label={item.name} onKeyDown={(e) => wl.drag.onHandleKeyDown(e, { kind: "symbol", key: item.key })} className="absolute top-1 left-0.5 z-10 w-3" />
                       )}
@@ -101,7 +104,7 @@ export function WatchlistPanel({
                         type="button"
                         onClick={() => onPick(item.key)}
                         aria-current={on ? "page" : undefined}
-                        className={`flex h-8 w-full items-center gap-2 pr-3 pl-4 text-left ${on ? "bg-fg/10" : "hover:bg-fg/5"}`}
+                        className={`flex h-8 w-full items-center gap-2 pl-4 text-left ${end}`}
                       >
                         <span className={`min-w-0 flex-1 truncate text-[13px] ${on ? "font-medium" : ""}`} title={item.name}>
                           {item.name}
@@ -109,6 +112,19 @@ export function WatchlistPanel({
                         <span className="tabular w-20 shrink-0 text-right">{item.last != null ? fmtPrice(item.last) : "—"}</span>
                         <span className={`tabular w-14 shrink-0 text-right ${changeColor(item.change)}`}>{fmtPct(item.change, 2)}</span>
                       </button>
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          // a press here is not the start of a drag
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={() => wl.edit.removeSymbol(item, g.name)}
+                          aria-label={`从自选移除 ${item.name}`}
+                          title="移除"
+                          className="row-remove-btn absolute top-1 right-0 flex h-6 w-5 items-center justify-center rounded text-muted hover:text-fg [@media(hover:none)]:top-0 [@media(hover:none)]:h-8 [@media(hover:none)]:w-9"
+                        >
+                          <IconClose size={14} />
+                        </button>
+                      )}
                     </div>
                   );
                 })}

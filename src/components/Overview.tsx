@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, useTransition } from "react";
-import { addSymbol, refresh, removeSymbol, renameSymbol, setBench, setPeriods, setUpdown } from "@/app/actions";
+import { refresh, renameSymbol, setBench, setPeriods, setUpdown } from "@/app/actions";
 import type { AlertBadge, AlertView } from "@/lib/alert-view";
 import type { SymbolStatus } from "@/lib/api-types";
 import type { UpDown } from "@/lib/config";
@@ -251,16 +251,7 @@ export function Overview({ data }: { data: OverviewData }) {
 
   const remove = (row: OverviewRow, group: string) => {
     closeMenu();
-    act(
-      () => removeSymbol(row.key),
-      () =>
-        toast(`已移除 ${row.name}`, {
-          action: {
-            label: "撤销",
-            onClick: () => act(() => addSymbol({ key: row.key, group, name: row.yamlName ?? undefined, bench: row.bench ?? undefined })),
-          },
-        }),
-    );
+    wl.edit.removeSymbol(row, group);
   };
 
   const shownPeriods = CHANGE_PERIODS.filter((p) => periods.includes(p.key));

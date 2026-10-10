@@ -11,6 +11,7 @@ export interface ListGroup<T extends { key: string }> {
 /** Indexes count without the moved entry, like the Server Actions. */
 export type WatchlistOp =
   | { type: "moveSymbol"; key: string; group: string; index: number }
+  | { type: "removeSymbol"; key: string }
   | { type: "moveGroup"; name: string; index: number }
   | { type: "addGroup"; name: string }
   | { type: "renameGroup"; name: string; next: string }
@@ -37,6 +38,8 @@ export function applyOp<T extends { key: string }>(groups: ListGroup<T>[], op: W
       if (!target) return [...without, { name: op.group, items: [item] }];
       return without.map((g) => (g === target ? { ...g, items: insert(g.items, Math.min(op.index, g.items.length), item) } : g));
     }
+    case "removeSymbol":
+      return groups.map((g) => ({ ...g, items: g.items.filter((i) => i.key !== op.key) }));
     case "moveGroup": {
       const group = groups.find((g) => g.name === op.name);
       if (!group) return groups;

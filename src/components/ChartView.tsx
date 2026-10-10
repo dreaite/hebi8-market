@@ -182,7 +182,8 @@ export function ChartView({
   const order = useMemo(() => watchlist.flatMap((g) => g.items), [watchlist]);
   const position = order.findIndex((o) => o.key === symbolKey);
   const watched = position >= 0;
-  const neighbour = (step: 1 | -1) => (order.length < 2 ? null : order[(Math.max(position, step > 0 ? -1 : 0) + step + order.length) % order.length]);
+  // from a chart that is not on the list, the only symbol on it is still somewhere to go
+  const neighbour = (step: 1 | -1) => (order.length < (watched ? 2 : 1) ? null : order[(Math.max(position, step > 0 ? -1 : 0) + step + order.length) % order.length]);
 
   const [data, setData] = useState<BarsResponse | null>(null);
   // the status strip's sync and quote, read again between bar loads (which reset the chart's view)

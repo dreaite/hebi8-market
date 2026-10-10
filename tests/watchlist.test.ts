@@ -16,6 +16,12 @@ describe("watchlist edits (what the page shows before the yaml is written)", () 
     expect(keys(applyOp(list(), { type: "moveSymbol", key: "x", group: "新组", index: 0 }))).toEqual(["美股:abc", "宏观:", "加密:", "新组:x"]);
   });
 
+  it("removes a symbol and leaves its group in place, even when that empties it", () => {
+    expect(keys(applyOp(list(), { type: "removeSymbol", key: "b" }))).toEqual(["美股:ac", "宏观:", "加密:x"]);
+    expect(keys(applyOp(list(), { type: "removeSymbol", key: "x" }))).toEqual(["美股:abc", "宏观:", "加密:"]);
+    expect(keys(applyOp(list(), { type: "removeSymbol", key: "nope" }))).toEqual(keys(list()));
+  });
+
   it("moves, adds, renames and deletes groups; a deleted group's symbols join the one above, or below for the first", () => {
     expect(keys(applyOp(list(), { type: "moveGroup", name: "加密", index: 0 }))).toEqual(["加密:x", "美股:abc", "宏观:"]);
     expect(keys(applyOp(list(), { type: "addGroup", name: "港 A" })).at(-1)).toBe("港 A:");

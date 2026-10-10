@@ -1,11 +1,19 @@
 "use client";
 
 import { useEffect, useOptimistic, useRef, useTransition } from "react";
-import { addGroup, deleteGroup, moveGroup, moveSymbol, renameGroup, type ActionResult } from "@/app/actions";
+import { addGroup, addSymbol, deleteGroup, moveGroup, moveSymbol, removeSymbol, renameGroup, type ActionResult } from "@/app/actions";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { applyOp, COLLAPSED_KEY, mergeTarget, type ListGroup, type WatchlistOp } from "@/lib/watchlist";
 import { useUi } from "./UiProvider";
 import { useDragSort } from "./use-drag-sort";
+
+/** What removing a symbol needs to say what went and to put it back: the name shown, and the yaml's own `name` and `bench`. */
+export interface Removable {
+  key: string;
+  name: string;
+  yamlName: string | null;
+  bench: string | null;
+}
 
 /**
  * The watchlist's groups as the overview and the chart's panel edit them: every change shows at
@@ -33,6 +41,19 @@ export function useWatchlist<T extends { key: string }>(groups: ListGroup<T>[], 
 
   const edit = {
     moveSymbol: (key: string, group: string, index: number) => run({ type: "moveSymbol", key, group, index }, () => moveSymbol(key, group, index)),
+    /** Gone at once, with a toast that puts it back at the end of its group (the first fetch of `addSymbol` included). */
+    removeSymbol: (item: Removable, group: string) =>
+      run({ type: "removeSymbol", key: item.key }, () => removeSymbol(item.key), () =>
+        toast(`已移除 ${item.name}`, {
+          action: {
+            label: "撤销",
+            onClick: () =>
+              void addSymbol({ key: item.key, group, name: item.yamlName ?? undefined, bench: item.bench ?? undefined }).then((result) => {
+                if (!result.ok) toast(result.error, { kind: "error" });
+              }),
+          },
+        }),
+      ),
     moveGroup: (name: string, index: number) => run({ type: "moveGroup", name, index }, () => moveGroup(name, index)),
     addGroup: (name: string) => run({ type: "addGroup", name }, () => addGroup(name)),
     renameGroup: (name: string, next: string) =>
