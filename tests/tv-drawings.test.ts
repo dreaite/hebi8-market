@@ -266,9 +266,25 @@ describe("convertDrawing: styles", () => {
     expect(dashed.ok && dashed.overlay.styles).toMatchObject({ line: { color: "#089981", size: 4, style: "dashed", dashedValue: [6, 4] } });
     const solid = convertDrawing(drawing("LineToolHorzLine", [pt("2026-09-01", 1)], { linecolor: "#089981" }), US);
     expect(solid.ok && solid.overlay.styles).toMatchObject({ line: { size: 1, style: "solid" } });
-    // a fib retracement keeps its colour on the trend line
+    // a fib retracement keeps its colour on the trend line; width and dash are its level lines'
     const fib = convertDrawing(drawing("LineToolFibRetracement", [pt("2026-09-01", 1), pt("2026-09-02", 2)], { trendline: { color: "#787B86", linewidth: 2, linestyle: 2 } }), US);
-    expect(fib.ok && fib.overlay.styles).toMatchObject({ line: { color: "#787b86", size: 2, style: "dashed" } });
+    expect(fib.ok && fib.overlay.styles).toMatchObject({ line: { color: "#787b86", size: 1, style: "solid" } });
+    const thick = convertDrawing(drawing("LineToolTrendBasedFibExtension", [pt("2026-09-01", 1), pt("2026-09-02", 2), pt("2026-09-03", 1.5)], { trendline: { color: "#787B86", linestyle: 2 }, levelsStyle: { linewidth: 2, linestyle: 1 } }), US);
+    expect(thick.ok && thick.overlay.styles).toMatchObject({ line: { color: "#787b86", size: 2, style: "dashed", dashedValue: [1.5, 3] } });
+  });
+
+  it("takes a Fibonacci drawing's background and extension where TradingView recorded them", () => {
+    const points = [pt("2026-09-01", 1), pt("2026-09-02", 2)];
+    // TradingView keeps only what was changed; its defaults are the app's
+    const plain = convertDrawing(drawing("LineToolFibRetracement", points, {}), US);
+    expect(plain.ok && "extendData" in plain.overlay).toBe(false);
+    const changed = convertDrawing(drawing("LineToolFibRetracement", points, { fillBackground: false, transparency: 60, extendLines: true }), US);
+    expect(changed.ok && changed.overlay.extendData).toEqual({ background: false, transparency: 60, extendLeft: false, extendRight: true, oneColor: false });
+    const ext = convertDrawing(drawing("LineToolTrendBasedFibExtension", [...points, pt("2026-09-03", 1.5)], { extendLinesLeft: true }), US);
+    expect(ext.ok && ext.overlay.extendData).toMatchObject({ background: true, transparency: 80, extendLeft: true, extendRight: false });
+    // another tool's flags of the same name are not a Fibonacci setting
+    const channel = convertDrawing(drawing("LineToolFibChannel", [...points, pt("2026-09-03", 1.5)], { fillBackground: false }), US);
+    expect(channel.ok && "extendData" in channel.overlay).toBe(false);
   });
 
   it("leaves the default look when there is no colour", () => {

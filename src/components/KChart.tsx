@@ -38,7 +38,8 @@ import { LOG_AXIS } from "./log-axis";
 import { extensionOf, historyOf, record, redo, TREND_LINES, undo, withExtension, type History } from "./drawing-edit";
 import { drawingOf, specOf, type DrawingFlags } from "./drawing-spec";
 import { dashOf, drawingStyles, lineOf, withAlpha } from "./drawing-style";
-import { COMPARE_COLORS, MONO, OPEN_DRAWINGS, SANS, SCALED_DRAWINGS, TEXT_DRAWINGS, type ChartControl, type IndicatorSpec, type LegendValue } from "./chart-types";
+import { FIB_DRAWINGS, fibSettingsOf } from "./fib";
+import { COMPARE_COLORS, MEASURE_TOOL, MONO, OPEN_DRAWINGS, SANS, SCALED_DRAWINGS, TEXT_DRAWINGS, type ChartControl, type IndicatorSpec, type LegendValue } from "./chart-types";
 import { DrawingSettings, DrawingToolbar, TextEditor, type DrawingChange, type DrawingInfo } from "./DrawingToolbar";
 
 export interface DrawingModes {
@@ -67,7 +68,7 @@ interface KChartProps {
   refs: Record<string, RefSeries>;
   overlays: OverlaySpec[];
   onOverlaysChange: (overlays: OverlaySpec[]) => void;
-  /** Overlay name of the active drawing tool, null when not drawing */
+  /** Overlay name of the active drawing tool (or `MEASURE_TOOL`), null when not drawing */
   drawTool: string | null;
   /** A drawing finished or was abandoned, so the toolbar can go back to the cursor */
   onDrawDone: () => void;
@@ -93,6 +94,10 @@ interface KChartProps {
 
 /** Alert lines live in their own overlay group, apart from the drawings. */
 const ALERT_GROUP = "price_alerts";
+/** ...and so does the ruler of 测量, which is on the chart only until the next click. */
+const MEASURE_GROUP = "measure";
+/** An overlay that is one of the user's drawings. */
+const isDrawing = (o: Overlay) => o.groupId !== ALERT_GROUP && o.groupId !== MEASURE_GROUP;
 /** Drawings whose floating toolbar offers 添加警报 (the line's price is copied). */
 const PRICE_LINES = new Set(["horizontalStraightLine", "horizontalRayLine", "crossLine"]);
 /** KLineChart's `currentStep` once a drawing is finished. */
@@ -337,7 +342,7 @@ function distinctPoints(points: Partial<Point>[]): Partial<Point>[] {
 /** Finished drawings on the main pane; `except` is one being removed right now. */
 function serializeOverlays(chart: Chart, flags: Map<string, DrawingFlags>, except?: string): OverlaySpec[] {
   return chart.getOverlays().flatMap((o) => {
-    if (o.paneId !== CANDLE_PANE || o.id === except || o.groupId === ALERT_GROUP || o.currentStep !== DRAW_DONE) return [];
+    if (o.paneId !== CANDLE_PANE || o.id === except || !isDrawing(o) || o.currentStep !== DRAW_DONE) return [];
     const spec = specOf(o, flags);
     return spec ? [spec] : [];
   });
@@ -446,6 +451,8 @@ export function KChart({
   const historyRef = useRef<History<OverlaySpec[]>>(historyOf([]));
   const selectedRef = useRef<string | null>(null);
   const drawingRef = useRef<{ tool: string; id: string; overlay: Overlay | null; extendData?: unknown } | null>(null);
+  /** The ruler of 测量 while it is on the chart (the live object: its step tells whether it is still following the pointer) */
+  const measureRef = useRef<Overlay | null>(null);
   const onOverlaysChangeRef = useRef(onOverlaysChange);
   const onDrawDoneRef = useRef(onDrawDone);
   const onAutoScaleRef = useRef(onAutoScaleChange);
@@ -551,7 +558,7 @@ export function KChart({
     setSettings(null);
     setMenu(null);
     for (const o of chart.getOverlays({ paneId: CANDLE_PANE })) {
-      if (o.groupId !== ALERT_GROUP && o.currentStep === DRAW_DONE) chart.removeOverlay({ id: o.id });
+      if (isDrawing(o) && o.currentStep === DRAW_DONE) chart.removeOverlay({ id: o.id });
     }
     flagsRef.current = createDrawings(chart, h.present).flags;
     restoringRef.current = false;
@@ -671,6 +678,7 @@ export function KChart({
       scale: flagsRef.current.get(o.id)?.scale,
       timestamps: o.points.map((p) => p.timestamp ?? 0),
       extend: TREND_LINES.has(o.name) ? extensionOf(o.name, o.points) : null,
+      fib: FIB_DRAWINGS.has(o.name) ? fibSettingsOf(o.extendData) : null,
     };
   };
   const overlayById = (id: string) => chartRef.current?.getOverlays({ id })[0];
@@ -692,7 +700,7 @@ export function KChart({
     if (chart && o) setSettings({ id, info: infoOf(chart, o) });
   };
 
-  /** Style, text, point prices and dates, and a trend line's extension from the floating toolbar or the settings dialog. */
+  /** Style, text, point prices and dates, a trend line's extension and a Fibonacci drawing's settings from the floating toolbar or the settings dialog. */
   const changeDrawing = (id: string, change: DrawingChange) => {
     const chart = chartRef.current;
     const o = overlayById(id);
@@ -700,6 +708,10 @@ export function KChart({
     const line = lineOf(chart, o);
     const styles = drawingStyles(change.color ?? line.color, change.size ?? line.size, change.dash ?? dashOf(line));
     if (TEXT_DRAWINGS.has(o.name)) styles.text = { ...styles.text, size: change.textSize ?? textSizeOf(o) };
+    // a colour picked on the toolbar is the one colour of a Fibonacci drawing's levels (TradingView's 使用单一颜色)
+    const was = FIB_DRAWINGS.has(o.name) ? fibSettingsOf(o.extendData) : null;
+    const fib = was && (change.fib ?? (change.color ? { ...was, oneColor: true } : was));
+    const extendData = change.text ?? (fib && JSON.stringify(fib) !== JSON.stringify(was) ? fib : undefined);
     // before the override, which redraws it (new styles always do)
     if (change.scale) flagsRef.current.set(id, { ...flagsRef.current.get(id), scale: change.scale });
     // a date lands on the bar it falls in on this timeframe, in the empty space past the last bar too
@@ -713,7 +725,7 @@ export function KChart({
     // another scale moves a regression's points onto its fit there: KLineChart re-snaps them when it is given points
     const moved = Boolean(change.values || change.timestamps || change.extend || change.scale);
     if (name === o.name) {
-      chart.overrideOverlay({ id, styles, ...(change.text !== undefined ? { extendData: change.text } : {}), ...(moved ? { points } : {}) });
+      chart.overrideOverlay({ id, styles, ...(extendData !== undefined ? { extendData } : {}), ...(moved ? { points } : {}) });
       persistOverlays();
       return refreshSelected(id);
     }
@@ -824,6 +836,33 @@ export function KChart({
     if (!d || finishOpenDrawing(false)) return;
     drawingRef.current = null;
     chartRef.current?.removeOverlay({ id: d.id });
+  };
+
+  const clearMeasure = () => {
+    const m = measureRef.current;
+    measureRef.current = null;
+    if (m) chartRef.current?.removeOverlay({ id: m.id });
+  };
+  /**
+   * TradingView's 测量: the next click on the main pane starts the ruler, it follows the pointer,
+   * and a second click fixes it until the click or Esc after that. Not a drawing: no handlers that
+   * save or select, and lock all and hide all do not apply to it.
+   */
+  const startMeasure = () => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    clearMeasure();
+    const id = chart.createOverlay({
+      name: MEASURE_TOOL,
+      groupId: MEASURE_GROUP,
+      paneId: CANDLE_PANE,
+      mode: overlayModes().mode,
+      onDrawEnd: (e) => {
+        if (e.overlay.paneId !== CANDLE_PANE) clearMeasure();
+        onDrawDoneRef.current();
+      },
+    });
+    if (typeof id === "string") measureRef.current = chart.getOverlays({ id })[0] ?? null;
   };
 
   /** Each sub pane's height as created or last dragged, before `paneScaleRef` shrinks it to fit a short chart. */
@@ -988,13 +1027,36 @@ export function KChart({
       setTimeout(() => {
         const d = drawingRef.current;
         if (d?.overlay && d.overlay.paneId !== CANDLE_PANE) restartDrawing();
+        const m = measureRef.current;
+        if (m && m.currentStep !== DRAW_DONE && m.paneId !== CANDLE_PANE) startMeasure();
       }, 0);
     el.addEventListener("click", onClick, true);
     // a path or polyline ends on Enter; KLineChart itself finishes it on a double click
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Enter" && !e.defaultPrevented && finishOpenDrawing(true)) e.preventDefault();
+      if (e.key === "Escape") clearMeasure();
     };
     window.addEventListener("keydown", onKey);
+    /** Where a pointer is in the chart box, when it is over the main pane's plot. */
+    const onMainPane = (e: { clientX: number; clientY: number }): Coordinate | null => {
+      const box = el.getBoundingClientRect();
+      const x = e.clientX - box.left;
+      const y = e.clientY - box.top;
+      const pane = chart.getSize(CANDLE_PANE, "main");
+      return pane && x >= pane.left && x <= pane.left + pane.width && y >= pane.top && y <= pane.top + pane.height ? { x, y } : null;
+    };
+    // TradingView's 测量: a press takes a fixed ruler away, and Shift + click on the main pane starts
+    // one (not in the middle of a drawing); KLineChart's own click then places its first point.
+    // A pointer event, which a touch sends once: the mouse events a browser makes up after a tap
+    // would take away the ruler that tap had just fixed
+    const onMeasurePress = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      const m = measureRef.current;
+      if (m && m.currentStep !== DRAW_DONE) return;
+      clearMeasure();
+      if (e.shiftKey && !drawingRef.current && onMainPane(e)) startMeasure();
+    };
+    el.addEventListener("pointerdown", onMeasurePress, true);
     // the base of a price-axis drag or a vertical pan, before KLineChart's own mousedown takes it
     const onPress = () => {
       const range = candleAxis()?.getRange();
@@ -1012,12 +1074,9 @@ export function KChart({
         overlayMenuRef.current = false;
         return;
       }
-      const box = el.getBoundingClientRect();
-      const x = e.clientX - box.left;
-      const y = e.clientY - box.top;
-      const pane = chart.getSize(CANDLE_PANE, "main");
-      if (!pane || x < pane.left || x > pane.left + pane.width || y < pane.top || y > pane.top + pane.height) return;
-      const point = chart.convertFromPixel([{ x, y }], { paneId: CANDLE_PANE, absolute: true }) as Partial<{ value: number }>[];
+      const at = onMainPane(e);
+      if (!at) return;
+      const point = chart.convertFromPixel([at], { paneId: CANDLE_PANE, absolute: true }) as Partial<{ value: number }>[];
       const price = point[0]?.value;
       if (typeof price === "number" && Number.isFinite(price)) setMenu({ kind: "chart", price, x: e.clientX, y: e.clientY });
     };
@@ -1066,6 +1125,7 @@ export function KChart({
       el.removeEventListener("click", onClick, true);
       el.removeEventListener("mouseleave", onLeave);
       window.removeEventListener("keydown", onKey);
+      el.removeEventListener("pointerdown", onMeasurePress, true);
       el.removeEventListener("mousedown", onPress, true);
       el.removeEventListener("touchstart", onPress, true);
       el.removeEventListener("contextmenu", onContextMenu);
@@ -1077,6 +1137,7 @@ export function KChart({
       resize.disconnect();
       dispose(el);
       chartRef.current = null;
+      measureRef.current = null;
       setOverlayChart(null);
       // the drawings went with the chart: a chart made again (React's StrictMode mounts twice in dev) restores them
       restoredRef.current = false;
@@ -1269,7 +1330,7 @@ export function KChart({
     const chart = chartRef.current;
     if (!chart) return;
     for (const o of chart.getOverlays({ paneId: CANDLE_PANE })) {
-      if (o.id === drawingRef.current?.id || o.groupId === ALERT_GROUP) continue;
+      if (o.id === drawingRef.current?.id || !isDrawing(o)) continue;
       chart.overrideOverlay({ id: o.id, ...modesOf(o.id) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the three flags
@@ -1292,7 +1353,10 @@ export function KChart({
     const chart = chartRef.current;
     if (!chart) return;
     cancelDrawing();
-    if (drawTool) startDrawing(drawTool);
+    // a ruler that is fixed stays up when its tool is done; one still following the pointer goes with its tool
+    if (drawTool || measureRef.current?.currentStep !== DRAW_DONE) clearMeasure();
+    if (drawTool === MEASURE_TOOL) startMeasure();
+    else if (drawTool) startDrawing(drawTool);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one overlay per tool selection
   }, [drawTool]);
 
@@ -1311,7 +1375,7 @@ export function KChart({
     setMenu(null);
     setSettings(null);
     for (const o of chart.getOverlays({ paneId: CANDLE_PANE })) {
-      if (o.groupId !== ALERT_GROUP && o.currentStep === DRAW_DONE && o.id !== typing?.id) chart.removeOverlay({ id: o.id });
+      if (isDrawing(o) && o.currentStep === DRAW_DONE && o.id !== typing?.id) chart.removeOverlay({ id: o.id });
     }
     // the text being typed is already on the chart
     const rest = specs.filter((s) => {
@@ -1337,7 +1401,7 @@ export function KChart({
     drawingRef.current = null;
     select(null);
     // every drawing, not the alert lines
-    for (const o of chart.getOverlays({ paneId: CANDLE_PANE })) if (o.groupId !== ALERT_GROUP) chart.removeOverlay({ id: o.id });
+    for (const o of chart.getOverlays({ paneId: CANDLE_PANE })) if (isDrawing(o)) chart.removeOverlay({ id: o.id });
     flagsRef.current = new Map();
     restoringRef.current = false;
     historyRef.current = record(historyRef.current, []);

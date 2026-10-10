@@ -18,10 +18,12 @@ import {
   type OverlayTemplate,
   type Point,
 } from "klinecharts";
-import { SCALED_DRAWINGS } from "./chart-types";
-import { bendLine, bendPolygon, fitLine, fromSpace, levelPrice, makeWarp, movePrices, toSpace, type PriceScale, type Warp } from "./drawing-scale";
+import { MEASURE_TOOL, SCALED_DRAWINGS } from "./chart-types";
+import { bendLine, bendPolygon, bendRect, fitLine, fromSpace, levelPrice, makeWarp, movePrices, toSpace, type PriceScale, type Warp } from "./drawing-scale";
 import { lineOf, withAlpha } from "./drawing-style";
 import { BOX_HANDLES, boxHandleAt, channelHandles, dragBoxBy, dragChannel, drawable, yAt, type ChannelHandle } from "./drawing-edit";
+import { FIB_LEVELS, fibBands, fibSettingsOf, fibSpan } from "./fib";
+import { measureLines, pct, priceChangeText, volumeBetween } from "./measure";
 
 type Params = OverlayCreateFiguresCallbackParams<unknown>;
 type Figures = OverlayFigure[];
@@ -141,12 +143,7 @@ function bendFigure(f: OverlayFigure, warp: Warp): Figures {
   let attrs: object[];
   if (f.type === "line") attrs = list.flatMap((a) => bendLine(a.coordinates, warp).map((coordinates) => ({ coordinates })));
   else if (f.type === "polygon") attrs = list.map((a) => ({ coordinates: bendPolygon(a.coordinates, warp) })).filter((a) => a.coordinates.length > 2);
-  else if (f.type === "rect")
-    attrs = list.flatMap((a) => {
-      const top = warp.point({ x: a.x, y: a.y });
-      const bottom = warp.point({ x: a.x, y: a.y + a.height });
-      return top && bottom ? [{ ...a, y: Math.min(top.y, bottom.y), height: Math.abs(bottom.y - top.y) }] : [];
-    });
+  else if (f.type === "rect") attrs = list.flatMap((a) => bendRect(a, warp) ?? []);
   // texts, circles and arcs go with their anchor
   else
     attrs = list.flatMap((a) => {
@@ -160,8 +157,6 @@ function bendFigure(f: OverlayFigure, warp: Warp): Figures {
 
 const precisionOf = (chart: Chart) => chart.getSymbol()?.pricePrecision ?? 2;
 const fmt = (chart: Chart, v: number) => v.toLocaleString("en-US", { minimumFractionDigits: precisionOf(chart), maximumFractionDigits: precisionOf(chart) });
-const signed = (v: number, text: string) => (v > 0 ? `+${text}` : text);
-const pct = (from: number, to: number) => (from ? ((to - from) / Math.abs(from)) * 100 : 0);
 
 function fontOf(chart: Chart) {
   return chart.getStyles().overlay.text.family;
@@ -188,13 +183,19 @@ function tag(p: Params, x: number, y: number, text: string, align: CanvasTextAli
   };
 }
 
-/** Several lines in one box, centred on x; `top` is the box's top edge. */
-function infoBox(p: Params, x: number, top: number, lines: string[], color?: string): Figures {
+const INFO_LINE = 16;
+const infoBoxHeight = (lines: number) => lines * INFO_LINE + 6;
+
+/** Several lines in one box, centred on x; `top` is the box's top edge. `inside` keeps the whole box on the pane. */
+function infoBox(p: Params, at: number, y: number, lines: string[], color?: string, inside = false): Figures {
   const size = 11;
   const family = fontOf(p.chart);
   const width = Math.max(...lines.map((t) => utils.calcTextWidth(t, size, "normal", family))) + 12;
-  const lineHeight = 16;
-  const height = lines.length * lineHeight + 6;
+  const lineHeight = INFO_LINE;
+  const height = infoBoxHeight(lines.length);
+  const within = (v: number, min: number, max: number) => (inside ? Math.max(min, Math.min(v, max)) : v);
+  const x = within(at, width / 2 + 4, p.bounding.width - width / 2 - 4);
+  const top = within(y, 4, p.bounding.height - height - 4);
   const bg = color ?? lineOf(p.chart, p.overlay).color;
   return [
     { type: "rect", attrs: { x: x - width / 2, y: top, width, height }, styles: { style: "fill", color: withAlpha(bg, 0.9), borderRadius: 4 }, ignoreEvent: true },
@@ -236,9 +237,7 @@ function span(p: Params, a: Partial<Point>, b: Partial<Point>): string {
   return `${bars} 根K线 · ${days} 天`;
 }
 
-function priceChange(p: Params, from: number, to: number): string {
-  return `${signed(to - from, fmt(p.chart, to - from))} (${signed(to - from, pct(from, to).toFixed(2))}%)`;
-}
+const priceChange = (p: Params, from: number, to: number) => priceChangeText(from, to, precisionOf(p.chart));
 
 // ---------------------------------------------------------------------------- handles
 
@@ -328,7 +327,6 @@ type Template = OverlayTemplate<unknown>;
 const base = { needDefaultPointFigure: true, needDefaultXAxisFigure: true, needDefaultYAxisFigure: true } as const;
 
 const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
-const FIB_EXT = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.618, 2.618];
 
 const lines: Template[] = [
   // KLineChart's own straight lines, again here so they follow their drawing's scale
@@ -526,25 +524,43 @@ function snapToRegression(id: string, { points }: OverlayPerformEventParams) {
   b.value = fit.price(ib);
 }
 
-const fibLevelText = (p: Params, level: number, value: number) => `${level} (${fmt(p.chart, value)})`;
+/**
+ * TradingView's levels of a retracement or an extension, between the x of two of its points (on to
+ * the pane's edge where its settings extend them): a line and a "0.618 (123.45)" label per level, in
+ * the level's colour or all in the drawing's own, over the bands between them. The labels sit left
+ * of the lines, off the fill; on lines extended to the left edge they sit on the lines there.
+ */
+function fibLevels(p: Params, xa: number, xb: number, price: (level: number) => number): Figures {
+  const s = fibSettingsOf(p.overlay.extendData);
+  const own = lineOf(p.chart, p.overlay).color;
+  const [x0, x1] = fibSpan(xa, xb, s, p.bounding.width);
+  const levels = FIB_LEVELS.map(({ level, color }) => {
+    const value = price(level);
+    return { level, value, y: p.yAxis!.convertToPixel(value), color: s.oneColor ? own : color };
+  });
+  return [
+    ...(s.background
+      ? fibBands(levels).map(({ y, height, color }) => ({ type: "rect", attrs: { x: x0, y, width: x1 - x0, height }, styles: fillOnly(withAlpha(color, 1 - s.transparency / 100)), ignoreEvent: true }))
+      : []),
+    ...levels.flatMap(({ level, value, y, color }) => {
+      const text = `${level} (${fmt(p.chart, value)})`;
+      return [line([{ x: x0, y }, { x: x1, y }], { color }), s.extendLeft ? plain(p, 2, y, text, "left", "bottom", color) : plain(p, x0 - 4, y, text, "right", "middle", color)];
+    }),
+  ];
+}
 
 const fib: Template[] = [
-  // KLineChart's own retracement, with the levels a share of the move in the drawing's scale
+  // KLineChart's own retracement, as TradingView draws it: level 0 at the second point, 1 at the
+  // first and on past it, every level a share of the move in the drawing's scale
   {
     name: "fibonacciLine",
     totalStep: 3,
     ...base,
     createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
       const [pa, pb] = p.overlay.points;
-      if (!p.coordinates[1] || pa.value === undefined || pb.value === undefined || !p.yAxis) return [];
-      const levels = [1, 0.786, 0.618, 0.5, 0.382, 0.236, 0].map((level) => {
-        const value = levelPrice(spaceOf(p), pb.value!, pa.value!, level);
-        return { level, value, y: p.yAxis!.convertToPixel(value) };
-      });
-      return [
-        { type: "line", attrs: levels.map(({ y }) => ({ coordinates: [{ x: 0, y }, { x: p.bounding.width, y }] })) },
-        { type: "text", attrs: levels.map(({ level, value, y }) => ({ x: 0, y, text: `${fmt(p.chart, value)} (${(level * 100).toFixed(1)}%)`, baseline: "bottom" })), ignoreEvent: true },
-      ];
+      if (!b || pa.value === undefined || pb.value === undefined || !p.yAxis) return [];
+      return [...fibLevels(p, a.x, b.x, (level) => levelPrice(spaceOf(p), pb.value!, pa.value!, level)), line([a, b], DASHED)];
     },
   },
   {
@@ -557,15 +573,8 @@ const fib: Template[] = [
       if (!b) return [];
       const guide = line(c ? [a, b, c] : [a, b], DASHED);
       if (!c || !p.yAxis) return [guide];
-      const x1 = Math.max(b.x, c.x) + Math.abs(b.x - a.x);
-      return [
-        guide,
-        ...FIB_EXT.flatMap((level) => {
-          const value = levelPrice(spaceOf(p), pa.value ?? 0, pb.value ?? 0, level, pc.value ?? 0);
-          const y = p.yAxis!.convertToPixel(value);
-          return [line([{ x: c.x, y }, { x: x1, y }]), plain(p, c.x, y, fibLevelText(p, level, value))];
-        }),
-      ];
+      // the move from the first point to the second, counted from the third; the levels span the last two
+      return [...fibLevels(p, b.x, c.x, (level) => levelPrice(spaceOf(p), pa.value ?? 0, pb.value ?? 0, level, pc.value ?? 0)), guide];
     },
   },
   {
@@ -847,7 +856,50 @@ function position(name: string, long: boolean): Template {
   };
 }
 
+/** Every figure of a mark that is only looked at: the pointer goes through it. */
+const inert = (figures: Figures): Figures => figures.map((f) => ({ ...f, ignoreEvent: true }));
+
 const measure: Template[] = [
+  // TradingView's 测量 (Shift + click): a ruler from the first click to the pointer, in the up or
+  // down colour by where the price went. KChart puts it up and takes it down; it is never saved.
+  {
+    name: MEASURE_TOOL,
+    totalStep: 3,
+    needDefaultPointFigure: false,
+    needDefaultXAxisFigure: false,
+    needDefaultYAxisFigure: false,
+    createPointFigures: (p) => {
+      const [a, b] = p.coordinates;
+      if (!b) return [];
+      const [pa, pb] = p.overlay.points;
+      const [from, to] = [pa.value ?? 0, pb.value ?? 0];
+      const color = to >= from ? theme.up : theme.down;
+      const [ia, ib] = [dataIndexOf(p.chart, pa.timestamp ?? 0), dataIndexOf(p.chart, pb.timestamp ?? 0)];
+      const lines = measureLines(
+        {
+          from,
+          to,
+          bars: ib - ia,
+          days: Math.round(((pb.timestamp ?? 0) - (pa.timestamp ?? 0)) / 86400000),
+          volume: volumeBetween(p.chart.getDataList().map((d) => d.volume), ia, ib),
+        },
+        precisionOf(p.chart),
+      );
+      const cx = (a.x + b.x) / 2;
+      const cy = (a.y + b.y) / 2;
+      const stroke = { color, size: 1, style: "solid" };
+      // the box goes past the end the price went to: above a rise, below a fall
+      const top = b.y <= a.y ? Math.min(a.y, b.y) - 8 - infoBoxHeight(lines.length) : Math.max(a.y, b.y) + 8;
+      return inert([
+        { type: "rect", attrs: { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) }, styles: fillOnly(withAlpha(color, 0.18)) },
+        line([{ x: cx, y: a.y }, { x: cx, y: b.y }], stroke),
+        line(arrowHead({ x: cx, y: a.y }, { x: cx, y: b.y }, 8), stroke),
+        line([{ x: a.x, y: cy }, { x: b.x, y: cy }], stroke),
+        line(arrowHead({ x: a.x, y: cy }, { x: b.x, y: cy }, 8), stroke),
+        ...infoBox(p, cx, top, lines, color, true),
+      ]);
+    },
+  },
   position("longPosition", true),
   position("shortPosition", false),
   {

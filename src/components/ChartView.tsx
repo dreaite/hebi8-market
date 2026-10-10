@@ -40,12 +40,13 @@ import {
   IconPencil,
   IconPlus,
   IconRefresh,
+  IconRuler,
   IconSearch,
   IconTrash,
   IconWatchlist,
 } from "./chart-icons";
 import { renderSnapshot, snapshotFileName } from "./chart-snapshot";
-import { COMPARE_COLORS, DRAW_GROUPS, DRAW_TOOLS, OPEN_DRAWINGS, RANGES, type ChartControl, type IndicatorSpec } from "./chart-types";
+import { COMPARE_COLORS, DRAW_GROUPS, DRAW_TOOLS, MEASURE_TOOL, OPEN_DRAWINGS, RANGES, type ChartControl, type IndicatorSpec } from "./chart-types";
 import { DrawToolGroups, GroupMenuItems } from "./DrawToolGroups";
 import { AlertDialog, AlertLoginDialog } from "./AlertDialog";
 import { AlertsPanel } from "./AlertsPanel";
@@ -492,7 +493,9 @@ export function ChartView({
   const forcedPercent = compare.some((c) => c.mode === "percent" && !hiddenCompares.includes(c.key));
   const percentOn = forcedPercent || pctAxis;
   const compareWithHidden = useMemo(() => compare.map((c) => ({ ...c, hidden: hiddenCompares.includes(c.key) })), [compare, hiddenCompares]);
-  const drawLabel = DRAW_TOOLS.find((t) => t.name === drawTool)?.label;
+  const drawLabel = drawTool === MEASURE_TOOL ? "测量" : DRAW_TOOLS.find((t) => t.name === drawTool)?.label;
+  // TradingView's 测量 is not a drawing: starting it leaves hidden drawings hidden and no group remembers it
+  const toggleMeasure = () => setDrawTool((cur) => (cur === MEASURE_TOOL ? null : MEASURE_TOOL));
   // drawings hidden one by one (the floating toolbar's eye) are shown again by the same button as "hide all"
   const someHidden = drawing.hidden || chartState.overlays.some((o) => o.hidden);
   const toggleHidden = () => {
@@ -681,6 +684,12 @@ export function ChartView({
           close();
         }}>
         <IconCursor /> 十字光标
+      </button>
+      <button role="menuitem" className="menu-item flex items-center gap-2" onClick={() => {
+          toggleMeasure();
+          close();
+        }}>
+        <IconRuler /> 测量{drawTool === MEASURE_TOOL && " ✓"}
       </button>
       {DRAW_GROUPS.map((g) => (
         <GroupMenuItems
@@ -918,6 +927,10 @@ export function ChartView({
             <IconCursor />
           </button>
           <DrawToolGroups active={drawTool} remembered={groupTools} onPick={(tool) => chooseTool(tool)} />
+          <span className="tb-sep-h" />
+          <button type="button" onClick={toggleMeasure} aria-pressed={drawTool === MEASURE_TOOL} className="tb-btn" title="测量 · Shift + 点击" aria-label="测量">
+            <IconRuler />
+          </button>
           <span className="tb-sep-h" />
           <button
             type="button"

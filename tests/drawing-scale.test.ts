@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bend, bendLine, bendPolygon, clipPolygon, clipSegment, fitLine, levelPrice, makeWarp, movePrices, type AxisMap, type PriceScale } from "@/components/drawing-scale";
+import { bend, bendLine, bendPolygon, bendRect, clipPolygon, clipSegment, fitLine, levelPrice, makeWarp, movePrices, type AxisMap, type PriceScale } from "@/components/drawing-scale";
 
 /** A pane 600px high showing prices lo…hi on a linear or log axis, like KLineChart's. */
 function axisOf(scale: PriceScale, lo: number, hi: number, round = false): AxisMap {
@@ -201,5 +201,25 @@ describe("a drawing on an axis of the other scale", () => {
     );
     expect(band.length).toBeGreaterThan(8);
     expect(band[0].y).toBeCloseTo(axis.toPixel(10));
+  });
+
+  it("carries a level band's top and bottom over", () => {
+    const axis = axisOf("linear", 0, 1100);
+    const warp = makeWarp("log", axis, [10, 1000])!;
+    const rect = bendRect({ x: 100, y: warp.toY(1000), width: 300, height: warp.toY(100) - warp.toY(1000) }, warp)!;
+    expect(rect).toMatchObject({ x: 100, width: 300 });
+    expect(rect.y).toBeCloseTo(axis.toPixel(1000));
+    expect(rect.y + rect.height).toBeCloseTo(axis.toPixel(100));
+  });
+
+  it("keeps the part of a band above the prices a log axis cannot show", () => {
+    // a linear drawing's levels from 50 down to -100 on a log axis showing 10…1000
+    const axis = axisOf("log", 10, 1000);
+    const warp = makeWarp("linear", axis, [100, 200])!;
+    const rect = bendRect({ x: 0, y: warp.toY(50), width: 10, height: warp.toY(-100) - warp.toY(50) }, warp)!;
+    expect(rect.y).toBeCloseTo(axis.toPixel(50));
+    expect(rect.y + rect.height).toBeGreaterThan(axis.height);
+    // ...and nothing of one that is all below them
+    expect(bendRect({ x: 0, y: warp.toY(-50), width: 10, height: warp.toY(-100) - warp.toY(-50) }, warp)).toBeNull();
   });
 });

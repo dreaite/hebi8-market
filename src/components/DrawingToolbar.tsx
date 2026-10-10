@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { PriceScale } from "./drawing-scale";
 import type { LineDash } from "./drawing-style";
 import { editedFields, type Extension } from "./drawing-edit";
+import type { FibSettings } from "./fib";
 import { Dialog } from "./Dialog";
 import { DRAW_ICONS, IconAlarm, IconCaret, IconEye, IconGear, IconLineDash, IconLineWidth, IconLock, IconText, IconTrash } from "./chart-icons";
 import { DRAW_TOOLS, SCALED_DRAWINGS, TEXT_DRAWINGS } from "./chart-types";
@@ -23,6 +24,8 @@ export interface DrawingInfo {
   timestamps: number[];
   /** 向左延长 / 向右延长 of a trend line; null for other drawings */
   extend: Extension | null;
+  /** Background, extension and colours of a Fibonacci retracement or extension; null for other drawings */
+  fib: FibSettings | null;
 }
 
 export interface DrawingChange {
@@ -37,6 +40,7 @@ export interface DrawingChange {
   /** UTC midnight of each point's date; KChart puts it on the bar that date falls in */
   timestamps?: (number | undefined)[];
   extend?: Extension;
+  fib?: FibSettings;
 }
 
 /** TradingView's colour picker: a row of hues and a row of greys. */
@@ -204,7 +208,7 @@ export function DrawingToolbar({
 /** A point's date as the date field shows it (UTC, like the chart). */
 const dayOf = (timestamp: number) => new Date(timestamp).toISOString().slice(0, 10);
 
-/** The 设置 dialog of a drawing: style, its text (text drawings), a trend line's extension and the date and price of each point. */
+/** The 设置 dialog of a drawing: style, its text (text drawings), a trend line's extension, a Fibonacci drawing's background and extension, and the date and price of each point. */
 export function DrawingSettings({ info, precision, onApply, onClose }: { info: DrawingInfo; precision: number; onApply: (change: DrawingChange) => void; onClose: () => void }) {
   const isText = TEXT_DRAWINGS.has(info.name);
   const [color, setColor] = useState(info.color);
@@ -218,7 +222,21 @@ export function DrawingSettings({ info, precision, onApply, onClose }: { info: D
   const shownDays = info.timestamps.map(dayOf);
   const [days, setDays] = useState(shownDays);
   const [extend, setExtend] = useState(info.extend);
+  const [fib, setFib] = useState(info.fib);
   const row = "flex items-center justify-between gap-4";
+  const extendRow = (left: boolean, right: boolean, set: (side: "left" | "right", on: boolean) => void) => (
+    <div className={row}>
+      <span className="text-muted">延长</span>
+      <span className="flex gap-3">
+        {(["left", "right"] as const).map((side) => (
+          <label key={side} className="flex items-center gap-1.5">
+            <input type="checkbox" checked={side === "left" ? left : right} onChange={(e) => set(side, e.target.checked)} />
+            {side === "left" ? "向左延长" : "向右延长"}
+          </label>
+        ))}
+      </span>
+    </div>
+  );
 
   return (
     <Dialog title={toolLabel(info.name)} onClose={onClose} className="max-w-[400px]">
@@ -237,14 +255,28 @@ export function DrawingSettings({ info, precision, onApply, onClose }: { info: D
             ...(nums && valid ? { values: nums } : {}),
             ...(times ? { timestamps: times } : {}),
             ...(extend && (extend.left !== info.extend?.left || extend.right !== info.extend?.right) ? { extend } : {}),
+            ...(fib ? { fib } : {}),
             ...(scale !== info.scale ? { scale } : {}),
           });
         }}
       >
         <div className={row}>
           <span className="text-muted">颜色</span>
-          <Swatches value={color} onPick={setColor} />
+          <Swatches
+            value={color}
+            onPick={(c) => {
+              setColor(c);
+              // a colour picked for a Fibonacci drawing is the one colour of all its levels, as on TradingView
+              if (fib) setFib({ ...fib, oneColor: true });
+            }}
+          />
         </div>
+        {fib && (
+          <label className="flex items-center justify-end gap-1.5" title="不勾选时每一档用自己的颜色，上面的颜色只用于两点间的虚线">
+            <input type="checkbox" checked={fib.oneColor} onChange={(e) => setFib({ ...fib, oneColor: e.target.checked })} />
+            使用单一颜色
+          </label>
+        )}
         {isText ? (
           <>
             <label className={row}>
@@ -286,18 +318,31 @@ export function DrawingSettings({ info, precision, onApply, onClose }: { info: D
             </div>
           </>
         )}
-        {extend && (
-          <div className={row}>
-            <span className="text-muted">延长</span>
-            <span className="flex gap-3">
-              {(["left", "right"] as const).map((side) => (
-                <label key={side} className="flex items-center gap-1.5">
-                  <input type="checkbox" checked={extend[side]} onChange={(e) => setExtend({ ...extend, [side]: e.target.checked })} />
-                  {side === "left" ? "向左延长" : "向右延长"}
-                </label>
-              ))}
-            </span>
-          </div>
+        {extend && extendRow(extend.left, extend.right, (side, on) => setExtend({ ...extend, [side]: on }))}
+        {fib && (
+          <>
+            <div className={row}>
+              <label className="flex items-center gap-1.5">
+                <input type="checkbox" checked={fib.background} onChange={(e) => setFib({ ...fib, background: e.target.checked })} />
+                背景
+              </label>
+              <label className="flex items-center gap-2">
+                <span className="text-muted">透明度</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  className="w-28"
+                  disabled={!fib.background}
+                  value={fib.transparency}
+                  onChange={(e) => setFib({ ...fib, transparency: Number(e.target.value) })}
+                />
+                <span className="w-9 text-right font-mono text-xs">{fib.transparency}%</span>
+              </label>
+            </div>
+            {extendRow(fib.extendLeft, fib.extendRight, (side, on) => setFib({ ...fib, [side === "left" ? "extendLeft" : "extendRight"]: on }))}
+          </>
         )}
         {SCALED_DRAWINGS.has(info.name) && (
           <div className={row}>

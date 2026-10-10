@@ -255,6 +255,12 @@ export const DRAW_GROUPS: DrawGroup[] = [
 
 export const DRAW_TOOLS: DrawTool[] = DRAW_GROUPS.flatMap((g) => g.sections.flatMap((s) => s.tools));
 
+/**
+ * TradingView's 测量 (Shift + click, or the ruler on the left toolbar): an overlay like the drawings
+ * while it is up, but not one of them: never saved, selected or undone.
+ */
+export const MEASURE_TOOL = "measure";
+
 /** Tools whose floating toolbar edits text (font size and the text) instead of line width and dash. */
 export const TEXT_DRAWINGS = new Set(["text", "simpleAnnotation"]);
 

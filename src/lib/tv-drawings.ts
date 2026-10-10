@@ -5,6 +5,7 @@
  * without the network.
  */
 import { drawingStyles, type LineDash } from "@/components/drawing-style";
+import { FIB_DEFAULTS, FIB_DRAWINGS, type FibSettings } from "@/components/fib";
 import { hash6 } from "./symbols";
 import { DAY, localDay } from "./time";
 import type { OverlaySpec } from "./vault";
@@ -49,6 +50,11 @@ const STATE_KEYS = [
   "fontsize",
   "extendLeft",
   "extendRight",
+  "extendLines",
+  "extendLinesLeft",
+  "fillBackground",
+  "transparency",
+  "levelsStyle",
   "visible",
   "frozen",
   "stopLevel",
@@ -274,19 +280,37 @@ const LINE_COLORS = ["linecolor", "color", "trendline"];
 const TEXT_COLORS = ["color", "textcolor", "textColor", "linecolor"];
 const LABEL_COLORS = ["backgroundColor", "markerColor", "bordercolor", "borderColor", "linecolor", "color"];
 
-function stylesOf(state: Record<string, unknown>, colorKeys: string[], textSize: boolean): OverlaySpec["styles"] | undefined {
+function stylesOf(state: Record<string, unknown>, colorKeys: string[], textSize: boolean, levels: boolean): OverlaySpec["styles"] | undefined {
   const trend = isObj(state.trendline) ? state.trendline : {};
+  // a Fibonacci drawing's width and dash are those of its level lines; its trend line only gives the colour
+  const stroke = !levels ? trend : isObj(state.levelsStyle) ? state.levelsStyle : {};
   let color: string | null = null;
   for (const k of colorKeys) {
     color = hexColor(k === "trendline" ? trend.color : state[k]);
     if (color) break;
   }
   if (!color) return undefined;
-  const width = Number(state.linewidth ?? trend.linewidth ?? 1);
-  const styles = drawingStyles(color, Math.min(4, Math.max(1, Math.round(Number.isFinite(width) ? width : 1))), dashOf(state.linestyle ?? trend.linestyle));
+  const width = Number(state.linewidth ?? stroke.linewidth ?? 1);
+  const styles = drawingStyles(color, Math.min(4, Math.max(1, Math.round(Number.isFinite(width) ? width : 1))), dashOf(state.linestyle ?? stroke.linestyle));
   const size = Number(state.fontsize);
   if (textSize && Number.isFinite(size) && size > 0) styles.text = { ...styles.text, size };
   return styles;
+}
+
+/**
+ * A Fibonacci retracement's or extension's background and extension, where TradingView recorded
+ * them (it keeps only what was changed from its defaults, which are this app's too): `extendLines`
+ * is to the right. Undefined when none was.
+ */
+function fibOf(state: Record<string, unknown>): FibSettings | undefined {
+  const { fillBackground, transparency, extendLines, extendLinesLeft } = state;
+  const changed: Partial<FibSettings> = {
+    ...(typeof fillBackground === "boolean" ? { background: fillBackground } : {}),
+    ...(typeof transparency === "number" && transparency >= 0 && transparency <= 100 ? { transparency } : {}),
+    ...(typeof extendLinesLeft === "boolean" ? { extendLeft: extendLinesLeft } : {}),
+    ...(typeof extendLines === "boolean" ? { extendRight: extendLines } : {}),
+  };
+  return Object.keys(changed).length ? { ...FIB_DEFAULTS, ...changed } : undefined;
 }
 
 // ---------------------------------------------------------------------------- types
@@ -470,11 +494,13 @@ export function convertDrawing(d: TvDrawing, ctx: DrawingContext): Converted {
   if (typeof s === "string") return { ok: false, reason: s };
 
   const overlay: OverlaySpec = { name: s.name, points: s.points.map((p) => (p.timestamp % (DAY * 1000) ? toDay(p, ctx.days) : p)) };
-  const styles = stylesOf(d.state, map?.colors ?? LINE_COLORS, kind === "text");
+  const styles = stylesOf(d.state, map?.colors ?? LINE_COLORS, kind === "text", FIB_DRAWINGS.has(s.name));
   if (styles) overlay.styles = styles;
   if (d.state.frozen === true) overlay.lock = true;
   if (d.state.visible === false) overlay.hidden = true;
   if (kind === "text") overlay.extendData = text;
+  const fib = FIB_DRAWINGS.has(s.name) ? fibOf(d.state) : undefined;
+  if (fib) overlay.extendData = fib;
   return { ok: true, overlay };
 }
 

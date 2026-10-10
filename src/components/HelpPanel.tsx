@@ -41,6 +41,7 @@ const SHORTCUTS: { group: string; rows: [string, string][] }[] = [
       ["Alt+J", "水平射线"],
       ["Alt+V", "垂直线"],
       ["Alt+F", "斐波那契回撤"],
+      ["Shift+点击", "测量：涨跌幅、K 线数、成交量（再点一下固定，之后点击或 Esc 消失）"],
       ["Delete  ·  Backspace", "删除选中的画线"],
       ["Ctrl/Cmd+Z  ·  Ctrl/Cmd+Y", "撤销 / 重做画线的改动"],
       ["Alt+A", "新建警报（右键主图：在该价位添加）"],

@@ -208,3 +208,16 @@ export function bendPolygon(cs: C[], warp: Warp): C[] {
   const poly = clipPolygon(cs, warp.box);
   return poly.flatMap((c, i) => bend(c, poly[(i + 1) % poly.length], warp.point).slice(0, -1));
 }
+
+/**
+ * A rect of the drawing's space on the axis: the part of it the pane shows, its top and bottom
+ * carried over (a level band keeps its levels where one of them is at a price the axis cannot show).
+ * Null when none of it is on the pane.
+ */
+export function bendRect<T extends { x: number; y: number; height: number }>(r: T, warp: Warp): T | null {
+  const top = Math.max(r.y, warp.box.top);
+  const bottom = Math.min(r.y + r.height, warp.box.bottom);
+  if (top >= bottom) return null;
+  const [a, b] = [top, bottom].map((y) => warp.point({ x: r.x, y })!.y);
+  return { ...r, y: Math.min(a, b), height: Math.abs(b - a) };
+}

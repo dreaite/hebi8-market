@@ -87,6 +87,13 @@ export const IconText = (p: IconProps) => (
   </Svg>
 );
 
+export const IconRuler = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M11.5 2.5 15.5 6.5 6.5 15.5 2.5 11.5z" />
+    <path d="M5 9l1.5 1.5M7 7l2 2M9 5l1.5 1.5" />
+  </Svg>
+);
+
 export const IconMagnet = (p: IconProps) => (
   <Svg {...p}>
     <path d="M4 3v6a5 5 0 0 0 10 0V3h-3v6a2 2 0 0 1-4 0V3z" />
