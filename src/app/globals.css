@@ -475,11 +475,40 @@ tr[data-drop="into"] > td {
   display: none;
 }
 
-/* A toolbar row that scrolls sideways on narrow screens without showing a scrollbar. */
-.scroll-row {
+/*
+ * Scrollbars inside the page (side panels, dialogs, menus, tables) are thin and take the theme's
+ * colors: 8px wide, no track, a 4px thumb that stands out more under the pointer. Only the -webkit-
+ * parts are set: Chrome ignores them on an element whose scrollbar-width or scrollbar-color computes
+ * to anything but auto. The page's own scrollbar stays the browser's, so the room use-scroll-lock.ts
+ * keeps for it is still the right size.
+ */
+:not(html, body)::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+:not(html, body)::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--fg) 22%, transparent);
+  background-clip: padding-box;
+}
+:not(html, body)::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--fg) 40%, transparent);
+}
+:not(html, body)::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/*
+ * A toolbar row that scrolls sideways on narrow screens without showing a scrollbar. The 42px side
+ * strips have no room for one either: the drawing tools scroll bare in a short window.
+ */
+.scroll-row,
+[role="toolbar"][aria-orientation="vertical"] {
   scrollbar-width: none;
 }
-.scroll-row::-webkit-scrollbar {
+.scroll-row::-webkit-scrollbar,
+[role="toolbar"][aria-orientation="vertical"]::-webkit-scrollbar {
   display: none;
 }
 

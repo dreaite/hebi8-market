@@ -750,6 +750,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 - 次要文字最小 11px；浅色 `--green: #138a4b`（白底 ≥ 4.5:1），深色不变。
 - 所有可聚焦元素统一 `:focus-visible` 2px accent 外框。
 - 状态文字（已保存等）用 muted，不用 accent。
+- 滚动条：页面内部的滚动区（图表页右侧面板、弹窗、抽屉、菜单、搜索结果、横向滚动的表格）的滚动条占 8px 宽、无轨道，滑块可见宽度 4px（两边各 2px 透明边框）、圆角，颜色取 `--fg` 的 22%，悬停 40%（更明显），深浅色跟主题走。只写 `::-webkit-scrollbar` 一套，在 Chrome / Edge / 桌面 Safari / Android Chrome 上生效；iOS Safari 对这组伪元素只认 `display: none`，宽度和颜色不生效，保持系统样式。不同时设 `scrollbar-width` / `scrollbar-color`：Chrome 里这两个属性的计算值只要不是 `auto`，webkit 伪元素在那个元素上就不生效。页面自己的滚动条保持浏览器原生，弹层锁滚动时留的宽度（`use-scroll-lock.ts`）不受影响。图表页的工具栏行（`.scroll-row`）和两侧 42px 的竖向工具栏（`[role="toolbar"][aria-orientation="vertical"]`）不显示滚动条。
 - 全站按钮：`.btn` 纯文本（hover 底色）、`.btn-primary`（实心 fg 底 + bg 字）、`.btn-secondary`（1px line 描边）；分段 `.seg`；输入 `.input`；徽标 `.badge`；菜单 `.menu`。
 - 图表页工具栏：`.tb-btn`（30px 热区、fg 色图标或图标 + 短文字、hover 浅底，按下 / 展开时 fg 11% 实底）、`.tb-sep` / `.tb-sep-h` 1px 分隔；图标是 `chart-icons.tsx` 里的 18px 线性 SVG，不引入图标库。
 
