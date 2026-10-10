@@ -797,7 +797,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 ### 5.8 帮助抽屉与应用内反馈
 
-**目标**：几秒钟内在应用里把问题报给 GitHub，issue 的作者是报告的人自己，且带机器可读的上下文，以后让自动化识别并修复简单问题。任何人自己部署的 hebi8 都能把问题报到 `dreaite/hebi8-market`：实例里不放、也不存任何 App 密钥。
+**目标**：几秒钟内在应用里把问题报给 GitHub，issue 的作者是报告的人自己，且带机器可读的上下文，以后让自动化识别并修复简单问题。任何人自己部署的 hebi8 都能把问题报到 `Hebi8/hebi8-market`：实例里不放、也不存任何 App 密钥。
 
 **入口**：页头最右的圆形「?」，或焦点不在输入框时按 `?`（Shift+/）；图表页全屏时页头隐藏，顶栏全屏按钮旁出现同样的「?」。右侧抽屉 380px（≤768px 为底部抽屉 85dvh），两个页签「使用 / 反馈」，上次的页签记在 localStorage（`hebi8:help:tab`，「使用」的值是 `project`，存着已经去掉的 `notify` 时回到「使用」）。Esc、点外面、再按 `?` 关闭；抽屉内的按键不冒泡到页面（图表的 Space / 方向键 / 字母搜索不会在背后触发）。`?help=feedback|project` 打开抽屉并从地址栏去掉这个参数。全程不用原生 alert / confirm / prompt（会退出全屏）。
 
@@ -813,8 +813,8 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 | 常量 | 默认 | 环境变量 |
 |---|---|---|
-| `FEEDBACK_REPO` | `dreaite/hebi8-market` | `HEBI8_FEEDBACK_REPO`（须形如 `owner/name`，否则用默认） |
-| `GITHUB_APP_CLIENT_ID` | `"Iv23liCniWEUtlDruFJa"`（dreaite 组织的 hebi8-market App） | `HEBI8_GITHUB_CLIENT_ID`（`off` 关闭应用内登录） |
+| `FEEDBACK_REPO` | `Hebi8/hebi8-market` | `HEBI8_FEEDBACK_REPO`（须形如 `owner/name`，否则用默认） |
+| `GITHUB_APP_CLIENT_ID` | `"Iv23liCniWEUtlDruFJa"`（Hebi8 组织的 hebi8-market App） | `HEBI8_GITHUB_CLIENT_ID`（`off` 关闭应用内登录） |
 
 client id 不是秘密（device flow 的设计就是给拿不住密钥的客户端用的），写在源码里即可。
 
@@ -885,11 +885,11 @@ client id 不是秘密（device flow 的设计就是给拿不住密钥的客户�
 
 **仓库 owner 的一次性设置**：
 
-1. 用预填好的链接在 dreaite 组织下注册 App（名字、描述、主页、公开、关闭 webhook、Issues 读写；Metadata 只读是自动带的）：
-   `https://github.com/organizations/dreaite/settings/apps/new?name=hebi8-market&description=hebi8%20market%20%E7%9A%84%E5%BA%94%E7%94%A8%E5%86%85%E5%8F%8D%E9%A6%88%EF%BC%9A%E7%94%A8%E4%BD%A0%E8%87%AA%E5%B7%B1%E7%9A%84%20GitHub%20%E8%B4%A6%E5%8F%B7%E5%9C%A8%20dreaite%2Fhebi8-market%20%E4%B8%8A%E6%8F%90%E4%BA%A4%20issue&url=https%3A%2F%2Fgithub.com%2Fdreaite%2Fhebi8-market&public=true&webhook_active=false&issues=write`
+1. 用预填好的链接在 Hebi8 组织下注册 App（名字、描述、主页、公开、关闭 webhook、Issues 读写；Metadata 只读是自动带的）：
+   `https://github.com/organizations/Hebi8/settings/apps/new?name=hebi8-market&description=hebi8%20market%20%E7%9A%84%E5%BA%94%E7%94%A8%E5%86%85%E5%8F%8D%E9%A6%88%EF%BC%9A%E7%94%A8%E4%BD%A0%E8%87%AA%E5%B7%B1%E7%9A%84%20GitHub%20%E8%B4%A6%E5%8F%B7%E5%9C%A8%20Hebi8%2Fhebi8-market%20%E4%B8%8A%E6%8F%90%E4%BA%A4%20issue&url=https%3A%2F%2Fgithub.com%2FHebi8%2Fhebi8-market&public=true&webhook_active=false&issues=write`
    核对：**Any account** 可安装（公开——私有 App 只有组织成员能授权）；Webhook 不勾 Active；Repository permissions 只有 Issues: Read and write 和 Metadata: Read-only；Callback URL 留空（device flow 不需要）；**Expire user authorization tokens** 保持勾选（8 小时 + refresh）。不要生成 client secret 或私钥，用不到。
 2. 建好后在 App 的 General 设置里勾选 **Enable Device Flow** 并保存（URL 参数不能设这一项）。
-3. Install App → dreaite → **Only select repositories → hebi8-market** → Install。
+3. Install App → Hebi8 → **Only select repositories → hebi8-market** → Install。
 4. 把 App 页面上的 **Client ID**（`Iv23…`）填进 `src/lib/app-info.ts` 的 `GITHUB_APP_CLIENT_ID`，提交。
 5. 确认仓库开着 Issues，Actions 允许运行（Settings → Actions → General：允许 `actions/*`；Workflow permissions 用默认即可，工作流自己声明了 `issues: write`）。
 

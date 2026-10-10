@@ -61,8 +61,8 @@ describe("github.com fallback link", () => {
   const params = (url: string) => new URL(url).searchParams;
 
   it("prefills title and the same body as the in-app issue", () => {
-    const url = webIssueUrl("dreaite/hebi8-market", "图表空白", "打开就空", ctx);
-    expect(url.startsWith("https://github.com/dreaite/hebi8-market/issues/new?")).toBe(true);
+    const url = webIssueUrl("Hebi8/hebi8-market", "图表空白", "打开就空", ctx);
+    expect(url.startsWith("https://github.com/Hebi8/hebi8-market/issues/new?")).toBe(true);
     expect(params(url).get("title")).toBe("图表空白");
     expect(params(url).get("body")).toBe(buildIssueBody("打开就空", ctx));
   });
@@ -96,14 +96,14 @@ describe("configuration", () => {
 
   it("defaults to the upstream repo and no client id; env overrides when well-formed", () => {
     delete process.env.HEBI8_GITHUB_CLIENT_ID;
-    expect(feedbackRepo()).toBe("dreaite/hebi8-market");
+    expect(feedbackRepo()).toBe("Hebi8/hebi8-market");
     expect(githubClientId()).toBe(GITHUB_APP_CLIENT_ID);
     process.env.HEBI8_GITHUB_CLIENT_ID = " Iv23_fork ";
     process.env.HEBI8_FEEDBACK_REPO = "someone/hebi8-fork";
     expect(githubClientId()).toBe("Iv23_fork");
     expect(feedbackRepo()).toBe("someone/hebi8-fork");
     process.env.HEBI8_FEEDBACK_REPO = "../../evil";
-    expect(feedbackRepo()).toBe("dreaite/hebi8-market");
+    expect(feedbackRepo()).toBe("Hebi8/hebi8-market");
     process.env.HEBI8_GITHUB_CLIENT_ID = "off";
     expect(githubClientId()).toBe("");
   });
@@ -315,14 +315,14 @@ describe("user token refresh", () => {
 });
 
 describe("issues", () => {
-  const ISSUES = "https://api.github.com/repos/dreaite/hebi8-market/issues";
+  const ISSUES = "https://api.github.com/repos/Hebi8/hebi8-market/issues";
   const submit = (cookies: Record<string, string>, body: unknown) => issuesPOST(req("/api/github/issues", { method: "POST", cookies, body, headers: { origin: ORIGIN } }));
   const login = () => createSession({ login: "someone", avatar_url: "", access_token: "ghu_user", access_expires_at: Date.now() + 3600_000, refresh_token: null, refresh_expires_at: null });
 
   it("opens the issue with the user's token, no labels, type and autoFix in the context block", async () => {
-    routes[`POST ${ISSUES}`] = () => json({ number: 123, html_url: "https://github.com/dreaite/hebi8-market/issues/123", title: "t" }, 201);
+    routes[`POST ${ISSUES}`] = () => json({ number: 123, html_url: "https://github.com/Hebi8/hebi8-market/issues/123", title: "t" }, 201);
     const res = await submit({ [SESSION_COOKIE]: login() }, { type: "bug", title: "图表空白", description: "打开就空", context: null, autoFix: true });
-    expect(await res.json()).toEqual({ number: 123, html_url: "https://github.com/dreaite/hebi8-market/issues/123" });
+    expect(await res.json()).toEqual({ number: 123, html_url: "https://github.com/Hebi8/hebi8-market/issues/123" });
     expect(calls).toHaveLength(1);
     expect(calls[0].auth).toBe("Bearer ghu_user");
     expect(calls[0].body).toEqual({ title: "图表空白", body: buildIssueBody("打开就空", { v: 1, type: "bug", autoFix: true }) });
@@ -342,7 +342,7 @@ describe("issues", () => {
     let res = await submit({ [SESSION_COOKIE]: id }, { type: "bug", title: "x" });
     expect(res.status).toBe(403);
     let body = await res.json();
-    expect(body.error).toMatch(/^GitHub 返回 403：你的账号不能在 dreaite\/hebi8-market 上开 issue/);
+    expect(body.error).toMatch(/^GitHub 返回 403：你的账号不能在 Hebi8\/hebi8-market 上开 issue/);
     expect(body.webFallback).toBe(true);
 
     routes[`POST ${ISSUES}`] = () => json({ message: "Not Found" }, 404);
