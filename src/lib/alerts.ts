@@ -30,6 +30,13 @@ export interface StateRow {
 type Decision = { fire: boolean; next: StateRow | null };
 
 /**
+ * Whether a bar at `t` may still fire after `firedBar` did: only a later one. The same bar fired
+ * already, and an older one (a sync that failed or did not bring today's bar, judged between two
+ * quote rounds) neither fires nor moves `firedBar` back, which would let today's bar fire twice.
+ */
+const mayFire = (firedBar: number | null | undefined, t: number | null): boolean => firedBar == null || t === null || t > firedBar;
+
+/**
  * Formula alerts (`when`), pure. Unknown results leave the row alone;
  * the first sighting only records; a rule fires when it turns true, at most once per bar (a
  * weekly condition that flickers inside the unfinished week fires once).
@@ -39,7 +46,7 @@ export function decide(row: StateRow | undefined, result: Pick<ConditionResult, 
   const now = result.now;
   const t = result.t ?? null;
   if (!row) return { fire: false, next: { state: now ? 1 : 0, firedBar: now ? t : null } };
-  if (now && row.state === 0 && row.firedBar !== t) return { fire: true, next: { state: 1, firedBar: t } };
+  if (now && row.state === 0 && mayFire(row.firedBar, t)) return { fire: true, next: { state: 1, firedBar: t } };
   return { fire: false, next: { state: now ? 1 : 0, firedBar: row.firedBar } };
 }
 
@@ -50,7 +57,7 @@ export function decide(row: StateRow | undefined, result: Pick<ConditionResult, 
  */
 export function decideCondition(c: AlertCondition, trigger: AlertTrigger, row: StateRow | undefined, seen: number | null, t: number | null): Decision {
   if (seen === null) return { fire: false, next: null };
-  const firedThisBar = trigger === "bar" && row?.firedBar === t;
+  const firedThisBar = trigger === "bar" && !mayFire(row?.firedBar, t);
   const fire = !firedThisBar && (ALERT_CONDS[c.cond].kind === "event" ? row !== undefined && crossed(c.cond, row.state, seen) : seen === 1);
   return { fire, next: { state: seen, firedBar: fire ? t : (row?.firedBar ?? null) } };
 }

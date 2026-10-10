@@ -30,6 +30,8 @@ describe("decide", () => {
   });
 
   it("leaves the state alone when the result is unknown", () => {
+    // judged on an older bar than the one that fired (a sync without today's bar): no firing, and the fired bar stays
+    expect(decide({ state: 0, firedBar: 207 }, { now: true, t: 200 })).toEqual({ fire: false, next: { state: 1, firedBar: 207 } });
     expect(decide({ state: 0, firedBar: null }, { now: null })).toEqual({ fire: false, next: null });
     expect(decide(undefined, { now: null })).toEqual({ fire: false, next: null });
   });

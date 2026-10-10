@@ -609,6 +609,59 @@ describe("quote polling", () => {
       logs.mockRestore();
     });
 
+    it("a sync that does not bring today's bar, between two quote rounds, does not let today's bar fire twice", async () => {
+      const { quoteRound } = await import("@/lib/quotes");
+      const { runAlerts, readState, stateId } = await import("@/lib/alerts");
+      const { readConfig } = await import("@/lib/vault");
+      const { writeBars } = await import("@/lib/store");
+      // the last daily bar, an old one, closed at 105: above 100 like today's price will be
+      writeBars(BTC, closes(100, 105), "replace");
+      const vault = await watching(['{ id: formula, key: BTC, when: "close > 100", trigger: bar }', "{ id: level, key: BTC, cond: greater, value: 100, trigger: bar }"]);
+      const logs = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const fired = () => logs.mock.calls.flat().filter((m) => /new alert\(s\)/.test(String(m)));
+      const now = Date.now();
+      let round = 0;
+      const quote = async (price: number) => {
+        prices.BTCUSDT = price;
+        await quoteRound(now + round++ * 5 * 60_000, [vault]);
+      };
+      await quote(99);
+      await quote(101);
+      expect(fired()).toEqual([expect.stringContaining("2 new alert(s)")]);
+      const today = readState("").get(stateId("alert:formula", BTC))!.firedBar;
+      await quote(99);
+      // the daily sync fails: its pass sees the old bar, where both hold again
+      await runAlerts(vault, () => readConfig(root));
+      expect(readState("").get(stateId("alert:formula", BTC))).toMatchObject({ state: 1, firedBar: today });
+      expect(readState("").get(stateId("alert:level", BTC))).toMatchObject({ state: 1, firedBar: today });
+      await quote(99);
+      await quote(101);
+      expect(fired()).toHaveLength(1);
+      logs.mockRestore();
+    });
+
+    it("a close alert reads the other symbols of its formula up to their own last close", async () => {
+      const { runAlerts, readState, stateId } = await import("@/lib/alerts");
+      const { readConfig } = await import("@/lib/vault");
+      const { writeBars } = await import("@/lib/store");
+      const { getDb } = await import("@/lib/db");
+      const GOLD = "tv:TVC:GOLD";
+      const oct7 = Date.UTC(2026, 9, 7) / 1000;
+      // noon UTC on Oct 7: Tokyo closed at 15:00 (06:00 UTC), the UTC day of the other symbol is still going
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(oct7 * 1000 + 12 * 3600_000);
+      const meta = getDb().prepare("UPDATE symbols SET timezone = ?, hours = ? WHERE key = ?");
+      meta.run("Asia/Tokyo", "0900-1500", SPY);
+      writeBars(SPY, [{ ...bar(100), t: oct7 - DAY }, { ...bar(101), t: oct7 }], "replace");
+      writeBars(GOLD, [{ ...bar(50), t: oct7 - DAY }, { ...bar(999), t: oct7 }], "replace");
+      const vault = await watching([`{ id: ref, key: ${SPY}, when: 'close > close("${GOLD}")', check: close, trigger: bar }`]);
+      await runAlerts(vault, () => readConfig(root));
+      vi.useRealTimers();
+      meta.run("America/New_York", null, SPY);
+      // 101 against yesterday's 50, not against the 999 of a day that is not over
+      expect(readState("").get(stateId("alert:ref", SPY))).toMatchObject({ state: 1 });
+    });
+
     it("the chart's last bar is today's live one, with the bench aligned to it", async () => {
       const { quoteRound } = await import("@/lib/quotes");
       const { writeBars } = await import("@/lib/store");
