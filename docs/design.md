@@ -240,14 +240,15 @@ CREATE TABLE usage_alerts (kind TEXT NOT NULL, day INTEGER NOT NULL, PRIMARY KEY
 - **同步**：要同步的 key 是所有 vault 的并集（各自的 groups、bench、公式引用、告警、charts 对比列表）。同步后对每个 vault 算一遍 stats 和告警。
 - **页头**：右侧显示当前身份。未登录是「登录」按钮：当前入口提供网页登录时整页跳到 GitHub、授权后回到原来的页面，否则打开登录抽屉开始 device flow（§5.8）；登录后是头像 + login，菜单里有「通知设置」（同一个抽屉，§2.5）、owner 才有的「使用情况」（§1.7）和「退出」。owner 模式下未登录时，总览标题是「示例列表」（内容就是 owner 的列表）。
 - **怎么用**：第一次打开总览时弹出一个三步引导面板（扫描 / 深看 / 记录），每步一张循环小动画，←/→ 翻页；关掉后记在浏览器 localStorage，不再自动出现，帮助抽屉「使用」页签里的「打开三步引导」可以再打开。访客的最后一步是「用 GitHub 登录」和「先看看示例」。
-- 登录会话和反馈共用（§5.8），30 天有效；退出只删会话，不动 vault。
+- 登录会话和反馈共用（§5.8）；退出只删会话，不动 vault。
+- **会话滑动续期**：会话连续 30 天（`SESSION_DAYS`）没用过才过期，按最后使用时间 `seen_at` 算，不看登录时间，也不看 GitHub token（token 过期只影响应用内提交，§5.8）。续期在 proxy 里做（`src/proxy.ts`，和流量计数同一处，§1.7）：请求带着有效会话、`seen_at` 距今超过一天时，把 `seen_at` 写成现在，并在响应上把 cookie 重新设成 30 天。所以一条会话一天最多写一次 `sessions.json`；没带会话 cookie 的请求不读这个文件。`/api/github/*` 不续：这些接口自己设置或清除会话 cookie。
 - 会话 cookie 经 HTTPS 来的请求（隧道，`X-Forwarded-Proto: https`）带 `Secure`；Tailscale 直连是 http，不带，照样能登录。两边 Host 不同，cookie 各存各的；网页登录只在登记了回调地址的入口提供（默认只有公开地址），其他入口用 device flow。
 
 ### 1.7 流量监控
 
 公开以后先做到「看得见」：谁在用、用了多少、上游被问了多少次。**不限流、不封禁、不加访问控制**；人多了再决定策略。
 
-- **记录挂在 proxy**（`src/proxy.ts`）。这版 Next 的 proxy 默认跑 Node.js runtime，在同一个进程里 `require`，路由之前执行，所以页面、Server Action（对页面的 POST，带 `Next-Action` 头）和 API 路由都经过它；matcher 排除 `_next/static`、`_next/image`、favicon、`icon.svg`、`apple-icon`、`manifest.webmanifest`、`opengraph-image` 和带静态扩展名的文件（`robots.txt`、`sitemap.xml` 也在其中）。proxy 只往 `globalThis` 上的内存表里加计数（`src/lib/traffic.ts`），不碰数据库。
+- **记录挂在 proxy**（`src/proxy.ts`）。这版 Next 的 proxy 默认跑 Node.js runtime，在同一个进程里 `require`，路由之前执行，所以页面、Server Action（对页面的 POST，带 `Next-Action` 头）和 API 路由都经过它；matcher 排除 `_next/static`、`_next/image`、favicon、`icon.svg`、`apple-icon`、`manifest.webmanifest`、`opengraph-image` 和带静态扩展名的文件（`robots.txt`、`sitemap.xml` 也在其中）。proxy 只往 `globalThis` 上的内存表里加计数（`src/lib/traffic.ts`），不碰数据库；带会话 cookie 的请求还在这里滑动续期（§1.6）。
 - **来源**按 Host 判断：公网域名是隧道（`public`）；IP、单标签名、`localhost`、`*.ts.net` 是 Tailscale（`tailnet`）。**类型**：`/api/*` 是 api，带 `Next-Action` 是 action，带 `Next-Router-Prefetch` 是 prefetch（路由预取，不算浏览，热门路径里不列），其余是 page。
 - **路径归一**（行数不能被扫描器撑大）：proxy 把路径换成本应用真实存在的路由（`traffic.ts` 的 `ROUTES`，测试对照 `src/app` 下的文件保持同步）；`/chart/<key>` 统一成一种编码，落库时只有 `symbols` 或 `stats` 表里有的 key（也就是有人在看、在同步的品种，含合成标的）才保留，其他归到 `/chart/[key]`；匹配不到任何路由的一律是 `(其他)`。所以 `traffic` 每天的行数 ≤ 2 个 origin × 4 种类型 ×（路由数 + 已有品种数 + 2）。
 - **访客**：公网取 `CF-Connecting-IP`，Tailscale 取 Next 填进 `X-Forwarded-For` 的 socket 地址；存 `HMAC-SHA256(盐, IP)` 的前 16 位，盐在配置目录的 `traffic-salt.json`。访客单独一张表（`visitors`），不和路径交叉：每天每个 origin 最多 `MAX_VISITORS = 2000` 个不同访客，已存的照常累加，新来的超出上限就合进 `(其他)` 这一行，页面上那天的访客数显示成「2000+」。代价是热门路径不再有「每个路径多少访客」。**登录名**：proxy 只记会话 cookie，落库时整批只读一次 `sessions.json`，在内存里查；伪造的 cookie 查不到就是未登录。
@@ -853,7 +854,7 @@ client id 不是秘密（device flow 的设计就是给拿不住密钥的客户�
 
 1. `POST /api/github/device` → 服务端 `POST https://github.com/login/device/code`（只带 `client_id`）→ device code 留在服务端内存（`globalThis` 上的 Map，键是 32 字节随机 flowId，按 `expires_in` 过期，最多 20 个并发）→ 返回 `{ flowId, user_code, verification_uri, expires_in, interval }`。`device_flow_disabled` → 「GitHub App 没有开启 Device Flow」；不认识的 client id（GitHub 回 404）→ 「GitHub 不认识这个 client id」。
 2. 面板每 `interval` 秒 `POST /api/github/device/poll { flowId }`。服务端每次最多向 GitHub 发一次 `POST https://github.com/login/oauth/access_token`（`client_id`、`device_code`、`grant_type=urn:ietf:params:oauth:grant-type:device_code`，没有 client_secret），且自己也卡住间隔：没到时间直接回 `pending`。`authorization_pending` → 继续；`slow_down` → 间隔 +5 秒（GitHub 给了新 `interval` 就取较大者）；`expired_token` / 超时 → `expired`；`access_denied` → `denied`；其它错误结束本次登录。
-3. 拿到 token → `GET /user` → 建会话（32 字节随机 id，cookie `hebi8m_session` HttpOnly、SameSite=Lax、30 天；内网没有 HTTPS，所以不设 Secure）。
+3. 拿到 token → `GET /user` → 建会话（32 字节随机 id，cookie `hebi8m_session` HttpOnly、SameSite=Lax、30 天，用着就一直续，§1.6；内网没有 HTTPS，所以不设 Secure）。
 
 **两种方式共用的**：
 
@@ -865,7 +866,7 @@ client id 不是秘密（device flow 的设计就是给拿不住密钥的客户�
 
 **网页版**（`webIssueUrl()`，纯函数，浏览器里算）：`https://github.com/<repo>/issues/new?title=…&body=…`，body 与应用内提交的完全一样（含 context 块）。URL 上限 7000 字符（GitHub 约 8 KB 起报 414）：超了先把 JSON 压成一行，再去掉 `errors`、`userAgent`，再只留 `{ v, type, autoFix }`，最后才从尾部截断描述并注明「网页版已截断」。
 
-**会话存储**：不在仓库、vault、data 里。目录 `HEBI8_SECRETS`（默认 `~/.config/hebi8/market`，权限 700），只有 `sessions.json`（原子写入，权限 600）：会话 id → login、avatar_url、access_token、access_expires_at、refresh_token、refresh_expires_at、created_at、web_client（网页登录的 client id；device flow 的会话没有这个字段）。超过 30 天或 refresh token 也过期的会话在每次写入时清掉。
+**会话存储**：不在仓库、vault、data 里。目录 `HEBI8_SECRETS`（默认 `~/.config/hebi8/market`，权限 700），只有 `sessions.json`（原子写入，权限 600）：会话 id → login、avatar_url、access_token、access_expires_at、refresh_token、refresh_expires_at、created_at、seen_at（最后使用时间，一天最多更新一次；没有这个字段的旧会话按 created_at 算）、web_client（网页登录的 client id；device flow 的会话没有这个字段）。超过 30 天没用的会话在每次写入时清掉；token 过没过期不影响会话。
 
 **issue 格式**：标题是用户填的；正文
 

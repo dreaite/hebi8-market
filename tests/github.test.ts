@@ -13,7 +13,8 @@ import { POST as logoutPOST } from "@/app/api/github/logout/route";
 import { GITHUB_APP_CLIENT_ID, feedbackRepo, githubClientId } from "@/lib/app-info";
 import { MAX_WEB_URL, TRUNCATED_NOTE, buildIssueBody, feedbackContext, parseFeedbackInput, parseIssueContext, webIssueUrl, type FeedbackContext, type PageInfo } from "@/lib/feedback";
 import { GitHubError, LOGIN_COOKIE, SESSION_COOKIE, pollDeviceFlow, requestOrigin, resetGitHubCaches, safeNext, startDeviceFlow, userToken, webLoginClient } from "@/lib/github";
-import { createSession, getSession } from "@/lib/secrets";
+import { createSession, getSession, liveSessions, touchSession, writeJson } from "@/lib/secrets";
+import { proxy } from "@/proxy";
 
 const ORIGIN = "http://100.92.194.31:8809";
 const CLIENT_ID = "Iv23_test";
@@ -478,6 +479,89 @@ describe("user token refresh", () => {
     const res = await logoutPOST(req("/api/github/logout", { method: "POST", cookies: { [SESSION_COOKIE]: id } }));
     expect(res.status).toBe(200);
     expect(getSession(id)).toBeNull();
+  });
+});
+
+describe("sessions", () => {
+  const DAY = 86400_000;
+  const tokens = { access_token: "t", access_expires_at: null, refresh_token: null, refresh_expires_at: null };
+  const seenAt = (id: string) => getSession(id)!.seen_at;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("last 30 days from their last use, stamped at most once a day", () => {
+    vi.useFakeTimers({ now: T0 });
+    const id = createSession({ login: "u", avatar_url: "", ...tokens });
+    expect(getSession(id)).toMatchObject({ created_at: T0, seen_at: T0 });
+
+    // within a day nothing is written
+    const file = path.join(process.env.HEBI8_SECRETS!, "sessions.json");
+    const before = fs.readFileSync(file, "utf8");
+    expect(touchSession(id, T0 + DAY - 1)).toBe(false);
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+
+    expect(touchSession(id, T0 + 20 * DAY)).toBe(true);
+    expect(seenAt(id)).toBe(T0 + 20 * DAY);
+    expect(touchSession(id, T0 + 20 * DAY + 1000)).toBe(false);
+
+    // 45 days after the login it still stands, 30 days after the last use it does not
+    vi.setSystemTime(T0 + 45 * DAY);
+    expect(getSession(id)).not.toBeNull();
+    expect(Object.keys(liveSessions())).toEqual([id]);
+    vi.setSystemTime(T0 + 50 * DAY + 1);
+    expect(getSession(id)).toBeNull();
+    expect(liveSessions()).toEqual({});
+    expect(touchSession(id)).toBe(false);
+    expect(touchSession("no-such-session-id-0123456789")).toBe(false);
+    expect(touchSession(undefined)).toBe(false);
+  });
+
+  it("from before `seen_at` existed go by `created_at`", () => {
+    vi.useFakeTimers({ now: T0 });
+    const old = "old-session-id-0123456789-abcdefghijklmnop";
+    const gone = "gone-session-id-0123456789-abcdefghijklmno";
+    writeJson("sessions.json", {
+      [old]: { login: "u", avatar_url: "", ...tokens, created_at: T0 - 29 * DAY },
+      [gone]: { login: "v", avatar_url: "", ...tokens, created_at: T0 - 31 * DAY },
+    });
+    expect(getSession(gone)).toBeNull();
+    expect(getSession(old)).toMatchObject({ login: "u" });
+    expect(touchSession(old)).toBe(true);
+    expect(seenAt(old)).toBe(T0);
+    // the write dropped the dead one
+    expect(Object.keys(JSON.parse(fs.readFileSync(path.join(process.env.HEBI8_SECRETS!, "sessions.json"), "utf8")))).toEqual([old]);
+  });
+
+  it("do not end with their GitHub tokens: only in-app feedback needs those", async () => {
+    const id = createSession({ login: "u", avatar_url: "", access_token: "old", access_expires_at: Date.now() - 2 * DAY, refresh_token: "ghr_1", refresh_expires_at: Date.now() - DAY });
+    expect(getSession(id)).toMatchObject({ login: "u" });
+    expect(Object.keys(liveSessions())).toEqual([id]);
+    const err = await userToken(CLIENT_ID, id).catch((e) => e);
+    expect(err.status).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("proxy: a session in use gets its cookie for another 30 days once a day; nothing is read without a cookie", () => {
+    vi.useFakeTimers({ now: T0 });
+    const id = createSession({ login: "u", avatar_url: "", ...tokens });
+    const page = (cookies?: Record<string, string>, url = "/") => req(url, { cookies, headers: { "x-forwarded-proto": "https" } });
+    expect(proxy(page({ [SESSION_COOKIE]: id }))).toBeUndefined();
+
+    vi.setSystemTime(T0 + 3 * DAY);
+    // the routes that set or clear the cookie themselves are left alone
+    expect(proxy(page({ [SESSION_COOKIE]: id }, "/api/github/logout"))).toBeUndefined();
+    const res = proxy(page({ [SESSION_COOKIE]: id }))!;
+    expect(res.cookies.get(SESSION_COOKIE)).toMatchObject({ value: id, maxAge: 30 * 86400, httpOnly: true, sameSite: "lax", secure: true, path: "/" });
+    expect(seenAt(id)).toBe(T0 + 3 * DAY);
+    expect(proxy(page({ [SESSION_COOKIE]: id }))).toBeUndefined();
+
+    expect(proxy(page({ [SESSION_COOKIE]: "made-up-session-id-0123456789" }))).toBeUndefined();
+    const read = vi.spyOn(fs, "readFileSync");
+    expect(proxy(page())).toBeUndefined();
+    expect(read.mock.calls.filter(([file]) => String(file).endsWith("sessions.json"))).toHaveLength(0);
+    read.mockRestore();
   });
 });
 

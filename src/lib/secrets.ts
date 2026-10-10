@@ -48,41 +48,59 @@ export interface Session {
   refresh_token: string | null;
   refresh_expires_at: number | null;
   created_at: number;
+  /** ms; the last use, moved at most once a day (`touchSession`). Sessions from before it existed go by `created_at` */
+  seen_at?: number;
   /** Client id of the web login (`github-oauth.json`) that issued the tokens; absent = the device flow's client */
   web_client?: string;
 }
 
 const SESSIONS_FILE = "sessions.json";
+/** A session lasts until it has gone unused this long */
 export const SESSION_DAYS = 30;
+const DAY_MS = 86400000;
+const ID_RE = /^[A-Za-z0-9_-]{20,100}$/;
 
 function readSessions(): Record<string, Session> {
   return readJson<Record<string, Session>>(SESSIONS_FILE) ?? {};
 }
 
-/** Sessions past their 30 days, or whose refresh token has run out, are dropped on every write. */
+const seenAt = (s: Session) => s.seen_at ?? s.created_at;
+
+/**
+ * Sessions unused for 30 days are dropped on every write. The GitHub tokens do not count: who
+ * someone is rests on the session alone, and a token that ran out only stops in-app feedback.
+ */
 function live(all: Record<string, Session>, now = Date.now()): Record<string, Session> {
-  return Object.fromEntries(
-    Object.entries(all).filter(([, s]) => {
-      if (now - s.created_at > SESSION_DAYS * 86400000) return false;
-      if (s.access_expires_at && s.access_expires_at < now && (!s.refresh_expires_at || s.refresh_expires_at < now)) return false;
-      return true;
-    }),
-  );
+  return Object.fromEntries(Object.entries(all).filter(([, s]) => now - seenAt(s) <= SESSION_DAYS * DAY_MS));
 }
 
 /** Every live session in one read of the file, for looking many ids up at once. */
 export const liveSessions = (): Record<string, Session> => live(readSessions());
 
 export function getSession(id: string | undefined): Session | null {
-  if (!id || !/^[A-Za-z0-9_-]{20,100}$/.test(id)) return null;
+  if (!id || !ID_RE.test(id)) return null;
   const s = readSessions()[id];
   return s && live({ [id]: s })[id] ? s : null;
 }
 
-export function createSession(session: Omit<Session, "created_at">): string {
+export function createSession(session: Omit<Session, "created_at" | "seen_at">): string {
   const id = crypto.randomBytes(32).toString("base64url");
-  writeJson(SESSIONS_FILE, { ...live(readSessions()), [id]: { ...session, created_at: Date.now() } });
+  const now = Date.now();
+  writeJson(SESSIONS_FILE, { ...live(readSessions()), [id]: { ...session, created_at: now, seen_at: now } });
   return id;
+}
+
+/**
+ * Sliding expiry: a live session last seen more than a day ago is seen now. True when it was
+ * moved, which is when its cookie is due for another 30 days too; so one write a day per session.
+ */
+export function touchSession(id: string | undefined, now = Date.now()): boolean {
+  if (!id || !ID_RE.test(id)) return false;
+  const all = live(readSessions(), now);
+  const s = all[id];
+  if (!s || now - seenAt(s) < DAY_MS) return false;
+  writeJson(SESSIONS_FILE, { ...all, [id]: { ...s, seen_at: now } });
+  return true;
 }
 
 export function updateSession(id: string, patch: Partial<Session>): void {
