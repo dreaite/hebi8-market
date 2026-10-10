@@ -19,10 +19,10 @@ import {
   type Point,
 } from "klinecharts";
 import { MEASURE_TOOL, SCALED_DRAWINGS } from "./chart-types";
-import { bendLine, bendPolygon, bendRect, fitLine, fromSpace, levelPrice, makeWarp, movePrices, toSpace, type PriceScale, type Warp } from "./drawing-scale";
+import { bendLine, bendPolygon, bendRect, fitLine, fromSpace, makeWarp, movePrices, toSpace, type PriceScale, type Warp } from "./drawing-scale";
 import { lineOf, withAlpha } from "./drawing-style";
 import { BOX_HANDLES, boxHandleAt, channelHandles, dragBoxBy, dragChannel, drawable, yAt, type ChannelHandle } from "./drawing-edit";
-import { FIB_LEVELS, fibBands, fibSettingsOf, fibSpan } from "./fib";
+import { FIB_LEVELS, fibBands, fibPrice, fibSettingsOf, fibSpan } from "./fib";
 import { measureLines, pct, priceChangeText, volumeBetween } from "./measure";
 
 type Params = OverlayCreateFiguresCallbackParams<unknown>;
@@ -530,12 +530,12 @@ function snapToRegression(id: string, { points }: OverlayPerformEventParams) {
  * the level's colour or all in the drawing's own, over the bands between them. The labels sit left
  * of the lines, off the fill; on lines extended to the left edge they sit on the lines there.
  */
-function fibLevels(p: Params, xa: number, xb: number, price: (level: number) => number): Figures {
+function fibLevels(p: Params, xa: number, xb: number, prices: number[]): Figures {
   const s = fibSettingsOf(p.overlay.extendData);
   const own = lineOf(p.chart, p.overlay).color;
   const [x0, x1] = fibSpan(xa, xb, s, p.bounding.width);
   const levels = FIB_LEVELS.map(({ level, color }) => {
-    const value = price(level);
+    const value = fibPrice(spaceOf(p), prices, level, s.reverse);
     return { level, value, y: p.yAxis!.convertToPixel(value), color: s.oneColor ? own : color };
   });
   return [
@@ -551,7 +551,8 @@ function fibLevels(p: Params, xa: number, xb: number, price: (level: number) => 
 
 const fib: Template[] = [
   // KLineChart's own retracement, as TradingView draws it: level 0 at the second point, 1 at the
-  // first and on past it, every level a share of the move in the drawing's scale
+  // first and on past it (the other way round when reversed), every level a share of the move in
+  // the drawing's scale
   {
     name: "fibonacciLine",
     totalStep: 3,
@@ -560,7 +561,7 @@ const fib: Template[] = [
       const [a, b] = p.coordinates;
       const [pa, pb] = p.overlay.points;
       if (!b || pa.value === undefined || pb.value === undefined || !p.yAxis) return [];
-      return [...fibLevels(p, a.x, b.x, (level) => levelPrice(spaceOf(p), pb.value!, pa.value!, level)), line([a, b], DASHED)];
+      return [...fibLevels(p, a.x, b.x, [pa.value, pb.value]), line([a, b], DASHED)];
     },
   },
   {
@@ -574,7 +575,7 @@ const fib: Template[] = [
       const guide = line(c ? [a, b, c] : [a, b], DASHED);
       if (!c || !p.yAxis) return [guide];
       // the move from the first point to the second, counted from the third; the levels span the last two
-      return [...fibLevels(p, b.x, c.x, (level) => levelPrice(spaceOf(p), pa.value ?? 0, pb.value ?? 0, level, pc.value ?? 0)), guide];
+      return [...fibLevels(p, b.x, c.x, [pa.value ?? 0, pb.value ?? 0, pc.value ?? 0]), guide];
     },
   },
   {

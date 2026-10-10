@@ -279,9 +279,11 @@ describe("convertDrawing: styles", () => {
     const plain = convertDrawing(drawing("LineToolFibRetracement", points, {}), US);
     expect(plain.ok && "extendData" in plain.overlay).toBe(false);
     const changed = convertDrawing(drawing("LineToolFibRetracement", points, { fillBackground: false, transparency: 60, extendLines: true }), US);
-    expect(changed.ok && changed.overlay.extendData).toEqual({ background: false, transparency: 60, extendLeft: false, extendRight: true, oneColor: false });
-    const ext = convertDrawing(drawing("LineToolTrendBasedFibExtension", [...points, pt("2026-09-03", 1.5)], { extendLinesLeft: true }), US);
-    expect(ext.ok && ext.overlay.extendData).toMatchObject({ background: true, transparency: 80, extendLeft: true, extendRight: false });
+    expect(changed.ok && changed.overlay.extendData).toEqual({ background: false, transparency: 60, extendLeft: false, extendRight: true, oneColor: false, reverse: false });
+    const ext = convertDrawing(drawing("LineToolTrendBasedFibExtension", [...points, pt("2026-09-03", 1.5)], { extendLinesLeft: true, reverse: true }), US);
+    expect(ext.ok && ext.overlay.extendData).toMatchObject({ background: true, transparency: 80, extendLeft: true, extendRight: false, reverse: true });
+    // the points stay as TradingView has them
+    expect(ext.ok && ext.overlay.points.map((p) => p.value)).toEqual([1, 2, 1.5]);
     // another tool's flags of the same name are not a Fibonacci setting
     const channel = convertDrawing(drawing("LineToolFibChannel", [...points, pt("2026-09-03", 1.5)], { fillBackground: false }), US);
     expect(channel.ok && "extendData" in channel.overlay).toBe(false);

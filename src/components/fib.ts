@@ -3,6 +3,7 @@
  * each, the settings a drawing keeps in its `extendData` (design §1.3), and where the level lines
  * and the bands between them run. Pure, so it is tested without a chart.
  */
+import { levelPrice, type PriceScale } from "./drawing-scale";
 
 export interface FibLevel {
   level: number;
@@ -35,13 +36,27 @@ export interface FibSettings {
   extendRight: boolean;
   /** TradingView's 使用单一颜色: every level in the drawing's own colour instead of one each */
   oneColor: boolean;
+  /** TradingView's 反向: the levels run the other way, the points stay */
+  reverse: boolean;
 }
 
-export const FIB_DEFAULTS: FibSettings = { background: true, transparency: 80, extendLeft: false, extendRight: false, oneColor: false };
+export const FIB_DEFAULTS: FibSettings = { background: true, transparency: 80, extendLeft: false, extendRight: false, oneColor: false, reverse: false };
 
 /** A drawing's settings from its `extendData`; one that has none (never changed, or saved before these existed) has the defaults. */
 export function fibSettingsOf(extendData: unknown): FibSettings {
   return { ...FIB_DEFAULTS, ...(extendData as Partial<FibSettings> | undefined) };
+}
+
+/**
+ * The price of a level, a share of a move in the drawing's scale. A retracement (two prices) has 0
+ * at its second point and 1 at its first, and runs on past the first; reversed, 0 is at the first
+ * and it runs on past the second. An extension (three) is the move from the first point to the
+ * second counted from the third; reversed, that move the other way from the third.
+ */
+export function fibPrice(scale: PriceScale, [a, b, c]: number[], level: number, reverse: boolean): number {
+  const forward = c === undefined ? reverse : !reverse;
+  const [from, to] = forward ? [a, b] : [b, a];
+  return levelPrice(scale, from, to, level, c ?? from);
 }
 
 /** Where the level lines run: between the two x, and on to the pane's edge on a side that is extended. */

@@ -54,6 +54,7 @@ const STATE_KEYS = [
   "extendLinesLeft",
   "fillBackground",
   "transparency",
+  "reverse",
   "levelsStyle",
   "visible",
   "frozen",
@@ -298,17 +299,18 @@ function stylesOf(state: Record<string, unknown>, colorKeys: string[], textSize:
 }
 
 /**
- * A Fibonacci retracement's or extension's background and extension, where TradingView recorded
- * them (it keeps only what was changed from its defaults, which are this app's too): `extendLines`
- * is to the right. Undefined when none was.
+ * A Fibonacci retracement's or extension's background, extension and direction, where TradingView
+ * recorded them (it keeps only what was changed from its defaults, which are this app's too):
+ * `extendLines` is to the right. Undefined when none was.
  */
 function fibOf(state: Record<string, unknown>): FibSettings | undefined {
-  const { fillBackground, transparency, extendLines, extendLinesLeft } = state;
+  const { fillBackground, transparency, extendLines, extendLinesLeft, reverse } = state;
   const changed: Partial<FibSettings> = {
     ...(typeof fillBackground === "boolean" ? { background: fillBackground } : {}),
     ...(typeof transparency === "number" && transparency >= 0 && transparency <= 100 ? { transparency } : {}),
     ...(typeof extendLinesLeft === "boolean" ? { extendLeft: extendLinesLeft } : {}),
     ...(typeof extendLines === "boolean" ? { extendRight: extendLines } : {}),
+    ...(typeof reverse === "boolean" ? { reverse } : {}),
   };
   return Object.keys(changed).length ? { ...FIB_DEFAULTS, ...changed } : undefined;
 }

@@ -342,6 +342,13 @@ export function DrawingSettings({ info, precision, onApply, onClose }: { info: D
               </label>
             </div>
             {extendRow(fib.extendLeft, fib.extendRight, (side, on) => setFib({ ...fib, [side === "left" ? "extendLeft" : "extendRight"]: on }))}
+            <div className={row}>
+              <span className="text-muted">档位</span>
+              <label className="flex items-center gap-1.5" title="档位方向反过来：0 和 1 对调位置，1 以上的档位越过另一个点；点不动">
+                <input type="checkbox" checked={fib.reverse} onChange={(e) => setFib({ ...fib, reverse: e.target.checked })} />
+                反向
+              </label>
+            </div>
           </>
         )}
         {SCALED_DRAWINGS.has(info.name) && (
