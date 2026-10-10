@@ -215,6 +215,33 @@ describe("the countdown to the bar's close", () => {
     // nothing known: weekdays, by the UTC date as before
     expect(scheduledSession(utc("2026-11-26T17:00:00"), plain(null, null))).toBe("open");
     expect(scheduledSession(utc("2026-11-28T17:00:00"), plain(null, null))).toBe("closed");
+    // around the clock: every day, the weekend too
+    expect(scheduledSession(utc("2026-10-10T12:00:00"), plain("24x7", "Etc/UTC"))).toBe("open");
+    expect(sessionsOn(plain("24x7", "Etc/UTC"), day(2026, 10, 11))).toBe("24x7");
+  });
+
+  it("an overnight session counts for the day it ends on from the evening it starts", () => {
+    // Sunday 2026-10-04 in Chicago: nothing at 10:00, Monday's session from 17:00
+    expect(scheduledSession(utc("2026-10-04T15:00:00"), ES)).toBe("closed");
+    expect(scheduledSession(utc("2026-10-04T23:00:00"), ES)).toBe("open");
+    // Martin Luther King Day, Monday 2026-01-19, a holiday: at 18:00 Tuesday's session is on
+    expect(scheduledSession(utc("2026-01-19T16:00:00"), ES)).toBe("closed");
+    expect(scheduledSession(utc("2026-01-20T00:00:00"), ES)).toBe("open");
+    // an evening that starts no session: New Year's Eve 18:00 (January 1 has none) and Friday 18:00, after the day's close at 16:00
+    expect(scheduledSession(utc("2026-01-01T00:00:00"), ES)).toBe("closed");
+    expect(scheduledSession(utc("2026-01-01T16:00:00"), ES)).toBe("closed");
+    expect(scheduledSession(utc("2026-10-09T20:00:00"), ES)).toBe("open"); // Friday 15:00
+    expect(scheduledSession(utc("2026-10-09T23:00:00"), ES)).toBe("closed");
+    // currencies, 17:00 to 17:00 in New York: Sunday 17:30 is Monday's
+    const fx = { ...plain("1700-1700", "America/New_York"), holidays: "20261225" };
+    expect(scheduledSession(utc("2026-10-04T20:00:00"), fx)).toBe("closed");
+    expect(scheduledSession(utc("2026-10-04T21:30:00"), fx)).toBe("open");
+    // Thursday 18:00 before Christmas Day: Thursday's session is over, the 25th has none
+    expect(scheduledSession(utc("2026-12-24T23:00:00"), fx)).toBe("closed");
+    expect(scheduledSession(utc("2026-12-24T20:00:00"), fx)).toBe("open");
+    // an ordinary day session never reaches into the next day
+    expect(scheduledSession(utc("2026-11-25T23:00:00"), NASDAQ)).toBe("open");
+    expect(scheduledSession(utc("2026-11-26T03:00:00"), NASDAQ)).toBe("open"); // 22:00 on Wednesday in New York
   });
 
   it("knows when a trading day's bar is complete", () => {

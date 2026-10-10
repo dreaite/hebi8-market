@@ -19,8 +19,11 @@ function acquire() {
 
 function release() {
   if (shared && --shared.users === 0) {
-    void shared.client.end();
+    const { client } = shared;
     shared = null;
+    void client.end();
+    // end() leaves a socket that is still connecting (a request that timed out during the handshake) open: close it once it connects
+    if (!client.isOpen) client.onConnected(() => void client.end());
   }
 }
 
@@ -49,7 +52,11 @@ export function calendarOf(infos: MarketInfos, now = Date.now()): Pick<SourceMet
   };
 }
 
-/** The calendar of a symbol without loading its bars: what a Yahoo symbol borrows from its exchange (calendar.ts). */
+/**
+ * The calendar of a symbol, read from its symbol info as soon as that arrives: what a Yahoo symbol
+ * borrows from its exchange (calendar.ts). The library asks for bars with every symbol, so one
+ * daily bar is requested along with it and not waited for.
+ */
 export function fetchCalendar(ticker: string): Promise<Pick<SourceMeta, "hours" | "holidays" | "corrections">> {
   return new Promise((resolve, reject) => {
     const client = acquire();

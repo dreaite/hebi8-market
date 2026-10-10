@@ -27,6 +27,15 @@ const fake = vi.hoisted(() => {
         };
         delete() {}
       },
+      // a chart whose symbol info never arrives
+      Chart: class {
+        infos = {};
+        onError() {}
+        onUpdate() {}
+        onSymbolLoaded() {}
+        setMarket() {}
+        delete() {}
+      },
     };
   }
   return { clients, Client };
@@ -51,6 +60,25 @@ describe("TradingView quotes", () => {
     client.connected.forEach((cb) => cb());
     expect(client.ended).toBe(2);
     expect(client.open).toBe(false);
+  });
+
+  it("a calendar request that times out during the handshake closes the shared connection once it connects", async () => {
+    vi.useFakeTimers();
+    const { fetchCalendar } = await import("@/lib/sources/tradingview");
+    const failed = expect(fetchCalendar("LSE:VOD")).rejects.toThrow("TradingView timeout: LSE:VOD");
+    await vi.advanceTimersByTimeAsync(20_000);
+    await failed;
+    const client = fake.clients.at(-1)!;
+    expect(client.ended).toBe(1);
+    expect(client.connected).toHaveLength(1);
+    client.open = true;
+    client.connected.forEach((cb) => cb());
+    expect(client.ended).toBe(2);
+    expect(client.open).toBe(false);
+    // the next request starts a connection of its own
+    const before = fake.clients.length;
+    void fetchCalendar("LSE:VOD").catch(() => undefined);
+    expect(fake.clients).toHaveLength(before + 1);
   });
 
   it("keeps the calendar of the symbol info from last year on: hours, holidays, the regular session's corrections", async () => {

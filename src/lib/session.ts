@@ -51,6 +51,7 @@ const sameOrAfter = (a: Parts, b: Parts) => ymd(a) >= ymd(b);
  * for its weekday, where hours that name the day win over the ones that cover it by default.
  */
 export function sessionsOn({ hours, holidays, corrections }: TradingCalendar, day: Parts): string | null {
+  if (hours === "24x7") return hours;
   const date = ymd(day);
   for (const entry of corrections ? corrections.split(";") : []) {
     const at = entry.lastIndexOf(":");
@@ -131,14 +132,28 @@ export function dayCloseAt(t: number, calendar: TradingCalendar): number {
   return zonedToUtc(end ? { ...day, ...end } : dayOf(day, 1), calendar.timezone ?? "UTC");
 }
 
+/** When a day's sessions begin on the evening before (`1700-1600`, `1700-1700`, a start marked `F`): that clock time. */
+function eveningStart(sessions: string | null): { hh: number; mm: number } | null {
+  const m = /^(\d{2})(\d{2})(F\d*)?-(\d{4})/.exec(sessions ?? "");
+  return m && (m[3] !== undefined || m[1] + m[2] >= m[4]) ? { hh: Number(m[1]), mm: Number(m[2]) } : null;
+}
+
 /**
  * The session to assume when a source's quote does not say: open on a day with trading, closed on
- * a weekend or a holiday, by the exchange's own date. Without known hours weekdays count as trading.
+ * a weekend or a holiday. The day is the trading day by the exchange's clock: an overnight session
+ * counts for the day it ends on, from the evening it starts (Sunday evening is Monday's, the
+ * evening of a holiday the next day's) until its close (Friday evening is nobody's). A day
+ * session keeps its whole calendar day. Without known hours weekdays count as trading.
  */
 export function scheduledSession(now: number, calendar: TradingCalendar): QuoteSession {
-  const day = dayOf(partsIn(new Date(now), calendar.timezone ?? "UTC"));
-  const trading = calendar.hours ? sessionsOn(calendar, day) !== null : weekday(day) >= 1 && weekday(day) <= 5;
-  return trading ? "open" : "closed";
+  const timezone = calendar.timezone ?? "UTC";
+  const today = dayOf(partsIn(new Date(now), timezone));
+  if (!calendar.hours) return weekday(today) >= 1 && weekday(today) <= 5 ? "open" : "closed";
+  const passed = (clock: { hh: number; mm: number } | null) => clock !== null && zonedToUtc({ ...today, ...clock }, timezone) <= now;
+  if (passed(eveningStart(sessionsOn(calendar, dayOf(today, 1))))) return "open";
+  const sessions = sessionsOn(calendar, today);
+  if (sessions === null || (eveningStart(sessions) && passed(closeOn(calendar, today)))) return "closed";
+  return "open";
 }
 
 /** TradingView's countdown: `2d 5h` from a day up, `05:12:09` from an hour up, else `12:09`. */
