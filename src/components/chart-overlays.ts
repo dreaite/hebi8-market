@@ -528,7 +528,8 @@ function snapToRegression(id: string, { points }: OverlayPerformEventParams) {
  * TradingView's levels of a retracement or an extension, between the x of two of its points (on to
  * the pane's edge where its settings extend them): a line and a "0.618 (123.45)" label per level, in
  * the level's colour or all in the drawing's own, over the bands between them. The labels sit left
- * of the lines, off the fill; on lines extended to the left edge they sit on the lines there.
+ * of the lines, off the fill; on lines extended to the left edge they sit on the lines there. The
+ * drawing is picked and dragged by its lines and labels; the bands let the pointer through.
  */
 function fibLevels(p: Params, xa: number, xb: number, prices: number[]): Figures {
   const s = fibSettingsOf(p.overlay.extendData);
@@ -544,7 +545,8 @@ function fibLevels(p: Params, xa: number, xb: number, prices: number[]): Figures
       : []),
     ...levels.flatMap(({ level, value, y, color }) => {
       const text = `${level} (${fmt(p.chart, value)})`;
-      return [line([{ x: x0, y }, { x: x1, y }], { color }), s.extendLeft ? plain(p, 2, y, text, "left", "bottom", color) : plain(p, x0 - 4, y, text, "right", "middle", color)];
+      const label = s.extendLeft ? plain(p, 2, y, text, "left", "bottom", color) : plain(p, x0 - 4, y, text, "right", "middle", color);
+      return [line([{ x: x0, y }, { x: x1, y }], { color }), { ...label, ignoreEvent: false }];
     }),
   ];
 }

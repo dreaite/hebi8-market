@@ -30,6 +30,15 @@ describe("volume between two bars", () => {
     expect(volumeBetween(volumes, 7, 9)).toBeNull();
   });
 
+  it("has none for a range before the first bar, where the chart counts below zero", () => {
+    expect(volumeBetween(volumes, -4, -2)).toBeNull();
+    expect(volumeBetween(volumes, -2, -4)).toBeNull();
+    expect(volumeBetween(volumes, -3, -1)).toBeNull();
+    // ...and only the first bar when the range ends on it
+    expect(volumeBetween(volumes, -3, 0)).toBe(10);
+    expect(volumeBetween(volumes, 0, -3)).toBe(10);
+  });
+
   it("has none for a symbol without volume, and skips the bars that lack one", () => {
     expect(volumeBetween([null, undefined, null], 0, 2)).toBeNull();
     // today's bar built from a quote may have no volume yet

@@ -15,10 +15,11 @@ export function priceChangeText(from: number, to: number, precision: number): st
 
 /**
  * The volume of the bars from index `a` to `b`, both included and in either order; the part of the
- * range past the data has none. Null when no bar there has a volume (an index, a synthetic symbol).
+ * range before or past the data has none (KLineChart counts the bars before the first one below
+ * zero). Null when no bar there has a volume (an index, a synthetic symbol, a range off the data).
  */
 export function volumeBetween(volumes: (number | null | undefined)[], a: number, b: number): number | null {
-  const known = volumes.slice(Math.max(0, Math.min(a, b)), Math.max(a, b) + 1).filter((v) => typeof v === "number");
+  const known = volumes.slice(Math.max(0, Math.min(a, b)), Math.max(0, Math.max(a, b) + 1)).filter((v) => typeof v === "number");
   return known.length ? known.reduce((sum, v) => sum + v, 0) : null;
 }
 

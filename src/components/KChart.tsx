@@ -1023,6 +1023,7 @@ export function KChart({
       scheduleLegend();
     });
     // Drawing follows the mouse into sub panes; a click there is thrown away and the tool restarts on the main pane.
+    // A tap too: KLineChart takes it on the touchend and stops the click a browser would make of it.
     const onClick = () =>
       setTimeout(() => {
         const d = drawingRef.current;
@@ -1031,6 +1032,7 @@ export function KChart({
         if (m && m.currentStep !== DRAW_DONE && m.paneId !== CANDLE_PANE) startMeasure();
       }, 0);
     el.addEventListener("click", onClick, true);
+    el.addEventListener("touchend", onClick, { capture: true, passive: true });
     // a path or polyline ends on Enter; KLineChart itself finishes it on a double click
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Enter" && !e.defaultPrevented && finishOpenDrawing(true)) e.preventDefault();
@@ -1123,6 +1125,7 @@ export function KChart({
       clearTimeout(checkTimer);
       cancelAnimationFrame(legendFrame.current);
       el.removeEventListener("click", onClick, true);
+      el.removeEventListener("touchend", onClick, true);
       el.removeEventListener("mouseleave", onLeave);
       window.removeEventListener("keydown", onKey);
       el.removeEventListener("pointerdown", onMeasurePress, true);
