@@ -837,7 +837,7 @@ client id 不是秘密（device flow 的设计就是给拿不住密钥的客户�
 **反馈页签**的四种状态，表单（类型分段 问题 bug / 体验 ux / 数据 data / 想法 idea、标题、描述、「附带页面信息」、「可以自动修复」、可展开的「预览将附带的信息」= 实际发送的 JSON）在每种状态下都在，未发送的内容在本标签页内关掉抽屉也保留：
 
 - **未启用**（client id 为空）：「反馈未启用」，说明不能在应用里直接提交（不提配置项，那是部署的人看的，见上表）；表单下方主按钮是「在 GitHub 网页上提交」。
-- **未登录**：「用 GitHub 登录」+ 说明会以你的名义提交到哪个仓库；表单下方是次要按钮「在 GitHub 网页上提交」。入口提供网页登录时，按钮是整页跳转（`next` 是当前页面加 `?help=feedback`，回来后抽屉重新打开在反馈页签）；跳走前把未发送的表单存进 sessionStorage（`hebi8m:feedback-draft`），页面再加载时取回并删掉。
+- **未登录**：「用 GitHub 登录」+ 说明会以你的名义提交到哪个仓库；表单下方是次要按钮「在 GitHub 网页上提交」。入口提供网页登录时，按钮是整页跳转（`next` 是当前页面加 `?help=feedback`，回来后抽屉重新打开在反馈页签）；跳走前把未发送的表单存进 sessionStorage（`hebi8m:feedback-draft`），页面再加载时取回并删掉；device flow 不离开页面，不暂存。
 - **登录中**（只有 device flow）：大号、可复制的 user code（复制不用 async clipboard——内网是 http，没有安全上下文——而是隐藏 textarea + `execCommand("copy")`，焦点留在抽屉里）、「打开 github.com/login/device」（新标签页，地址来自 GitHub 的 `verification_uri`，只接受 `https://github.com/…`）、状态行（等待授权 / GitHub 要求放慢）+ 倒计时、「取消」。进行中的登录记在模块变量里，关掉再打开抽屉会接着轮询。
 - **已登录**：头像 + 用户名 +「退出」；「提交」按钮下注明「以你的 GitHub 账号提交到 <repo>」。`Ctrl/Cmd+Enter` 提交，成功 toast「已提交 #123」（链到 issue）并清空；GitHub 返回 403 / 404 / 410 时显示中文原因并给出「在 GitHub 网页上提交」。未登录 / 未启用时 `Ctrl/Cmd+Enter` 打开网页版。
 - **已登录但会话没有 token**（从其他设备带过来的登录）：头像 + 用户名 +「退出」下面多一块说明「这台设备的登录是从其他设备带过来的，没有 GitHub 的授权」和「用 GitHub 登录」（网页登录或 device flow，登录后换成带 token 的新会话）；表单下方和未登录时一样是「在 GitHub 网页上提交」。服务端同样把关：这种会话调 `POST /api/github/issues` 得到 403 和同样的说明，会话保留。

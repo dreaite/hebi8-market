@@ -267,7 +267,8 @@ function FeedbackTab({
           next={feedbackHref}
           onStart={() => {
             setNotice(null);
-            stashDraft();
+            // only the web login leaves the page; the device flow stays, and a stash nobody takes back would return as an old draft on the next reload
+            if (gh.webLogin) stashDraft();
           }}
           reload={reload}
           toast={toast}
