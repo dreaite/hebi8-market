@@ -14,6 +14,8 @@ hebi8 是一个**周度复盘工具**，不是 TradingView 的替代品。每天
 
 第八天之外只有一种打扰：自己建的**警报**触发，推到 Telegram、webhook 或开了网页推送的设备（§2.5–§2.7）。警报可以盯一个标的，也可以对全部自选；每条警报有一个「判断时机」：盘中价格（每 5 分钟取一次最新价来判断，盯一个标的时的默认）或日线收盘（每次同步后只看已收盘的日线，对全部自选时的默认）。系统不预置任何警报。只存日线，不存日内 K 线。
 
+看不完所有标的时，可以让 agent 代劳：它经 `/mcp`（§6）读行情、拿公式扫自选，把想法写成公式或警报，之后由服务器算和盯。agent 建的对全部自选的警报先是草稿，等人在页面上确认（§2.5）。
+
 本文是 v2 的实施规范。v1 的代码可以参考（`tradingDay`、公式引擎、指标目录、统计定义都保留），但不需要兼容：目录、schema、接口都按本文重做。
 
 ---
@@ -85,6 +87,8 @@ alerts:                        # 警报（§2.6）：总览「警报」列按名
   - { key: GPU4090, label: 4090 咸鱼跌破 1.1 万, cond: less, value: 11000, enabled: false }  # 暂停中
   - { label: 周线多头, when: "close > sma(close, 40) and sma(close, 10) > sma(close, 40)", tf: W, notify: false }  # 不写 key：对全部自选；只在总览显示
   - { label: 破200周, when: "close < sma(close, 200)", tf: W }              # 对全部自选，新成立时推送
+  - { key: ETH, cond: less, value: 1500, by: agent }                        # agent 经 MCP 建的（§2.5），盯一个标的的直接生效
+  - { label: 放量突破, when: "cross(close, highest(ref(high, 1), 50))", by: agent, draft: true }  # agent 建的对全部自选的警报：草稿，页面上确认（去掉 draft）后才判断
 
 datasets:                      # 自定义数据集（§2.4）：名字 → git 地址或本机目录
   gpu: https://github.com/dreaife/gpu-prices
@@ -214,7 +218,7 @@ CREATE TABLE usage_alerts (kind TEXT NOT NULL, day INTEGER NOT NULL, PRIMARY KEY
 
 ### 1.5 用户配置目录（`HEBI8_SECRETS`，默认 `~/.config/hebi8/market`，目录 700、文件 600）
 
-不在 vault、不在 data、不进 git：`sessions.json`（GitHub 登录，§5.8）、`github-oauth.json`（网页登录的 client id 和 secret，手写，§5.8）、`notify.json`（实例的通知设置，§2.5）、`notify-users.json`（每个人绑定的通道，§2.5）、`vapid.json`（网页推送的 VAPID 密钥对，首次用到时生成，§2.7）、`traffic-salt.json`（访客哈希的盐，首次用到时生成，§1.7）。
+不在 vault、不在 data、不进 git：`sessions.json`（GitHub 登录，§5.8）、`mcp-tokens.json`（agent 用的个人令牌，只有哈希，§1.6、§5.5）、`github-oauth.json`（网页登录的 client id 和 secret，手写，§5.8）、`notify.json`（实例的通知设置，§2.5）、`notify-users.json`（每个人绑定的通道，§2.5）、`vapid.json`（网页推送的 VAPID 密钥对，首次用到时生成，§2.7）、`traffic-salt.json`（访客哈希的盐，首次用到时生成，§1.7）。
 
 ### 1.6 多人共用一台实例
 
@@ -237,6 +241,7 @@ CREATE TABLE usage_alerts (kind TEXT NOT NULL, day INTEGER NOT NULL, PRIMARY KEY
 - **实例级设置只认根 vault**：`owner`、`sync`、`datasets`、`usage`。用户 yaml 里写了也忽略（页面上提示一次）。
 - **第一次登录**的非 owner：复制根 vault 的 `hebi8.yaml` 作为起点，去掉 `owner`、`sync`、`datasets`、`usage`、`alerts` 和旧的 `conditions`（不替任何人预置警报），分组按「美股、宏观、加密」在前、其余按 owner 原来的顺序排（`vault.example` 也是这个顺序）；notes / journal / charts 为空。之后两边互不影响。
 - **所有写操作**（Server Actions、写文件的 Route Handler）都先取 viewer，`canWrite` 为假就返回「请先登录」；写入路径只来自 viewer 的 vault 目录，不接受客户端传来的目录或 login。读操作同样只读 viewer 的 vault。
+- **agent 的身份是个人令牌**，不是 cookie。令牌在设置页生成（§5.5），`mcp-tokens.json` 里以令牌的 SHA-256 为键记一条 `{ name, login, write, created_at, used_at }`，明文只在生成时显示一次。`/mcp` 的每个请求带 `Authorization: Bearer <令牌>`，由 `tokenViewer()`（`src/lib/viewer.ts`，令牌变成 viewer 的唯一一处；以后别的途径发的令牌也接到这里）解析成**和这个人登录后一样的 viewer**：owner 的令牌是根 vault，其他人的是 `vault/users/<login>/`，单用户模式下是根 vault；只读令牌的 `canWrite` 为假。令牌不存在、已吊销，或者是实例改成共用之前生成的（`login` 为空，不属于任何人），都解析不出 viewer。`used_at` 和会话的 `seen_at` 一样一天最多写一次。令牌不过期，不用了就吊销；每人最多 20 个。
 - **同步**：要同步的 key 是所有 vault 的并集（各自的 groups、bench、公式引用、告警、charts 对比列表）。同步后对每个 vault 算一遍 stats 和告警。
 - **页头**：右侧显示当前身份。未登录是「登录」按钮：当前入口提供网页登录时整页跳到 GitHub、授权后回到原来的页面，否则打开登录抽屉开始 device flow（§5.8）；登录后是头像 + login，菜单里有「通知设置」（同一个抽屉，§2.5）、「在其他设备上登录」（同一个抽屉，打开就生成链接，§5.8）、owner 才有的「使用情况」（§1.7）和「退出」。owner 模式下未登录时，总览标题是「示例列表」（内容就是 owner 的列表）。
 - **怎么用**：第一次打开总览时弹出一个三步引导面板（扫描 / 深看 / 记录），每步一张循环小动画，←/→ 翻页；关掉后记在浏览器 localStorage，不再自动出现，帮助抽屉「使用」页签里的「打开三步引导」可以再打开。访客的最后一步是「用 GitHub 登录」和「先看看示例」。
@@ -250,7 +255,7 @@ CREATE TABLE usage_alerts (kind TEXT NOT NULL, day INTEGER NOT NULL, PRIMARY KEY
 公开以后先做到「看得见」：谁在用、用了多少、上游被问了多少次。**不限流、不封禁、不加访问控制**；人多了再决定策略。
 
 - **记录挂在 proxy**（`src/proxy.ts`）。这版 Next 的 proxy 默认跑 Node.js runtime，在同一个进程里 `require`，路由之前执行，所以页面、Server Action（对页面的 POST，带 `Next-Action` 头）和 API 路由都经过它；matcher 排除 `_next/static`、`_next/image`、favicon、`icon.svg`、`apple-icon`、`manifest.webmanifest`、`opengraph-image` 和带静态扩展名的文件（`robots.txt`、`sitemap.xml` 也在其中）。proxy 只往 `globalThis` 上的内存表里加计数（`src/lib/traffic.ts`），不碰数据库；带会话 cookie 的请求还在这里滑动续期（§1.6）。
-- **来源**按 Host 判断：公网域名是隧道（`public`）；IP、单标签名、`localhost`、`*.ts.net` 是 Tailscale（`tailnet`）。**类型**：`/api/*` 是 api，带 `Next-Action` 是 action，带 `Next-Router-Prefetch` 是 prefetch（路由预取，不算浏览，热门路径里不列），其余是 page。
+- **来源**按 Host 判断：公网域名是隧道（`public`）；IP、单标签名、`localhost`、`*.ts.net` 是 Tailscale（`tailnet`）。**类型**：`/api/*` 和 `/mcp` 是 api，带 `Next-Action` 是 action，带 `Next-Router-Prefetch` 是 prefetch（路由预取，不算浏览，热门路径里不列），其余是 page。
 - **路径归一**（行数不能被扫描器撑大）：proxy 把路径换成本应用真实存在的路由（`traffic.ts` 的 `ROUTES`，测试对照 `src/app` 下的文件保持同步）；`/chart/<key>` 统一成一种编码，落库时只有 `symbols` 或 `stats` 表里有的 key（也就是有人在看、在同步的品种，含合成标的）才保留，其他归到 `/chart/[key]`；匹配不到任何路由的一律是 `(其他)`。所以 `traffic` 每天的行数 ≤ 2 个 origin × 4 种类型 ×（路由数 + 已有品种数 + 2）。
 - **访客**：公网取 `CF-Connecting-IP`，Tailscale 取 Next 填进 `X-Forwarded-For` 的 socket 地址；存 `HMAC-SHA256(盐, IP)` 的前 16 位，盐在配置目录的 `traffic-salt.json`。访客单独一张表（`visitors`），不和路径交叉：每天每个 origin 最多 `MAX_VISITORS = 2000` 个不同访客，已存的照常累加，新来的超出上限就合进 `(其他)` 这一行，页面上那天的访客数显示成「2000+」。代价是热门路径不再有「每个路径多少访客」。**登录名**：proxy 只记会话 cookie，落库时整批只读一次 `sessions.json`，在内存里查；伪造的 cookie 查不到就是未登录。
 - **落库**（`src/lib/usage.ts`，从 `instrumentation` 启动，`globalThis` 防重复）：每 30 秒一次，或内存里攒到 5000 个不同的键时提前；同一天、同一组维度的行累加。写库失败（锁超时、磁盘满）时这一批合并回内存缓冲，下次再写。进程退出丢最后几十秒的计数，可以接受。每小时删一次 90 天以前的行。监控数据只在 `data/hebi8.db`，不进 vault。
@@ -338,6 +343,13 @@ date,open,high,low,close,volume
 - 写了 `key`：只对这一个标的求值。
 - 没写 `key`：对每个自选标的（含合成）分别求值，`bench` 是各自的基准。只能是 `when` 公式或涨跌 %（价格和通道离开具体标的没有意义，解析时报错）；`trigger` 固定是每根 K 线最多一次。在界面上新建、修改或恢复这样一条时，保存后立刻只把这些警报算一遍（`runAlerts(…, "watchlist")`，日线收盘的按已收盘日线，盘中价格的按带今日 K 线的日线），总览不用等下一次同步。
 
+**草稿和来源**（agent 经 `/mcp` 建的警报，§6）：
+
+- `by: agent`：这条警报是 agent 建的或最后改过的，警报面板上名字旁边标「Agent」。人在页面上编辑不去掉它。
+- `draft: true`：草稿。**不判断、不推送、不进轮询、总览上不显示徽标**，`alert_state` 里也没有它的行；警报面板里状态是「待确认」，按钮是「确认 / 丢弃」，总览表格上方另有一块「待确认的警报」列出它们（总览没有警报列表，徽标又不显示草稿，不列出来就没人知道有东西在等）。「确认」（Server Action `confirmAlert`）去掉 `draft` 和 `enabled: false`，状态清零，对全部自选的立刻判断一次，之后和页面上新建的一条没有区别；「丢弃」就是删除。手改 yaml 把 `draft: true` 删掉等于确认。草稿在页面上编辑后仍是草稿。
+- **规则**：盯一个标的（有 `key`）的警报，agent 保存后直接生效。对全部自选（没 `key`）的警报，agent 只能存成草稿：新建是草稿，编辑一条已经生效的也变回草稿（状态清掉），已停止的不能由 agent 恢复（「对全部自选的警报只能由用户在页面上恢复」），草稿也没有经 MCP 确认的办法。停止和删除不受限制。理由：盯一个标的的警报最多打扰一次、范围看得见；对全部自选的一条公式写错了会在几十个标的上一起推送，所以要人看过。
+- 两个字段都不参与 id（§2.5 的哈希只看范围和条件），确认前后是同一条警报。`draft` 可以手写在任何警报上；`by` 只认 `agent`，其他值忽略。
+
 **判断时机**（`check`，每条警报一个）决定什么时候判断、看不看今天还没收完的那根日线；`tf`、触发方式、`fired_bar`、「新成立才推送」都不受它影响，切换它也不换 id（状态保留）：
 
 | `check` | 界面叫法 | 什么时候判断 | 看哪些日线 |
@@ -409,6 +421,8 @@ date,open,high,low,close,volume
 | `label` | 可省，省了按条件自动生成，比如「BTC 上穿 130,000」；总览徽标上显示的就是它 |
 | `enabled` | 可省，默认 true；`false` 是已停止 |
 | `notify` | 可省，默认 true；`false` 只在总览显示，不推送 |
+| `draft` | 可省；`true` 是待确认的草稿，不判断（§2.5） |
+| `by` | 可省；`agent` 表示经 MCP 建的或改的（§2.5） |
 | `id` | 可省，见 §2.5 |
 
 | `cond` | TradingView 叫法 | `value` | 类型 |
@@ -427,7 +441,7 @@ date,open,high,low,close,volume
   已触发的 `once` 手改 yaml 的 `enabled: true` 不会重新启用；重新启用请用界面上的恢复。
 - 状态记在 `alert_state`（§1.4），事件类的上一次结果也在这里。
 
-**谁被轮询**（标配，不用建警报）：所有 vault 的自选标的和它们的 `bench`，加上 `enabled` 且判断时机是「盘中价格」的警报的标的和它们 `when` 公式引用到的标的；合成标的展开成操作数；`data:` 标的只有日线，不轮询，跟着日线同步判断。判断时机是「日线收盘」的警报（对全部自选的默认）不为轮询添标的，报价轮次也不判断它们。
+**谁被轮询**（标配，不用建警报）：所有 vault 的自选标的和它们的 `bench`，加上 `enabled`、不是草稿且判断时机是「盘中价格」的警报的标的和它们 `when` 公式引用到的标的；合成标的展开成操作数；`data:` 标的只有日线，不轮询，跟着日线同步判断。判断时机是「日线收盘」的警报（对全部自选的默认）不为轮询添标的，报价轮次也不判断它们。
 
 **规模**：请求数按「每轮每个源一次」算，不随标的数涨：到期的标的每个源每 100 个一个请求（`CHUNK`），同一个源的几个请求并发。实测 Yahoo 155 个一次 0.8 秒，TradingView 一个 quote 会话 155 个 1.6 秒（100 个 0.9 秒，远在 20 秒超时内），Binance `tradingDay` 一次最多 100 个、权重每个 4（封顶 200，限额 6000/分钟），100 个交易对的 URL 约 1.7 KB。`upstream` 按实际请求数记（每块一次）。一块失败时别的块照常入库，失败那块的标的下一轮再取；一个源整轮没有一块成功才算一次失败。
 
@@ -549,6 +563,7 @@ D 原样；W 周一起算；M 月初；**Q 季初**（`Date.UTC(y, floor(m/3)*3,
 ### 5.1 总览 `/`（RSC 直读 yaml + stats 表，价格来自报价的行现算）
 
 - 顶部：`自选 · 上次同步`；右侧「上次复盘 N 天前」链到 `/review`、「周期 · 1周 1月 1年」（点开选择显示的涨跌周期）、涨跌色分段开关「绿涨 | 红涨」、「刷新」、「+ 添加」（打开全局搜索的添加模式，Enter = 加入自选，见 §5.4）。
+- **待确认的警报**：viewer 有草稿警报（agent 经 MCP 建的对全部自选的警报，§2.5）时，标题行上方多一块卡片，每条一行：名字、范围和定义、「确认」「丢弃」。没有草稿时不出现。
 - **一张表格**，`table-layout: fixed` + `<colgroup>`，分组做 subheader 行，所以「价格」列在每个分组里的 x 坐标一致。名称列吃剩余宽度并 truncate（title 显全名）；其余列固定：价格 112、每个涨跌周期 72、距高点 96、警报 220、两年 200、菜单 28。
 - **距高点**一列合并了原来的「距高点」和「52 周」两列：上面是距历史最高收盘的跌幅（`ddAth`，按它排序），下面是 52 周区间位置的短条（`pos52`，最左 52 周低点、最右高点）。
 - **表头悬浮说明**：名称、价格、各涨跌周期（相对哪天的收盘）、距高点（两部分各是什么）、两年都有 `title`，有说明的表头文字带虚下划线；可排序的在说明后面接排序提示。
@@ -636,7 +651,7 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 - **入口**：顶栏闹钟按钮「警报」和 `Alt+A`，价格默认填最新价；在主图上右键出现「在 12,345.00 添加警报」（十字线所在价格）；选中水平线 / 水平射线后，浮动工具条多一个闹钟按钮，价格取这条线的价格（只是复制价格，之后挪线不会改警报）。
 - **对话框**（「新建警报」/「编辑警报」，图表和总览共用）：第一行「商品」分段「当前标的 | 全部自选」，选全部自选时价格和通道类条件不可选；「条件」下拉是 §2.6 表里的九种叫法加「自定义公式」；值的输入随条件变化（一个价格 / 通道的上下沿 / 百分比和 K 线数 / 公式编辑器），公式多一行「周期」日 / 周 / 月 / 季线；「判断时机」分段「盘中价格 | 日线收盘」（默认随商品：当前标的是盘中价格，全部自选是日线收盘；没动过它时切换商品跟着变）；「触发」分段「仅一次 | 每根 K 线一次」（全部自选时固定为每根 K 线最多一次）；「名称」占位是自动生成的名字；「通知」勾选框「推到我的通知通道」，不勾就只在总览显示。底部「取消」「创建」，从总览编辑时左边多一个「删除」。数值输入框聚焦全选，回车提交。
 - **图上的警报线**：当前标的每条启用的价格类警报画一条虚线（通道画两条），右端价格轴上有闹钟标签；点标签打开编辑。已停止的不画。
-- **警报列表**：右侧边栏在「自选」「笔记」旁边多一个「警报」页签，列出当前 vault 的全部警报：标的名（对全部自选的写「全部自选」，没有当前价）、条件、触发方式、是否推送、状态（活动 / 已触发 / 已停止）、当前价和取价时间；每行有「编辑」「暂停 / 恢复」「删除」，点行打开那个标的的图表。
+- **警报列表**：右侧边栏在「自选」「笔记」旁边多一个「警报」页签，列出当前 vault 的全部警报：标的名（对全部自选的写「全部自选」，没有当前价）、条件、触发方式、是否推送、状态（活动 / 已触发 / 已停止，草稿是「待确认」）、当前价和取价时间，agent 建的或改的在名字旁标「Agent」（§2.5）；每行有「编辑」「暂停 / 恢复」「删除」（草稿是「编辑」「确认」「丢弃」），点行打开那个标的的图表。
 - **写回**：Server Actions `saveAlert(def)`、`deleteAlert(id)`、`setAlertEnabled(id, enabled)`，和别的写操作一样先过 viewer 写权限，写当前 viewer 的 yaml，注释保留。只读访客看到入口，点开是登录提示。
 
 **拍快照**（TV 顶栏的相机按钮，在刷新和全屏之间）：菜单是「下载图片 · 复制图片 · 复制链接 · 在 X 上分享」，系统支持带文件分享时（手机）多一项「分享…」（`navigator.share` 带 PNG）。快捷键照 TV 文档里有的两个：`Ctrl/Cmd+Alt+S` 保存图片，`Alt+S` 复制链接（TV 的 Alt+S 是拍快照并把快照链接放进剪贴板；这里没有托管快照，复制的是图表页的公开地址）。复制图片只在菜单里，没有快捷键。
@@ -707,7 +722,13 @@ KLineChart 自带的 `Shift+←/→` 滚动和 `Shift+= / -` 缩放保留。
 
 周期选择、涨跌色、图表偏好由各处 UI 写回 yaml；分组、名称、基准由总览行菜单写回；警报由图表和总览的警报对话框写回；其余（同步时间、别名、数据集）直接改 yaml，写法在 README，页面上不提示路径（owner 在 `/usage` 能看到）。通知通道写在 `~/.config/hebi8/market/notify.json`（§2.5）。反馈用的 GitHub App 只有一个 client id，写在源码里（§5.8）。
 
-**设置页 `/settings`**（页头「设置」）只放一次性的搬家操作：从 TradingView 导入自选列表和画线、把自选导出成 TradingView 能导入的列表。访客能看、能导出（示例列表），导入的按钮是灰的，提示登录。纯函数在 `src/lib/tv-import.ts`（列表、代码映射）和 `src/lib/tv-drawings.ts`（画线），Server Actions 在 `src/app/tv-actions.ts`，都先过 viewer 写权限、只写 `viewer.dir`。
+**设置页 `/settings`**（页头「设置」）放两类东西：agent 的接入令牌，和一次性的搬家操作（从 TradingView 导入自选列表和画线、把自选导出成 TradingView 能导入的列表）。访客能看、能导出（示例列表），生成令牌和导入的按钮是灰的，提示登录。
+
+**Agent 接入（MCP）**（`AgentTokens`，Server Actions 在 `src/app/token-actions.ts`）：第一节。写着 MCP 地址（当前页面的 origin + `/mcp`，所以在 Tailscale 地址上生成的命令走 Tailscale）和要带的请求头。
+
+- **生成**：起名（必填，最多 40 字）、选「只读」或「可写」、点「生成令牌」。共用模式下要登录（`viewer.canWrite`），令牌记在登录的那个账号名下；单用户模式下能改页面的人就能生成，`login` 为空。
+- **只显示一次**：生成后出现一个框，里面是令牌明文和可以直接复制的 Claude Code 接入命令（`claude mcp add --transport http hebi8-market <地址> --header "Authorization: Bearer <令牌>"`），各带「复制」；刷新或离开页面后不再出现，服务器上只有哈希（§1.6）。
+- **列表**：名字、权限、创建日期、最后使用日期（一天最多更新一次，没用过写「还没用过」；日期按 `sync.tz`）、「吊销」（点两次确认）。只列自己的令牌，吊销也只能吊销自己的。页面上一个令牌用哈希的前 16 位表示。纯函数在 `src/lib/tv-import.ts`（列表、代码映射）和 `src/lib/tv-drawings.ts`（画线），Server Actions 在 `src/app/tv-actions.ts`，都先过 viewer 写权限、只写 `viewer.dir`。
 
 **代码映射**（`tvSymbolOf(key, exchange)` / `keyIdentity(key)` / `tvIdentity(symbol)`）：
 
@@ -951,7 +972,7 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 - **分享卡片**（`opengraph-image.tsx`，next/og，1200×630，深色主题，`force-dynamic`）：站点卡片是大 logo +「hebi8/market」+ 标语 + 一句话介绍 + 公开域名；图表卡片（`/chart/[key]/opengraph-image`）是名称和代码、源 · 币种 · 近半年涨跌、最新收盘和日涨跌 + 日期、近 130 根日线收盘的折线和渐变填充（涨跌色看半年涨跌），底部是和导出图片同样的 logo +「hebi8/market」+ 地址。涨跌色取根 yaml 的 `updown`。
 - **卡片不泄露个人内容**：抓取方没有会话，卡片也不读 cookie：名字、配色、合成表达式的别名只从根 vault 的 yaml 读（未登录访客本来就看这个），K 线只从公共缓存读，不碰任何 `users/<login>/`、画线、笔记、警报。没缓存的 key 显示「暂无缓存的日线」，读取不会触发同步。
 - **字体不走网络**：next/og 遇到已加载字体里没有的字会去 Google Fonts 下载、遇到 emoji 会去拉 twemoji，违反「读取不碰网络」。所以 `src/lib/og.tsx` 只用本机字体：`HEBI8_OG_FONT` 或常见路径下的 Noto Sans CJK SC `.otf`（satori 读不了 `.ttc`）、DejaVu Sans Mono 一类的等宽字体，找不到中文字体时用 next/og 自带的 Geist；图上画的每一段文字（名称、代码、说明、价格、空态文案、地址）都过 `ogText`：按字素切开，含 emoji 成分的整段去掉（国旗、ZWJ 组合、keycap、变体选择符），再去掉任何已加载字体的 cmap 里都没有的字（`src/lib/font-coverage.ts`），所以没有中文字体时中文也一起去掉。字体数组整个进程只建一次，satori 按引用缓存解析结果（第一次约 0.4s，之后十几毫秒）。
-- **`robots.txt`**：只禁止 `/api/`，指向 `sitemap.xml`。设置、复盘、使用情况不在 Disallow 里：它们靠页面上的 noindex 不被收录，而爬虫只有能抓取才读得到 noindex（被 Disallow 的地址反而可能只以链接的形式进索引）。首页有 canonical 指向公开地址的根路径。**`sitemap.xml`**：首页 + 根 vault 自选里每个标的的图表页（`lastModified` 是同步时间）。两个都 `force-dynamic`，地址和自选在请求时读。
+- **`robots.txt`**：只禁止 `/api/` 和 `/mcp`，指向 `sitemap.xml`。设置、复盘、使用情况不在 Disallow 里：它们靠页面上的 noindex 不被收录，而爬虫只有能抓取才读得到 noindex（被 Disallow 的地址反而可能只以链接的形式进索引）。首页有 canonical 指向公开地址的根路径。**`sitemap.xml`**：首页 + 根 vault 自选里每个标的的图表页（`lastModified` 是同步时间）。两个都 `force-dynamic`，地址和自选在请求时读。
 - 这些元数据文件（图标、manifest、分享卡片、robots、sitemap）和 `sw.js` 不计入流量（proxy 的 matcher 排除，`pwa-icon/*.png` 和 `sw.js` 靠扩展名，§1.7）。
 
 ---
@@ -970,7 +991,47 @@ fork：建自己的公开 App（同样的权限、开 Device Flow、装在自己
 
 **Server Actions（写）**：`refresh()`、`addSymbol({ key, group, name?, bench?, alias? })`、`loadSymbol(key)`（只拉缓存，§2.3）、`removeSymbol(key)`、`moveSymbol(key, group, index?)`（index 不算被移动的那个，省略 = 末尾）、`moveGroup(name, index)`、`addGroup(name)`、`renameGroup(name, next)`、`deleteGroup(name)`（标的并入相邻组）、`renameSymbol(key, name)`、`setBench(key, bench | null)`、`saveNote(key, body)`、`saveJournal(week, body)`、`saveIndicator(def)` / `deleteIndicator(id)`、`saveAlert({ id?, key | null, cond, value? | when + tf?, trigger, label?, notify? })` / `deleteAlert(id)` / `setAlertEnabled(id, enabled)`、`saveChartState(key, state)`、`setChartPrefs(partial)`、`setPeriods(list)`、`setUpdown(mode)`、`setUsageLimits({ visitors, limited })`（owner，§1.7）；`src/app/tv-actions.ts` 里的 `importTvList({ text, fallback, mode })`、`listTvLayouts({ sessionid, sign })`、`previewTvDrawings(来源)`、`importTvDrawings({ drawings, add })`（§5.5，`listTvLayouts` 和 `previewTvDrawings` 是仅有的带用户 TradingView cookie 访问外网的地方：`/my-charts/`；`/markets/`、`/chart-token`、charts-storage）。Server Action 在客户端是**串行派发**的，自动保存靠去抖合并，不并行发。
 
+`saveAlert` 的入参还有 `check?`、`enabled?`，以及撤销删除时把草稿和来源放回去用的 `draft?`、`by?`；`confirmAlert(id)` 确认一条草稿（§2.5）。设置页的令牌在 `src/app/token-actions.ts`：`createAgentToken({ name, write })`（返回值里带一次明文）、`revokeAgentToken(id)`（§5.5）。
+
 所有写入校验输入；文件路径只能落在 vault 内（fileKey 已保证无 `/`、`..`）；写入原子。
+
+**操作层**（`src/lib/ops.ts`）：页面和 agent 都能做的写操作只有一份实现，入参是 viewer：`addSymbol`、`removeSymbol`、`saveAlert`、`deleteAlert`、`setAlertEnabled`、`confirmAlert`、`saveIndicator`、`deleteIndicator`，以及只给 agent 的 `appendNote`、`appendJournal`。对应的 Server Action 是薄壳（取 viewer、`requireWriter`、`revalidatePath`、包成 `ActionResult`），MCP 工具是另一层薄壳；校验和报错（中文，抛出）都在操作层，两边看到的一样。`saveAlert` 和 `setAlertEnabled` 多一个参数说明是谁在改（`page` / `agent`），§2.5 的草稿规则就在这里。只有页面用的操作（分组、排序、图表偏好、画线、整篇保存笔记和日志、TV 导入）留在 action 里。
+
+**MCP 入口 `/mcp`**（`src/app/mcp/route.ts` → `src/lib/mcp/server.ts`，工具在 `src/lib/mcp/tools.ts`）：给 agent 用的唯一入口，也是唯一的非浏览器写入口。
+
+- **协议**：MCP 的 Streamable HTTP，无状态。每个 POST 一条 JSON-RPC 消息，回 `application/json`（通知回 202）；不发 `Mcp-Session-Id`，没有 SSE，GET / DELETE 回 405。协议部分（`initialize`、`tools/list`、`tools/call`、`ping`、通知、版本协商）用官方 `@modelcontextprotocol/sdk` 的 `Server` 和 `WebStandardStreamableHTTPServerTransport`（直接吃 Web 标准的 `Request`、吐 `Response`，`sessionIdGenerator: undefined`、`enableJsonResponse: true`），每个请求新建一对、用完关掉。工具入参用 zod 定义，`tools/list` 里的 JSON Schema 由它生成，调用时先按它校验。
+- **身份**：任何模式下都必须带 `Authorization: Bearer <令牌>`，单用户模式也一样（实例经隧道公开，页面可以让人随便看，写入口不行）。没带、无效或已吊销回 401（`WWW-Authenticate: Bearer`），在进协议之前。令牌解析成 viewer（§1.6），所有工具只读写 `viewer.dir`、只碰 `viewer.vault` 的 `stats` 和 `alert_state`。
+- **只读令牌**调写工具：工具结果 `isError`，「这个令牌是只读的…」，在操作之前拒绝。`tools/list` 仍然列出全部工具，写工具的 `annotations.readOnlyHint` 为假。
+- **出错**：参数不合 schema、只读令牌、操作层抛的错都作为工具结果返回（`isError: true`，正文就是那句话，操作层的中文原样），不抛成协议错误，agent 读得到。
+- **读不联网**：和页面一样只读 vault、SQLite 和 `quotes` 表；`scan`、`test_formula`、`get_bars` 只算已缓存的标的，没同步过的报「没有缓存的日线」，不触发拉取。联网的只有 `search_symbols`（和 `/api/search` 共用 `src/lib/search-external.ts`）和 `add_symbol`（首次拉取兼校验，同页面）。
+- 写工具成功后 `revalidatePath("/", "layout")`，和 Server Action 一样。
+- `/mcp` 在流量统计里算 api（§1.7），`robots.txt` 禁止抓取。
+
+工具（名字是英文 snake_case，描述是写给 agent 的英文，写明只有日线及以上周期、没有日内 K 线）：
+
+| 工具 | 读 / 写 | 作用 |
+|---|---|---|
+| `overview` | 读 | 分组和每个标的：key、别名、名字、基准、最新价（有报价用报价，带时段）、1W…5Y 涨跌、距高点、52 周位置、在它上面成立或本周触发的警报、同步错误；上次和下次同步时间；待确认的草稿数 |
+| `get_bars` | 读 | 一个标的某周期（D / W / M / Q）的 OHLCV，最新的 `limit` 根（默认 200，最多 1000），带今天未收盘的那根（`last_daily_bar.closed` 说明它收没收） |
+| `scan` | 读 | 一条公式（布尔或数值）× 一批标的（默认全部自选，可给 `group` 或 `keys`）：每个标的最后一根和上一根的值、出错原因；`only_true` 只留成立的和出错的。`check` 选带今日 K 线（`price`，默认）还是只看已收盘日线（`close`），和警报的判断时机对应 |
+| `test_formula` | 读 | 一条公式在一个标的最近 N 根（默认 250，最多 3000）里：成立的根数、成立的区间、由假变真的次数和日期（规则同 §2.5 的判定：上一个已知值为假、这根为真；没有值的根不改状态，第一次见到只记录）。建警报前核对用 |
+| `formula_reference` | 读 | 公式语法、变量和函数（从 `SERIES_VARS`、`FUNCTIONS` 生成，不手抄）、警报的字段和 `cond` 种类（从 `ALERT_CONDS` 生成）、agent 能做什么 |
+| `search_symbols` | 读（联网） | 页面搜索的本地层 + 外部层合并后的结果：key、名字、交易所、是否已在自选、建议分组 |
+| `list_alerts` | 读 | 全部警报：定义、`status`（`draft` / `active` / `triggered` / `stopped`）、`by`、上次判断时在哪些标的上成立（`holds_on`，事件类没有）、上次触发时间 |
+| `read_note` | 读 | 一个标的的笔记；不给 key 列出有笔记的标的 |
+| `read_journal` | 读 | 某一周的复盘日志；不给周列出本周的 id 和有日志的周 |
+| `save_alert` | 写 | 新建或（给 `id`）整条替换一条警报；有 `key` 直接生效，没 `key` 存成草稿并在返回里写明要用户在页面确认（§2.5）。`by: agent` |
+| `delete_alert` | 写 | 删除（草稿也行） |
+| `set_alert_enabled` | 写 | 停止任何警报；恢复只限盯一个标的的 |
+| `add_symbol` | 写（联网） | 加自选，`group` 省略时按 `suggestGroup` 选现有分组 |
+| `remove_symbol` | 写 | 移出自选（不在自选里报错） |
+| `append_note` | 写 | 在笔记**末尾追加**一段（空行隔开） |
+| `append_journal` | 写 | 在某周（默认本周）日志末尾追加；那一周还没有文件时从页面的模板起头 |
+| `save_indicator` / `delete_indicator` | 写 | 公式指标，同页面（新建的自动在图表上打开） |
+
+笔记和日志只给追加、不给整篇覆盖：页面有自动保存（§5.6），agent 发来一整篇会把正在输入的内容冲掉。反过来，页面开着且有未保存的输入时，它下一次保存仍会盖掉 agent 刚追加的那段；这个窗口只有去抖的一秒，不为它加版本号。
+
+不经 MCP 暴露：分组的增删改排序、基准和改名、图表偏好、画线和对比、TV 导入、通知通道、使用情况设置、强制同步、确认草稿、令牌本身的管理。没有 OAuth（claude.ai 的连接器要用，之后做，发出的令牌同样交给 `tokenViewer()`）、没有另一套 REST 接口、没有 CLI。
 
 ---
 
@@ -1013,4 +1074,4 @@ schema v2 + 迁移；`adj` 因子与 `prices` 模式；适配器 meta；应用�
 
 ## 9. 不做的事
 
-访问控制、限流和封禁（实例经隧道公开，GitHub 登录只用来区分共用实例的人和提交反馈，不防恶意访问者；流量只监控，§1.6、§1.7）；vault 之间的共享和协作编辑；日内 K 线（盘中只取最新价判断警报，§2.6，不存也不画日内 K 线）；比 5 分钟更快的价格警报（WebSocket、逐笔）；入站 webhook；数据集爬虫（hebi8 只读仓库）；Pine Script 兼容；多个自选列表（TV 的「列表」切换）：现在只有一个列表 + 分组，一个标的只在一个组里，bench、名字都挂在条目上；要做多列表得先把每个标的的字段和「在哪些列表」分开，等确实需要再说。
+页面的访问控制、限流和封禁（实例经隧道公开，GitHub 登录只用来区分共用实例的人和提交反馈，不防恶意访问者；流量只监控，§1.6、§1.7；`/mcp` 例外，没有令牌进不来）；vault 之间的共享和协作编辑；日内 K 线（盘中只取最新价判断警报，§2.6，不存也不画日内 K 线）；比 5 分钟更快的价格警报（WebSocket、逐笔）；入站 webhook（入站的写接口只有带个人令牌的 `/mcp`，§6；没有别的 REST 写接口，也不接收别人推来的事件）；agent 替人确认对全部自选的警报（§2.5）；数据集爬虫（hebi8 只读仓库）；Pine Script 兼容；多个自选列表（TV 的「列表」切换）：现在只有一个列表 + 分组，一个标的只在一个组里，bench、名字都挂在条目上；要做多列表得先把每个标的的字段和「在哪些列表」分开，等确实需要再说。

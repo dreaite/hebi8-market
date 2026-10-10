@@ -1,10 +1,15 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
+import { AgentTokens } from "@/components/AgentTokens";
 import { ConfigErrorView } from "@/components/ConfigErrorView";
 import { TvExport, TvDrawingsImport, TvListImport } from "@/components/TvImport";
+import { publicUrl } from "@/lib/app-info";
+import { requestOrigin } from "@/lib/github";
+import { listTokens } from "@/lib/secrets";
 import { listSymbols } from "@/lib/store";
 import { exportTvList } from "@/lib/tv-import";
 import { readConfigSafe } from "@/lib/vault";
-import { getViewer } from "@/lib/viewer";
+import { getViewer, tokenOwner } from "@/lib/viewer";
 
 export const dynamic = "force-dynamic";
 // a person's own page: not for search engines (robots.ts keeps crawlers out as well)
@@ -13,7 +18,16 @@ export const metadata: Metadata = { title: "设置", robots: { index: false, fol
 const card = "rounded-lg border border-line bg-card";
 const head = "border-b border-line px-4 py-2.5";
 
-/** Settings that need a page (design §5.5): for now, TradingView in and out. */
+/** The address an agent is given: this page's own origin, so a token made on the tailnet connects over the tailnet. */
+async function mcpEndpoint(): Promise<string> {
+  try {
+    return `${requestOrigin(await headers())}/mcp`;
+  } catch {
+    return `${publicUrl()}/mcp`;
+  }
+}
+
+/** Settings that need a page (design §5.5): TradingView in and out, and the tokens agents connect with. */
 export default async function SettingsPage() {
   const viewer = await getViewer();
   const { config, error } = readConfigSafe(viewer.dir);
@@ -22,10 +36,21 @@ export default async function SettingsPage() {
   const symbols = listSymbols();
   const exported = exportTvList(config.groups.map((g) => ({ name: g.name, items: g.symbols.map((s) => ({ key: s.key, exchange: symbols[s.key]?.exchange })) })));
   const watched = config.groups.map((g) => ({ name: g.name, keys: g.symbols.map((s) => s.key) }));
+  const day = new Intl.DateTimeFormat("zh-CN", { timeZone: config.sync.tz, year: "numeric", month: "2-digit", day: "2-digit" });
+  // a visitor has no tokens; everyone else sees their own
+  const tokens = viewer.canWrite ? listTokens(tokenOwner(viewer)).map((t) => ({ id: t.id, name: t.name, write: t.write, created: day.format(t.created_at), used: t.used_at === null ? null : day.format(t.used_at) })) : [];
 
   return (
     <main className="settings-page mx-auto flex w-full max-w-[960px] flex-col gap-5 px-5 py-5">
       <h1 className="text-sm font-medium">设置</h1>
+
+      <section className={card}>
+        <div className={head}>
+          <h2 className="text-xs font-medium">Agent 接入（MCP）</h2>
+          <p className="mt-1 text-[11px] text-muted">让 Claude Code 这类 agent 读你的自选和行情、拿公式扫自选、把想法存成警报。每个 agent 一个令牌，拿着它就是你本人；它建的对全部自选的警报先是草稿，等你在页面上确认。</p>
+        </div>
+        <AgentTokens tokens={tokens} endpoint={await mcpEndpoint()} canWrite={viewer.canWrite} />
+      </section>
 
       <section className={card}>
         <div className={head}>

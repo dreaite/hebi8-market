@@ -1,13 +1,14 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { deleteAlert, saveAlert, setAlertEnabled } from "@/app/actions";
+import { confirmAlert, deleteAlert, saveAlert, setAlertEnabled } from "@/app/actions";
 import type { AlertView } from "@/lib/alert-view";
 import { fmtAgo, fmtPrice } from "@/lib/format";
 import { IconClose, IconPlus } from "./chart-icons";
 import { LoginButton, chartHref, useUi } from "./UiProvider";
 
 const STATUS: Record<AlertView["status"], { text: string; className: string }> = {
+  draft: { text: "待确认", className: "border-dashed border-accent/50 text-accent" },
   active: { text: "活动", className: "border-accent/50 text-accent" },
   triggered: { text: "已触发", className: "border-line text-muted" },
   stopped: { text: "已停止", className: "border-dashed border-line text-muted" },
@@ -16,6 +17,8 @@ const STATUS: Record<AlertView["status"], { text: string; className: string }> =
 /**
  * TradingView's 警报 panel: every alert of this vault, whatever the symbol. A row opens its chart;
  * 编辑 / 暂停·恢复 / 删除 sit on the row. Prices come from the quotes table, read by the page.
+ * One an agent made says so, and its draft (待确认, §2.5) has 确认 / 丢弃 in place of 暂停 / 删除:
+ * nothing judges it until it is confirmed here.
  */
 export function AlertsPanel({
   alerts,
@@ -43,7 +46,7 @@ export function AlertsPanel({
   const remove = async (a: AlertView) => {
     const result = await deleteAlert(a.id);
     if (!result.ok) return report(result);
-    toast(`已删除警报「${a.label}」`, {
+    toast(`${a.draft ? "已丢弃待确认的警报" : "已删除警报"}「${a.label}」`, {
       action: {
         label: "撤销",
         onClick: () =>
@@ -56,6 +59,8 @@ export function AlertsPanel({
             label: a.ownLabel ?? "",
             enabled: a.enabled,
             notify: a.notify,
+            draft: a.draft,
+            by: a.by,
           }).then(report),
       },
     });
@@ -99,6 +104,11 @@ export function AlertsPanel({
                     <span className="min-w-0 flex-1 truncate text-[13px] font-medium" title={a.name}>
                       {a.name}
                     </span>
+                    {a.by === "agent" && (
+                      <span className="shrink-0 rounded border border-line px-1 text-[11px] text-muted" title="由 agent 经 MCP 建立或修改">
+                        Agent
+                      </span>
+                    )}
                     <span className={`shrink-0 rounded border px-1 text-[11px] ${status.className}`}>{status.text}</span>
                   </span>
                   <span className="mt-0.5 block truncate" title={a.label}>
@@ -109,6 +119,7 @@ export function AlertsPanel({
                     {a.summary} · {a.key === null ? "每个标的每根 K 线最多一次" : a.trigger === "once" ? "仅一次" : "每根 K 线一次"}
                     {!a.notify && " · 不推送"}
                   </span>
+                  {a.draft && <span className="mt-0.5 block text-[11px] text-muted">确认后才开始判断{a.key === null ? "，会立刻对全部自选判断一次" : ""}</span>}
                   {a.key !== null && (
                     <span className="mt-0.5 block text-[11px] text-muted">
                       当前 {a.price != null ? `${fmtPrice(a.price)}${a.priceAt ? ` · ${fmtAgo(a.priceAt, "")}` : ""}` : "暂无价格"}
@@ -119,11 +130,17 @@ export function AlertsPanel({
                   <button type="button" className="btn h-6 px-1.5" onClick={() => onEdit(a)}>
                     编辑
                   </button>
-                  <button type="button" className="btn h-6 px-1.5" onClick={() => void setAlertEnabled(a.id, !a.enabled).then(report)}>
-                    {a.enabled ? "暂停" : "恢复"}
-                  </button>
+                  {a.draft ? (
+                    <button type="button" className="btn btn-secondary h-6 px-1.5" onClick={() => void confirmAlert(a.id).then(report)}>
+                      确认
+                    </button>
+                  ) : (
+                    <button type="button" className="btn h-6 px-1.5" onClick={() => void setAlertEnabled(a.id, !a.enabled).then(report)}>
+                      {a.enabled ? "暂停" : "恢复"}
+                    </button>
+                  )}
                   <button type="button" className="btn h-6 px-1.5 text-down" onClick={() => void remove(a)}>
-                    删除
+                    {a.draft ? "丢弃" : "删除"}
                   </button>
                 </span>
               </li>

@@ -192,6 +192,20 @@ export function entryKey(item: unknown, aliases: Record<string, string>): string
   return typeof value === "string" ? resolveKey(value, aliases) : null;
 }
 
+/** Where a watched key lives in the document: its group's `symbols` list and the index in it. */
+export function locateEntry(doc: Document, key: string, aliases: Record<string, string>): { symbols: YAMLSeq; index: number } | null {
+  const groups = doc.get("groups");
+  if (!isSeq(groups)) return null;
+  for (const group of groups.items) {
+    if (!isMap(group)) continue;
+    const symbols = group.get("symbols");
+    if (!isSeq(symbols)) continue;
+    const index = symbols.items.findIndex((item) => entryKey(item, aliases) === key);
+    if (index >= 0) return { symbols, index };
+  }
+  return null;
+}
+
 /** A group's name as the page shows it: an unnamed one is「组 N」, like the config reader says. */
 export const groupName = (group: unknown, index: number) => (isMap(group) && String(group.get("name") ?? "").trim()) || `组 ${index + 1}`;
 

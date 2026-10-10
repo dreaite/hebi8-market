@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo, useState, type FocusEvent, type ReactNode } from "react";
-import { deleteAlert, saveAlert, type AlertInput } from "@/app/actions";
+import { deleteAlert, saveAlert } from "@/app/actions";
 import { compileFormula } from "@/indicators/formula-indicators";
 import { ALERT_CHECKS, ALERT_CONDS, WATCHLIST, defaultCheck, describeCondition, parseCondition, type AlertCheck, type AlertCond, type AlertCondition, type AlertTrigger } from "@/lib/alert-conds";
 import type { AlertView } from "@/lib/alert-view";
+import type { AlertInput } from "@/lib/ops";
 import { isSynthetic, TF_LABELS, TIMEFRAMES, tickerOf, type Timeframe } from "@/lib/symbols";
 import { synthName } from "@/lib/synth";
 import { Dialog } from "./Dialog";
@@ -258,6 +259,7 @@ export function AlertDialog({
           {check === "price" ? "每 5 分钟取一次最新价判断（休市时每小时），今天还没收完的日线也算。" : "每次日线同步后判断，只看已经收盘的日线。"}
           {all ? "对每个自选标的分别判断，总览上在成立的标的旁显示这个名字。" : "总览上这个标的旁显示这个名字。"}
         </p>
+        {alert?.draft && <p className="text-[11px] text-muted">这条警报还在等确认：保存后仍是草稿，在警报面板或总览顶部点「确认」才开始判断。</p>}
         {error && <p className="text-down">{error}</p>}
         <div className="-mx-4 -mb-4 flex justify-end gap-2 border-t border-line px-4 py-3">
           {alert && onDeleted && (

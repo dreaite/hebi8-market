@@ -9,7 +9,7 @@ import { compile } from "@/indicators/formula";
 import type { SymbolStatus } from "./api-types";
 import { runAlerts } from "./alerts";
 import { loadDaily } from "./bars";
-import { allItems, findItem, type Config } from "./config";
+import { allItems, findItem, isLive, type Config } from "./config";
 import type { Bar } from "./series";
 import { QUOTE_ROUND_MS, QUOTE_SLOW_MS, quoteIsCurrent, scheduledSession, tradingDayAt, type TradingCalendar } from "./session";
 import { adapters } from "./sources";
@@ -88,7 +88,7 @@ export function quoteKeys(configs: Config[]): string[] {
     }
     for (const alert of cfg.alerts) {
       // one judged at the close reads daily bars only
-      if (!alert.enabled || alert.check !== "price") continue;
+      if (!isLive(alert) || alert.check !== "price") continue;
       // on the whole watchlist: the watched symbols and their benchmarks are in already
       if (alert.key) add(alert.key);
       if (!alert.when) continue;

@@ -3,7 +3,7 @@ import type { AlertCheck, AlertCond, AlertCondition, AlertTrigger } from "./aler
 import { ALERT_CHECKS, ALERT_CONDS, WATCHLIST, conditionLevels } from "./alert-conds";
 import { adoptConditionState, alertFiredAt, alertKeys, readState, stateId } from "./alerts";
 import { loadDaily, type DailyReader } from "./bars";
-import { checkNote, describeAlert, type AlertDef, type Config } from "./config";
+import { checkNote, describeAlert, isLive, type AlertDef, type Config } from "./config";
 import { nameOf } from "./names";
 import { liveReader } from "./quotes";
 import { getSymbol, readQuotes, type SymbolRow } from "./store";
@@ -29,8 +29,12 @@ export interface AlertView {
   check: AlertCheck;
   enabled: boolean;
   notify: boolean;
-  /** 活动 / 已触发 (a `once` alert that fired) / 已停止 */
-  status: "active" | "triggered" | "stopped";
+  /** Waiting to be confirmed on the page (§2.5) */
+  draft: boolean;
+  /** Made or last changed by an agent through `/mcp` */
+  by: "agent" | null;
+  /** 待确认 (a draft) / 活动 / 已触发 (a `once` alert that fired) / 已停止 */
+  status: "draft" | "active" | "triggered" | "stopped";
   /** Price lines on the chart: enabled condition alerts with a level */
   levels: number[];
   /** Latest price (quote, else the last daily close) and when it was taken (ms) */
@@ -72,8 +76,10 @@ export function alertViews(vault: string, cfg: Config, symbols: Record<string, S
       check: a.check,
       enabled: a.enabled,
       notify: a.notify,
-      status: a.enabled ? "active" : a.trigger === "once" && fired.has(a.id) ? "triggered" : "stopped",
-      levels: a.enabled && a.condition ? conditionLevels(a.condition) : [],
+      draft: a.draft,
+      by: a.by,
+      status: a.draft ? "draft" : a.enabled ? "active" : a.trigger === "once" && fired.has(a.id) ? "triggered" : "stopped",
+      levels: isLive(a) && a.condition ? conditionLevels(a.condition) : [],
       price,
       priceAt: at,
     };
@@ -87,6 +93,8 @@ export interface AlertBadge {
   id: string;
   label: string;
   state: BadgeState;
+  /** The state in words: 「成立中（上次触发 10/09 07:31）」 */
+  status: string;
   /** Hover text: the name, the definition in plain words, where it applies, and the state */
   title: string;
 }
@@ -108,6 +116,8 @@ export function alertBadges(vault: string, cfg: Config, now = new Date()): Recor
   const day = new Intl.DateTimeFormat("zh-CN", { timeZone: cfg.sync.tz, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   const out: Record<string, AlertBadge[]> = {};
   for (const a of cfg.alerts) {
+    // a draft is nobody's alert yet
+    if (a.draft) continue;
     // an event (a crossing) holds once it fired; a state or formula holds while it is true
     const event = a.condition !== null && ALERT_CONDS[a.condition.cond].kind === "event";
     for (const key of alertKeys(a, cfg)) {
@@ -122,7 +132,7 @@ export function alertBadges(vault: string, cfg: Config, now = new Date()): Recor
       else [state, status] = ["idle", `未触发${last}`];
       if (!a.key && (state === "idle" || state === "stopped")) continue;
       const title = [a.label, describeAlert(a), alertScope(a), `状态：${status}`].filter((line, i) => i !== 1 || line !== a.label).join("\n");
-      (out[key] ??= []).push({ id: a.id, label: a.label, state, title });
+      (out[key] ??= []).push({ id: a.id, label: a.label, state, status, title });
     }
   }
   return out;

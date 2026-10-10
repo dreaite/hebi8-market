@@ -62,7 +62,14 @@ export interface AlertDef {
   enabled: boolean;
   /** False: only shown on the overview, never pushed */
   notify: boolean;
+  /** 待确认 (`draft: true`): written down but not judged, pushed or shown on the overview until confirmed on the page; what an agent's alert on the whole watchlist starts as */
+  draft: boolean;
+  /** `by: agent`: created or last changed through the MCP endpoint */
+  by: "agent" | null;
 }
+
+/** Whether an alert is judged at all: switched on and not waiting to be confirmed. */
+export const isLive = (a: Pick<AlertDef, "enabled" | "draft">) => a.enabled && !a.draft;
 
 export type ParamOverrides = Partial<Record<Timeframe, Record<string, number[]>>>;
 
@@ -355,7 +362,7 @@ export function parseAlert(raw: unknown, i: number, aliases: Record<string, stri
   }
   const trigger = key ? (d.trigger ?? "once") : "bar";
   if (trigger !== "once" && trigger !== "bar") throw new ConfigError(`${where}：trigger 应为 once 或 bar`);
-  for (const flag of ["enabled", "notify"]) {
+  for (const flag of ["enabled", "notify", "draft"]) {
     if (d[flag] !== undefined && typeof d[flag] !== "boolean") throw new ConfigError(`${where}：${flag} 应为 true 或 false`);
   }
   const check = d.check ?? defaultCheck(key);
@@ -381,6 +388,8 @@ export function parseAlert(raw: unknown, i: number, aliases: Record<string, stri
     check,
     enabled: d.enabled !== false,
     notify: d.notify !== false,
+    draft: d.draft === true,
+    by: d.by === "agent" ? "agent" : null,
   };
 }
 

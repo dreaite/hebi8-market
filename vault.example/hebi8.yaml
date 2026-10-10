@@ -59,11 +59,14 @@ datasets: {}                   # 自定义数据集：名字 → git 地址或�
 # 不写 key 的对全部自选生效，每次日线同步后判断，在成立的标的上显示，只能用涨跌 % 或 when 公式
 # check：判断时机。price 盘中价格（有 key 的默认）每次取到最新价都判断；close 日线收盘（没 key 的默认）只在同步后看已收盘的日线
 # notify: false 只在总览显示、不推送
+# agent 经 MCP（设置页「Agent 接入」）建的带 by: agent；它建的对全部自选的警报还带 draft: true，是待确认的草稿：
+#   不判断也不推送，在页面上点「确认」（或者把 draft: true 这一项删掉）才生效，不想要就删掉整条
 #   - { key: BTC, cond: crossing_up, value: 130000 }
 #   - { key: SPY, cond: entering, value: [500, 520], trigger: bar }
 #   - { key: NVDA, label: 跌破 200 日线, when: "close < sma(close, 200)" }
 #   - { label: 周线多头, when: "close > sma(close, 40) and sma(close, 10) > sma(close, 40)", tf: W, notify: false }
 #   - { label: 单日大涨, cond: moving_up_pct, value: { pct: 5, bars: 1 } }
+#   - { label: 放量突破, when: "cross(close, highest(ref(high, 1), 50))", by: agent, draft: true }
 alerts: []
 
 chart:                         # 全局图表偏好（UI 改动会写回这里）

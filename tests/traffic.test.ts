@@ -21,6 +21,7 @@ describe("where a request comes from", () => {
     expect(kindOf("/api/bars", h({}))).toBe("api");
     expect(kindOf("/api", h({}))).toBe("api");
     expect(kindOf("/apis", h({}))).toBe("page");
+    expect(kindOf("/mcp", h({}))).toBe("api");
     expect(kindOf("/", h({ "next-action": "abc123" }))).toBe("action");
     expect(kindOf("/chart/x", h({ rsc: "1", "next-router-prefetch": "1" }))).toBe("prefetch");
     expect(kindOf("/chart/x", h({ rsc: "1" }))).toBe("page");

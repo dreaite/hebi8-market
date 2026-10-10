@@ -1,6 +1,7 @@
 /**
  * Secrets live outside the repo, the vault and the data dir, in `HEBI8_SECRETS` or
- * `~/.config/hebi8/market` (mode 700): GitHub login sessions in `sessions.json` and each person's
+ * `~/.config/hebi8/market` (mode 700): GitHub login sessions in `sessions.json`, the hashes of
+ * people's agent tokens in `mcp-tokens.json` and each person's
  * notification channels in `notify-users.json`, written atomically with mode 600, and the
  * instance's notification settings in `notify.json` and the web login's client in
  * `github-oauth.json`, written by hand. Nothing in here is ever logged or sent to the browser.
@@ -116,4 +117,76 @@ export function deleteSession(id: string | undefined): void {
   if (!(id in all)) return;
   delete all[id];
   writeJson(SESSIONS_FILE, live(all));
+}
+
+// ---------------------------------------------------------------------------- agent tokens
+
+/**
+ * A personal token an agent presents at `/mcp` (design §1.6, §6). Only its SHA-256 is kept, as
+ * the key of its record in `mcp-tokens.json`; the token itself is shown once, when it is made.
+ */
+export interface AgentToken {
+  name: string;
+  /** Whose vault it opens, as GitHub spells it; null for one made in single-user mode */
+  login: string | null;
+  /** False: read only */
+  write: boolean;
+  created_at: number;
+  /** ms; the last use, moved at most once a day (`checkToken`); null until the first */
+  used_at: number | null;
+}
+
+/** What the page lists; `id` is the start of the hash, enough to name one of a person's tokens. */
+export type AgentTokenInfo = AgentToken & { id: string };
+
+const TOKENS_FILE = "mcp-tokens.json";
+const TOKEN_RE = /^hebi8m_[A-Za-z0-9_-]{43}$/;
+/** As many as one person can have; the file is read on every agent request */
+export const MAX_TOKENS = 20;
+
+const hashToken = (token: string) => crypto.createHash("sha256").update(token).digest("hex");
+const readTokens = () => readJson<Record<string, AgentToken>>(TOKENS_FILE) ?? {};
+const tokenId = (hash: string) => hash.slice(0, 16);
+/** GitHub logins compare without case; single-user tokens (null) are one group. */
+const sameOwner = (a: string | null, b: string | null) => a?.toLowerCase() === b?.toLowerCase();
+
+/** A new token for `login` (null in single-user mode); the return value is the only time it exists in the clear. */
+export function createToken(token: Pick<AgentToken, "name" | "login" | "write">, now = Date.now()): string {
+  const secret = `hebi8m_${crypto.randomBytes(32).toString("base64url")}`;
+  writeJson(TOKENS_FILE, { ...readTokens(), [hashToken(secret)]: { ...token, created_at: now, used_at: null } });
+  return secret;
+}
+
+/** One person's tokens, oldest first. */
+export function listTokens(login: string | null): AgentTokenInfo[] {
+  return Object.entries(readTokens())
+    .filter(([, t]) => sameOwner(t.login, login))
+    .map(([hash, t]) => ({ ...t, id: tokenId(hash) }))
+    .sort((a, b) => a.created_at - b.created_at);
+}
+
+/** Revoke one of `login`'s tokens by the id the page lists it under; false when it is not theirs or gone. */
+export function revokeToken(login: string | null, id: string): boolean {
+  const all = readTokens();
+  const hash = Object.keys(all).find((h) => tokenId(h) === id && sameOwner(all[h].login, login));
+  if (!hash) return false;
+  delete all[hash];
+  writeJson(TOKENS_FILE, all);
+  return true;
+}
+
+/**
+ * The record of a presented token, or null. Like a session, a token in use is stamped at most
+ * once a day, so agent requests do not rewrite the file.
+ */
+export function checkToken(token: string | undefined, now = Date.now()): AgentToken | null {
+  if (!token || !TOKEN_RE.test(token)) return null;
+  const all = readTokens();
+  const hash = hashToken(token);
+  const found = all[hash];
+  if (!found) return null;
+  if (found.used_at !== null && now - found.used_at < DAY_MS) return found;
+  const used = { ...found, used_at: now };
+  writeJson(TOKENS_FILE, { ...all, [hash]: used });
+  return used;
 }

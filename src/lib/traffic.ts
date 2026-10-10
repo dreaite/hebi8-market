@@ -68,6 +68,7 @@ export const ROUTES = new Set([
   "/privacy",
   "/usage",
   "/settings",
+  "/mcp",
   "/api/bars",
   "/api/search",
   "/api/help",
@@ -109,9 +110,9 @@ export function routeOf(pathname: string): string {
   }
 }
 
-/** Server Actions are POSTs to a page with `Next-Action`; router prefetches are counted apart from views. */
+/** Server Actions are POSTs to a page with `Next-Action`; router prefetches are counted apart from views. An agent's requests to `/mcp` count as API calls. */
 export function kindOf(pathname: string, headers: Headers): Kind {
-  if (pathname === "/api" || pathname.startsWith("/api/")) return "api";
+  if (pathname === "/api" || pathname.startsWith("/api/") || pathname === "/mcp") return "api";
   if (headers.has("next-action")) return "action";
   if (headers.has("next-router-prefetch") || headers.has("next-router-segment-prefetch")) return "prefetch";
   return "page";

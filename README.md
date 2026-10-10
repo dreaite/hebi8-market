@@ -254,6 +254,34 @@ npm run notify:test
 - 「发测试消息」往自己的每个通道发一条，「解除绑定」「删除」去掉页面上设置的通道。
 - 绑定时 hebi8 用 `getUpdates` 读 bot 收到的消息（只在有待绑定的码时，只往外连）。所以这个 bot 要给 hebi8 专用：同一个 token 被别的程序 `getUpdates` 时两边会抢消息。
 
+## 让 agent 接入（MCP）
+
+看不完所有标的时，把想法交给 agent：它经 MCP 读你的自选和行情、拿一条公式扫全部自选、回看这条公式过去哪些天成立，然后把它存成警报，之后由服务器每 5 分钟（或每次日线同步后）判断、触发时推到你的通知通道。只有日线及以上周期，没有日内 K 线。
+
+1. 打开「设置」→「Agent 接入（MCP）」，起个名字，选「只读」或「可写」，点「生成令牌」。令牌只显示这一次，服务器上只存它的哈希（`~/.config/hebi8/market/mcp-tokens.json`）；丢了就吊销再生成一个。共用实例上要先登录，令牌就是你本人，只碰你自己的 vault。
+2. 页面上同时给出可以直接复制的 Claude Code 命令：
+
+   ```bash
+   claude mcp add --transport http hebi8-market https://你的地址/mcp --header "Authorization: Bearer hebi8m_…"
+   ```
+
+   默认只在当前项目里可用，加 `--scope user` 在所有项目里可用。
+3. 其他支持 MCP 的客户端：类型选 Streamable HTTP（有的叫 `http`），URL 填 `https://你的地址/mcp`，再加一个请求头 `Authorization: Bearer <令牌>`。接口是无状态的，每个请求都要带这个头；没带或令牌无效回 401。还不支持 OAuth，所以 claude.ai 网页版的连接器暂时接不上。
+
+工具（agent 自己能列出来，这里是给人看的）：
+
+| | 工具 |
+|---|---|
+| 读 | `overview` 总览 · `get_bars` K 线 · `scan` 一条公式扫一批标的 · `test_formula` 一条公式在一个标的上的历史表现 · `formula_reference` 公式和警报的写法 · `search_symbols` 搜标的 · `list_alerts` · `read_note` · `read_journal` |
+| 写（要可写令牌） | `save_alert` `delete_alert` `set_alert_enabled` · `add_symbol` `remove_symbol` · `append_note` `append_journal`（只追加，不改已有内容）· `save_indicator` `delete_indicator` |
+
+两条规矩：
+
+- agent 建的警报在警报面板上标「Agent」（yaml 里是 `by: agent`）。盯**一个标的**的直接生效。
+- 对**全部自选**的警报，agent 只能存成草稿（yaml 里多一个 `draft: true`）：不判断、不推送，总览顶部和图表页的警报面板里显示「待确认」，你点「确认」才生效，不要就「丢弃」。agent 改一条已经生效的全部自选警报，它也变回草稿；agent 不能确认草稿，也不能恢复一条已停止的全部自选警报。
+
+读行情不联网，只看已经缓存的标的（自选、基准、被警报和公式引用到的）；agent 想看别的，先用 `add_symbol` 加进自选。分组的增删改、画线、图表偏好、通知通道、同步都不经 MCP。
+
 ## 公式
 
 公式用在三处：图表页的公式指标、警报、对比。每一行（或用分号隔开的一段）画一条线，`name = 表达式` 可以给线命名，后面的行能引用它，`#` 后面是注释。
@@ -307,9 +335,11 @@ src/
 │   ├── page.tsx              总览（RSC，直接读 vault 和 SQLite）
 │   ├── chart/[key]/page.tsx  图表页 /chart/yahoo%3ASPY
 │   ├── review/page.tsx       复盘
-│   ├── settings/page.tsx     设置：从 TradingView 导入自选和画线、导出自选
+│   ├── settings/page.tsx     设置：agent 的接入令牌；从 TradingView 导入自选和画线、导出自选
 │   ├── claim/page.tsx        「在其他设备上登录」的确认页
-│   ├── actions.ts            Server Actions：写 yaml / 笔记 / 日志 / 图表状态，刷新
+│   ├── actions.ts            Server Actions：写 yaml / 笔记 / 日志 / 图表状态，刷新；和 agent 共用的写操作是 lib/ops.ts 的薄壳
+│   ├── token-actions.ts      Server Actions：生成 / 吊销 agent 的令牌
+│   ├── mcp/route.ts          MCP 入口（Streamable HTTP，带个人令牌）
 │   ├── tv-actions.ts         Server Actions：TradingView 导入（tv-import.ts / tv-drawings.ts / tv-layout.ts 在 lib）
 │   └── api/
 │       ├── bars/             日/周/月/季 K 线 + 对齐好的引用标的
@@ -318,17 +348,21 @@ src/
 │       ├── notify/           当前登录者的通知通道：摘要、Telegram 绑定、webhook、推送订阅、测试消息
 │       └── github/           网页登录（login、callback）、device flow 登录、把登录带到另一台设备（claim）、退出、提交 / 列出反馈 issue
 ├── instrumentation.ts        启动应用内调度器
-├── components/               TvImport（设置页的导入导出）/ UiProvider（搜索浮层、帮助与登录抽屉、toast、快捷键）/ HelpPanel（使用、反馈）/ AccountPanel（登录、通知设置）/ Guide / SymbolSearch / Overview / RowMenu / ChartView / KChart / ChartLegend / IndicatorDialog / CompareDialog / WatchlistPanel / FormulaEditor / NotesPanel …
+├── components/               AgentTokens（设置页的令牌）/ TvImport（设置页的导入导出）/ UiProvider（搜索浮层、帮助与登录抽屉、toast、快捷键）/ HelpPanel（使用、反馈）/ AccountPanel（登录、通知设置）/ Guide / SymbolSearch / Overview / RowMenu / ChartView / KChart / ChartLegend / IndicatorDialog / CompareDialog / WatchlistPanel / FormulaEditor / NotesPanel …
 ├── indicators/               指标目录、代码指标、公式引擎（formula.ts）、纯计算函数
 └── lib/
     ├── search.ts wellknown.ts 搜索的纯函数（匹配、过滤、去重、排序、分组推断）与内置字典
     ├── use-autosave.ts       笔记 / 复盘的自动保存
-    ├── github.ts secrets.ts  GitHub 调用（网页登录、device flow 登录、刷新、issue）与 ~/.config/hebi8/market 里的登录会话
+    ├── github.ts secrets.ts  GitHub 调用（网页登录、device flow 登录、刷新、issue）与 ~/.config/hebi8/market 里的登录会话、agent 令牌的哈希
     ├── claim.ts              「在其他设备上登录」的一次性码（只在内存里，2 分钟）
     ├── feedback.ts           反馈 issue 的正文、hebi8-context 格式与 GitHub 网页预填链接
     ├── sources/              yahoo / binance / tradingview / dataset（自定义数据集）适配器
     ├── vault.ts config.ts    vault 的读写层（按目录，根 vault 或 users/<login>/）、hebi8.yaml 的类型与校验
-    ├── viewer.ts             这次请求是谁、看哪个 vault、能不能写（共用实例）
+    ├── viewer.ts             这次请求是谁、看哪个 vault、能不能写（共用实例）；令牌也在这里变成同一个 viewer
+    ├── ops.ts                页面和 agent 共用的写操作（自选、警报、公式指标、追加笔记和日志），入参是 viewer
+    ├── mcp/                  MCP 入口：server.ts（SDK 的无状态 transport、令牌校验）、tools.ts（工具）、reference.ts（公式和警报的说明）
+    ├── scan.ts               一条公式扫一批标的、回看历史上哪些天成立（只读缓存）
+    ├── search-external.ts    外部搜索的联网部分，/api/search 和 MCP 共用
     ├── db.ts store.ts        SQLite 缓存（symbols、bars、stats、alert_state）
     ├── sync.ts scheduler.ts  同步、同步后算 stats 和通知、每日定时
     ├── series.ts synth.ts    周/月/季线合成、对齐、合成标的

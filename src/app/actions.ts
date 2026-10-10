@@ -2,25 +2,20 @@
 
 import { revalidatePath } from "next/cache";
 import { isMap, isScalar, isSeq, type Document, type YAMLMap, type YAMLSeq } from "yaml";
-import { compile } from "@/indicators/formula";
-import { describeError } from "@/indicators/formula-indicators";
-import { defaultCheck, type AlertCheck, type AlertCond, type AlertCondition, type AlertTrigger } from "@/lib/alert-conds";
-import { adoptConditionState, alertIndex, editAlerts, forgetAlerts, runAlerts, serializeAlerts, setAlertsEnabled } from "@/lib/alerts";
-import { liveReader } from "@/lib/quotes";
-import { CHART_STYLES, USAGE_LIMITS, findItem, parseAlert, resolveKey, type ChartPrefs, type FormulaDef, type UsageLimits } from "@/lib/config";
+import { CHART_STYLES, USAGE_LIMITS, resolveKey, type ChartPrefs, type FormulaDef, type UsageLimits } from "@/lib/config";
+import * as ops from "@/lib/ops";
+import type { AddSymbolInput, AlertInput } from "@/lib/ops";
 import { CHANGE_PERIODS, MAX_PERIODS } from "@/lib/periods";
 import type { Prices } from "@/lib/series";
 import { getSymbol } from "@/lib/store";
-import { wellKnownName } from "@/lib/wellknown";
-import { isCJK } from "@/lib/search";
-import { isSynthetic, isTimeframe, isValidKey, type Timeframe } from "@/lib/symbols";
+import { isSynthetic, isTimeframe, isValidKey } from "@/lib/symbols";
 import { parseSynth } from "@/lib/synth";
 import { recomputeStats, syncAll, syncOne } from "@/lib/sync";
 import {
-  entryKey,
   flowNode,
   groupName,
   groupNode,
+  locateEntry,
   readConfig,
   setList,
   seqOf,
@@ -36,7 +31,11 @@ import { isWeekId } from "@/lib/week";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
-/** Every action writes as the viewer, into the viewer's vault only; nobody else's directory is reachable from here. */
+/**
+ * Every action writes as the viewer, into the viewer's vault only; nobody else's directory is
+ * reachable from here. The ones an agent can also reach through `/mcp` are shells around
+ * `src/lib/ops.ts`: one implementation, the same checks.
+ */
 async function attempt(fn: (viewer: Viewer) => Promise<void> | void): Promise<ActionResult> {
   try {
     await fn(requireWriter(await getViewer()));
@@ -48,20 +47,6 @@ async function attempt(fn: (viewer: Viewer) => Promise<void> | void): Promise<Ac
 }
 
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
-
-/** Where a watched key lives in the document: its group's `symbols` list and the index in it. */
-function locateEntry(doc: Document, key: string, aliases: Record<string, string>): { symbols: YAMLSeq; index: number } | null {
-  const groups = doc.get("groups");
-  if (!isSeq(groups)) return null;
-  for (const group of groups.items) {
-    if (!isMap(group)) continue;
-    const symbols = group.get("symbols");
-    if (!isSeq(symbols)) continue;
-    const index = symbols.items.findIndex((item) => entryKey(item, aliases) === key);
-    if (index >= 0) return { symbols, index };
-  }
-  return null;
-}
 
 /** A plain `- SPY` entry becomes `{ key: SPY }` so fields can be attached without losing the alias. */
 function entryAsMap(doc: Document, symbols: YAMLSeq, index: number): YAMLMap {
@@ -103,59 +88,8 @@ export async function refresh(): Promise<ActionResult> {
   });
 }
 
-export interface AddSymbolInput {
-  key: string;
-  group: string;
-  name?: string;
-  bench?: string;
-  /** The search text that led here (e.g.「腾讯」); remembered as an alias for the key */
-  alias?: string;
-}
-
 export async function addSymbol(input: AddSymbolInput): Promise<ActionResult> {
-  return attempt(async ({ dir, vault }) => {
-    const cfg = readConfig(dir);
-    const ref = str(input.key);
-    const key = resolveKey(ref, cfg.aliases);
-    const group = str(input.group);
-    if (!isValidKey(key)) throw new Error(`无效的 key「${key}」，应为 source:ticker 或 =表达式`);
-    if (!group) throw new Error("请选择分组");
-    const existing = findItem(cfg, key);
-    if (existing) throw new Error(`${key} 已经在「${existing.group}」组里`);
-    const benchRef = str(input.bench);
-    const bench = benchRef ? resolveKey(benchRef, cfg.aliases) : null;
-    if (bench && !isValidKey(bench)) throw new Error(`无效的基准「${bench}」`);
-
-    // The first fetch doubles as validation; nothing is written unless it succeeds.
-    if (isSynthetic(key)) {
-      for (const k of parseSynth(key.slice(1), cfg.aliases).keys) {
-        const outcome = await syncOne(k);
-        if (!outcome.ok) throw new Error(`拉取 ${k} 失败：${outcome.error}`);
-      }
-    } else {
-      const outcome = await syncOne(key);
-      if (!outcome.ok) throw new Error(`拉取 ${key} 失败：${outcome.error}`);
-    }
-    if (bench) await syncOne(bench);
-
-    const name = str(input.name) || wellKnownName(key) || "";
-    // a Chinese search term that found this key is worth keeping as an alias
-    const alias = str(input.alias);
-    const keepAlias = alias && isCJK(alias) && !alias.includes(":") && !cfg.aliases[alias] && alias !== name;
-    updateConfig(dir, (doc) => {
-      const symbols = seqOf(groupNode(doc, group), "symbols", doc);
-      const entry: Record<string, string> = { key: ref };
-      if (name) entry.name = name;
-      if (benchRef) entry.bench = benchRef;
-      symbols.add(name || benchRef ? flowNode(doc, entry) : doc.createNode(ref));
-      if (keepAlias) {
-        const aliases = doc.get("aliases");
-        if (isMap(aliases)) aliases.set(alias, key);
-        else doc.set("aliases", doc.createNode({ [alias]: key }));
-      }
-    });
-    recomputeStats(vault, readConfig(dir));
-  });
+  return attempt((viewer) => ops.addSymbol(viewer, input));
 }
 
 /**
@@ -280,12 +214,7 @@ export async function setBench(key: string, bench: string | null): Promise<Actio
 }
 
 export async function removeSymbol(key: string): Promise<ActionResult> {
-  return attempt(({ dir }) => {
-    updateConfig(dir, (doc) => {
-      const found = locateEntry(doc, key, readConfig(dir).aliases);
-      if (found) found.symbols.delete(found.index);
-    });
-  });
+  return attempt((viewer) => ops.removeSymbol(viewer, key));
 }
 
 export async function saveNote(key: string, body: string): Promise<ActionResult> {
@@ -302,62 +231,12 @@ export async function saveJournal(week: string, body: string): Promise<ActionRes
   });
 }
 
-function checkFormula(dir: string, def: { id: unknown; label: unknown; formula: unknown }): { id: string; label: string; formula: string } {
-  const id = str(def.id);
-  const label = str(def.label) || id;
-  const formula = str(def.formula);
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(id)) throw new Error("id 只能用字母、数字、下划线");
-  if (!formula) throw new Error("公式为空");
-  try {
-    compile(formula, { aliases: readConfig(dir).aliases });
-  } catch (err) {
-    throw new Error(describeError(err));
-  }
-  return { id, label, formula };
-}
-
-/** Insert or replace a `{ id, … }` entry in a top-level list, keeping the others untouched. */
-function upsertById(dir: string, listName: string, entry: Record<string, unknown>) {
-  updateConfig(dir, (doc) => {
-    const seq = seqOf(doc.contents as YAMLMap, listName, doc);
-    const index = seq.items.findIndex((item) => isMap(item) && item.get("id") === entry.id);
-    const node = flowNode(doc, entry);
-    if (index >= 0) seq.items[index] = node;
-    else seq.add(node);
-  });
-}
-
-function deleteById(dir: string, listName: string, id: string) {
-  updateConfig(dir, (doc) => {
-    const seq = doc.get(listName);
-    if (!isSeq(seq)) return;
-    const index = seq.items.findIndex((item) => isMap(item) && item.get("id") === id);
-    if (index >= 0) seq.delete(index);
-    const enabled = doc.getIn(["chart", "indicators"]);
-    if (isSeq(enabled)) {
-      const i = enabled.items.findIndex((item) => (isScalar(item) ? item.value : item) === id);
-      if (i >= 0) enabled.delete(i);
-    }
-  });
-}
-
 export async function saveIndicator(def: FormulaDef): Promise<ActionResult> {
-  return attempt(({ dir }) => {
-    const { id, label, formula } = checkFormula(dir, def);
-    const pane = def.pane === "main" ? "main" : "sub";
-    const isNew = !readConfig(dir).indicators.some((d) => d.id === id);
-    upsertById(dir, "indicators", { id, label, pane, formula });
-    if (isNew) {
-      updateConfig(dir, (doc) => {
-        const enabled = readConfig(dir).chart.indicators;
-        if (!enabled.includes(id)) setList(doc, ["chart", "indicators"], [...enabled, id]);
-      });
-    }
-  });
+  return attempt((viewer) => ops.saveIndicator(viewer, def));
 }
 
 export async function deleteIndicator(id: string): Promise<ActionResult> {
-  return attempt(({ dir }) => deleteById(dir, "indicators", str(id)));
+  return attempt((viewer) => ops.deleteIndicator(viewer, id));
 }
 
 export async function saveChartState(key: string, state: ChartState): Promise<ActionResult> {
@@ -460,134 +339,20 @@ export async function setUpdown(mode: string): Promise<ActionResult> {
   });
 }
 
-export interface AlertInput {
-  /** The alert being edited; absent for a new one */
-  id?: string;
-  /** Null: every watched symbol */
-  key: string | null;
-  /** A TradingView condition, or `formula` for a custom formula in `when` */
-  cond: AlertCond | "formula";
-  value?: AlertCondition["value"];
-  when?: string;
-  /** A formula's timeframe; D when absent */
-  tf?: Timeframe;
-  /** Ignored for the whole watchlist, which fires each symbol at most once per bar */
-  trigger: AlertTrigger;
-  /** 判断时机; absent for what an alert of its kind does by default */
-  check?: AlertCheck;
-  /** Empty for the generated name */
-  label?: string;
-  /** Undoing a delete puts a paused alert back paused */
-  enabled?: boolean;
-  /** False: shown on the overview, never pushed */
-  notify?: boolean;
-}
-
-/** Set one field of a yaml map; a scalar is changed in place so the comment on its line stays. */
-function setField(doc: Document, map: YAMLMap, field: string, value: unknown): void {
-  const old = map.get(field, true);
-  if (isScalar(old) && (value === null || typeof value !== "object")) {
-    old.value = value;
-    return;
-  }
-  const node = flowNode(doc, value);
-  if (old && typeof old === "object" && "comment" in old) node.comment = old.comment;
-  map.set(field, node);
-}
-
-/**
- * Create or edit an alert in the viewer's yaml; an edited alert starts over (TradingView restarts it
- * too). One on the whole watchlist is judged right away (on the live bars, or the closed daily
- * ones for `check: close`), so the overview shows where it holds without waiting for the next sync.
- */
 export async function saveAlert(input: AlertInput): Promise<ActionResult> {
-  return attempt(async ({ dir, vault }) => {
-    const watchlist = await serializeAlerts(() => {
-      const cfg = readConfig(dir);
-      // the old conditions' state follows them before the yaml moves them
-      adoptConditionState(vault, cfg);
-      const key = input.key == null ? null : resolveKey(str(input.key), cfg.aliases);
-      if (key !== null && !isValidKey(key)) throw new Error("无效的 key");
-      // written the way a person would: the alias when there is one
-      const entry: Record<string, unknown> = key ? { key: Object.entries(cfg.aliases).find(([, k]) => k === key)?.[0] ?? key } : {};
-      if (input.cond === "formula") {
-        const when = str(input.when);
-        if (!when) throw new Error("公式为空");
-        try {
-          // on the whole watchlist `bench` is each symbol's own, checked when it is judged
-          compile(when, { aliases: cfg.aliases, bench: key ? (findItem(cfg, key)?.bench ?? null) : undefined });
-        } catch (err) {
-          throw new Error(describeError(err));
-        }
-        entry.when = when;
-        if (isTimeframe(input.tf) && input.tf !== "D") entry.tf = input.tf;
-      } else {
-        entry.cond = input.cond;
-        entry.value = input.value;
-      }
-      if (key) entry.trigger = input.trigger === "bar" ? "bar" : "once";
-      // the default is left out, so alerts written before stay as they are
-      if ((input.check === "price" || input.check === "close") && input.check !== defaultCheck(key)) entry.check = input.check;
-      const label = str(input.label);
-      if (label) entry.label = label;
-      if (input.enabled === false) entry.enabled = false;
-      if (input.notify === false) entry.notify = false;
-      let id: string;
-      try {
-        const parsed = parseAlert(entry, 0, cfg.aliases);
-        id = parsed.id;
-        // a channel is written low first, however it was typed
-        if (parsed.condition) entry.value = parsed.condition.value;
-      } catch (err) {
-        throw new Error(err instanceof Error ? err.message.replace(/^alerts\[0\]：/, "") : String(err));
-      }
-      editAlerts(dir, (doc, seq) => {
-        if (!input.id) {
-          seq.add(flowNode(doc, entry));
-          return;
-        }
-        const index = alertIndex(doc, input.id, cfg.aliases);
-        if (index < 0) throw new Error("这条警报已经不在 hebi8.yaml 里了");
-        // field by field on the entry as written, so what the dialog does not offer (an explicit id,
-        // anything else) and the comments on fields stay
-        const node = seq.items[index] as YAMLMap;
-        const written = node.get("key");
-        if (!key) node.delete("key");
-        else if (typeof written !== "string" || resolveKey(written, cfg.aliases) !== key) setField(doc, node, "key", entry.key);
-        for (const field of ["cond", "value", "when", "tf", "trigger", "check", "label", "enabled", "notify"]) {
-          if (field in entry) setField(doc, node, field, entry[field]);
-          else node.delete(field);
-        }
-        id = parseAlert(node.toJSON(), index, cfg.aliases).id;
-      });
-      forgetAlerts(vault, input.id ? [input.id, id] : [id]);
-      return key === null;
-    });
-    if (watchlist) await runAlerts({ id: vault, dir }, () => readConfig(dir), "watchlist", liveReader());
-  });
+  return attempt(async (viewer) => void (await ops.saveAlert(viewer, input)));
 }
 
 export async function deleteAlert(id: string): Promise<ActionResult> {
-  return attempt(({ dir, vault }) => serializeAlerts(() => {
-    const cfg = readConfig(dir);
-    adoptConditionState(vault, cfg);
-    const aliases = cfg.aliases;
-    editAlerts(dir, (doc) => {
-      const index = alertIndex(doc, str(id), aliases);
-      if (index >= 0) doc.deleteIn(["alerts", index]);
-    });
-    forgetAlerts(vault, [str(id)]);
-  }));
+  return attempt((viewer) => ops.deleteAlert(viewer, id));
 }
 
-/** 暂停 / 恢复; a resumed alert starts over, and one on the whole watchlist is judged right away. */
+/** 暂停 / 恢复 */
 export async function setAlertEnabled(id: string, enabled: boolean): Promise<ActionResult> {
-  return attempt(async ({ dir, vault }) => {
-    await serializeAlerts(() => {
-      adoptConditionState(vault, readConfig(dir));
-      setAlertsEnabled(dir, [str(id)], Boolean(enabled));
-      if (enabled) forgetAlerts(vault, [str(id)]);
-    });
-    if (enabled && readConfig(dir).alerts.some((a) => a.id === str(id) && !a.key)) await runAlerts({ id: vault, dir }, () => readConfig(dir), "watchlist", liveReader());
-  });
+  return attempt((viewer) => ops.setAlertEnabled(viewer, id, enabled));
+}
+
+/** 确认 an agent's draft (§2.5); 丢弃 is `deleteAlert`. */
+export async function confirmAlert(id: string): Promise<ActionResult> {
+  return attempt((viewer) => ops.confirmAlert(viewer, id));
 }

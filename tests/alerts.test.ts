@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { decide } from "@/lib/alerts";
-import { ConfigError, normalizeConfig, syncKeys } from "@/lib/config";
+import { ConfigError, isLive, normalizeConfig, syncKeys } from "@/lib/config";
 import { formatDigest, parseNotifyConfig } from "@/lib/notify";
 
 describe("decide", () => {
@@ -58,7 +58,17 @@ describe("alerts in hebi8.yaml", () => {
       check: "price",
       enabled: true,
       notify: true,
+      draft: false,
+      by: null,
     });
+  });
+
+  it("draft and by: a draft is not live, and only `by: agent` is a mark", () => {
+    const cfg = normalizeConfig({ ...base, alerts: [{ when: "close > 1", by: "agent", draft: true }, { key: "BTC", when: "close > 2", by: "someone" }] });
+    expect(cfg.alerts.map((a) => [a.draft, a.by, isLive(a)])).toEqual([[true, "agent", false], [false, null, true]]);
+    // the id does not depend on either, so confirming a draft keeps it
+    expect(normalizeConfig({ ...base, alerts: [{ when: "close > 1" }] }).alerts[0].id).toBe(cfg.alerts[0].id);
+    expect(() => normalizeConfig({ ...base, alerts: [{ when: "close > 1", draft: "yes" }] })).toThrow("draft 应为 true 或 false");
   });
 
   it("check: an alert on a symbol follows the price, one on the whole watchlist waits for the close, unless written otherwise", () => {

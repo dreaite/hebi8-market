@@ -10,7 +10,7 @@ import { isMap, isScalar, isSeq, type Document, type YAMLMap, type YAMLSeq } fro
 import { crossed, observe, ALERT_CONDS, type AlertCondition, type AlertTrigger } from "./alert-conds";
 import { closedReader, loadDaily, type DailyReader } from "./bars";
 import { evalRule, type SeriesCache } from "./conditions";
-import { allItems, conditionId, parseAlert, type AlertDef, type Config } from "./config";
+import { allItems, conditionId, isLive, parseAlert, type AlertDef, type Config } from "./config";
 import { getDb } from "./db";
 import { nameOf } from "./names";
 import { channelNames, channelsFor, deliver, formatDigest, type AlertEvent } from "./notify";
@@ -96,7 +96,7 @@ function checks(cfg: Config, pass: AlertPass, live: DailyReader, who: string): C
   // formulas on the same symbol, bars and timeframe share the loaded series
   const caches = new Map<string, SeriesCache>();
   for (const alert of cfg.alerts) {
-    if (!alert.enabled || (pass === "watchlist" && alert.key) || (pass === "quotes" && alert.check !== "price")) continue;
+    if (!isLive(alert) || (pass === "watchlist" && alert.key) || (pass === "quotes" && alert.check !== "price")) continue;
     const read = alert.check === "close" ? closed : live;
     // on the whole watchlist one line per alert, not per symbol (`bench` on a symbol without one is common)
     const failed: { key: string; error: string }[] = [];

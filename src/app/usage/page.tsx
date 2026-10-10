@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { UsageLimitsForm } from "@/components/UsageLimitsForm";
 import { APP_INFO } from "@/lib/app-info";
-import { allItems } from "@/lib/config";
+import { allItems, isLive } from "@/lib/config";
 import { fmtAgo } from "@/lib/format";
 import { nameOf } from "@/lib/names";
 import { nextRun, scheduledNextSync } from "@/lib/scheduler";
@@ -73,7 +73,7 @@ export default async function UsagePage() {
       name: v.id ? v.id : `${config.owners.join(" / ")}（根 vault）`,
       symbols: cfg ? allItems(cfg).length : null,
       alerts: cfg ? cfg.alerts.length : null,
-      enabled: cfg ? cfg.alerts.filter((a) => a.enabled).length : null,
+      enabled: cfg ? cfg.alerts.filter(isLive).length : null,
       last: last || undefined,
     };
   });

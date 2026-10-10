@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, useTransition } from "react";
-import { refresh, renameSymbol, setBench, setPeriods, setUpdown } from "@/app/actions";
+import { confirmAlert, deleteAlert, refresh, renameSymbol, setBench, setPeriods, setUpdown } from "@/app/actions";
 import type { AlertBadge, AlertView } from "@/lib/alert-view";
 import type { SymbolStatus } from "@/lib/api-types";
 import type { UpDown } from "@/lib/config";
@@ -218,6 +218,8 @@ export function Overview({ data }: { data: OverviewData }) {
   const [alertTarget, setAlertTarget] = useState<AlertTarget | null>(null);
   const openAlert = (row: OverviewRow, id: string) => setAlertTarget({ row, alert: data.alerts.find((a) => a.id === id) ?? null });
   const wl = useWatchlist(data.groups, { readOnly, sorted: sort !== null });
+  // an agent's alerts waiting to be confirmed (§2.5): no badge shows them, so they are listed above the table
+  const drafts = data.alerts.filter((a) => a.draft);
 
   // the how-to opens once per browser, on the first visit to the overview
   useEffect(() => {
@@ -322,6 +324,34 @@ export function Overview({ data }: { data: OverviewData }) {
           {n}
         </p>
       ))}
+      {drafts.length > 0 && (
+        <section className="mb-4 rounded-lg border border-line bg-card text-xs" aria-label="待确认的警报">
+          <h2 className="border-b border-line px-3 py-2 font-medium">
+            待确认的警报 <span className="font-normal text-muted">· agent 建的，确认后才开始判断</span>
+          </h2>
+          <ul className="divide-y divide-line">
+            {drafts.map((a) => (
+              <li key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium" title={a.label}>
+                    {a.label}
+                  </span>
+                  <span className="block truncate text-[11px] text-muted" title={a.summary}>
+                    {a.name} · {a.summary}
+                    {!a.notify && " · 不推送"}
+                  </span>
+                </span>
+                <button type="button" className="btn btn-secondary h-6 px-1.5" onClick={() => act(() => confirmAlert(a.id), () => toast(`已确认警报「${a.label}」`))}>
+                  确认
+                </button>
+                <button type="button" className="btn h-6 px-1.5 text-down" onClick={() => act(() => deleteAlert(a.id), () => toast(`已丢弃警报「${a.label}」`))}>
+                  丢弃
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-baseline gap-3">
           <h1 className="text-base font-medium">{readOnly ? "示例列表" : "自选"}</h1>

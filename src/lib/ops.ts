@@ -1,0 +1,338 @@
+/**
+ * The write operations the page and the MCP endpoint share (§6): each takes the viewer, checks its
+ * input and writes into that viewer's vault only. The Server Actions in `src/app/actions.ts` and
+ * the tools in `src/lib/mcp/tools.ts` are thin shells around them, and both refuse a viewer that
+ * may not write before calling in. Errors are thrown with the message the person reads.
+ */
+import { isMap, isScalar, isSeq, type Document, type YAMLMap } from "yaml";
+import { compile } from "@/indicators/formula";
+import { describeError } from "@/indicators/formula-indicators";
+import { defaultCheck, type AlertCheck, type AlertCond, type AlertCondition, type AlertTrigger } from "./alert-conds";
+import { adoptConditionState, alertIndex, editAlerts, forgetAlerts, runAlerts, serializeAlerts, setAlertsEnabled } from "./alerts";
+import { findItem, parseAlert, resolveKey, type FormulaDef } from "./config";
+import { liveReader } from "./quotes";
+import { isCJK } from "./search";
+import { isSynthetic, isTimeframe, isValidKey, type Timeframe } from "./symbols";
+import { recomputeStats, syncOne } from "./sync";
+import { parseSynth } from "./synth";
+import { JOURNAL_TEMPLATE, flowNode, groupNode, locateEntry, readConfig, readJournal, readNote, seqOf, setList, updateConfig, writeJournal, writeNote } from "./vault";
+import type { Viewer } from "./viewer";
+import { isWeekId } from "./week";
+import { wellKnownName } from "./wellknown";
+
+const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+
+// ---------------------------------------------------------------------------- watchlist
+
+export interface AddSymbolInput {
+  key: string;
+  group: string;
+  name?: string;
+  bench?: string;
+  /** The search text that led here (e.g.「腾讯」); remembered as an alias for the key */
+  alias?: string;
+}
+
+/** Add a symbol to a group (created when new). The first fetch doubles as validation; nothing is written unless it succeeds. */
+export async function addSymbol({ dir, vault }: Viewer, input: AddSymbolInput): Promise<void> {
+  const cfg = readConfig(dir);
+  const ref = str(input.key);
+  const key = resolveKey(ref, cfg.aliases);
+  const group = str(input.group);
+  if (!isValidKey(key)) throw new Error(`无效的 key「${key}」，应为 source:ticker 或 =表达式`);
+  if (!group) throw new Error("请选择分组");
+  const existing = findItem(cfg, key);
+  if (existing) throw new Error(`${key} 已经在「${existing.group}」组里`);
+  const benchRef = str(input.bench);
+  const bench = benchRef ? resolveKey(benchRef, cfg.aliases) : null;
+  if (bench && !isValidKey(bench)) throw new Error(`无效的基准「${bench}」`);
+
+  if (isSynthetic(key)) {
+    for (const k of parseSynth(key.slice(1), cfg.aliases).keys) {
+      const outcome = await syncOne(k);
+      if (!outcome.ok) throw new Error(`拉取 ${k} 失败：${outcome.error}`);
+    }
+  } else {
+    const outcome = await syncOne(key);
+    if (!outcome.ok) throw new Error(`拉取 ${key} 失败：${outcome.error}`);
+  }
+  if (bench) await syncOne(bench);
+
+  const name = str(input.name) || wellKnownName(key) || "";
+  // a Chinese search term that found this key is worth keeping as an alias
+  const alias = str(input.alias);
+  const keepAlias = alias && isCJK(alias) && !alias.includes(":") && !cfg.aliases[alias] && alias !== name;
+  updateConfig(dir, (doc) => {
+    const symbols = seqOf(groupNode(doc, group), "symbols", doc);
+    const entry: Record<string, string> = { key: ref };
+    if (name) entry.name = name;
+    if (benchRef) entry.bench = benchRef;
+    symbols.add(name || benchRef ? flowNode(doc, entry) : doc.createNode(ref));
+    if (keepAlias) {
+      const aliases = doc.get("aliases");
+      if (isMap(aliases)) aliases.set(alias, key);
+      else doc.set("aliases", doc.createNode({ [alias]: key }));
+    }
+  });
+  recomputeStats(vault, readConfig(dir));
+}
+
+/** Take a key (aliases resolved by the caller) out of the watchlist; one that is not there is left alone. */
+export function removeSymbol({ dir }: Viewer, key: string): void {
+  updateConfig(dir, (doc) => {
+    const found = locateEntry(doc, key, readConfig(dir).aliases);
+    if (found) found.symbols.delete(found.index);
+  });
+}
+
+// ---------------------------------------------------------------------------- notes and journal
+
+/** The text after what is there, a blank line between; the first text of a note starts it. */
+const appended = (body: string | null, text: string) => (body?.trim() ? `${body.replace(/\s+$/, "")}\n\n${text}` : text);
+
+/**
+ * Add to the end of a symbol's note. An agent never replaces the whole note: the page autosaves
+ * it, and a whole body sent from elsewhere would undo what is being typed.
+ */
+export function appendNote({ dir }: Viewer, key: string, text: string): void {
+  if (!isValidKey(key)) throw new Error("无效的 key");
+  const add = str(text);
+  if (!add) throw new Error("内容为空");
+  writeNote(dir, key, appended(readNote(dir, key), add));
+}
+
+/** Add to the end of a week's journal; a week nobody has written yet starts from the page's template. */
+export function appendJournal({ dir }: Viewer, week: string, text: string): void {
+  if (!isWeekId(week)) throw new Error("无效的周");
+  const add = str(text);
+  if (!add) throw new Error("内容为空");
+  writeJournal(dir, week, appended(readJournal(dir, week) ?? JOURNAL_TEMPLATE, add));
+}
+
+// ---------------------------------------------------------------------------- formula indicators
+
+function checkFormula(dir: string, def: { id: unknown; label: unknown; formula: unknown }): { id: string; label: string; formula: string } {
+  const id = str(def.id);
+  const label = str(def.label) || id;
+  const formula = str(def.formula);
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(id)) throw new Error("id 只能用字母、数字、下划线");
+  if (!formula) throw new Error("公式为空");
+  try {
+    compile(formula, { aliases: readConfig(dir).aliases });
+  } catch (err) {
+    throw new Error(describeError(err));
+  }
+  return { id, label, formula };
+}
+
+/** Create or replace a formula indicator; a new one is switched on in the chart. */
+export function saveIndicator({ dir }: Viewer, def: FormulaDef): void {
+  const { id, label, formula } = checkFormula(dir, def);
+  const pane = def.pane === "main" ? "main" : "sub";
+  const isNew = !readConfig(dir).indicators.some((d) => d.id === id);
+  updateConfig(dir, (doc) => {
+    const seq = seqOf(doc.contents as YAMLMap, "indicators", doc);
+    const index = seq.items.findIndex((item) => isMap(item) && item.get("id") === id);
+    const node = flowNode(doc, { id, label, pane, formula });
+    if (index >= 0) seq.items[index] = node;
+    else seq.add(node);
+  });
+  if (isNew) {
+    updateConfig(dir, (doc) => {
+      const enabled = readConfig(dir).chart.indicators;
+      if (!enabled.includes(id)) setList(doc, ["chart", "indicators"], [...enabled, id]);
+    });
+  }
+}
+
+export function deleteIndicator({ dir }: Viewer, id: string): void {
+  const target = str(id);
+  updateConfig(dir, (doc) => {
+    const seq = doc.get("indicators");
+    if (!isSeq(seq)) return;
+    const index = seq.items.findIndex((item) => isMap(item) && item.get("id") === target);
+    if (index >= 0) seq.delete(index);
+    const enabled = doc.getIn(["chart", "indicators"]);
+    if (isSeq(enabled)) {
+      const i = enabled.items.findIndex((item) => (isScalar(item) ? item.value : item) === target);
+      if (i >= 0) enabled.delete(i);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------- alerts
+
+export interface AlertInput {
+  /** The alert being edited; absent for a new one */
+  id?: string;
+  /** Null: every watched symbol */
+  key: string | null;
+  /** A TradingView condition, or `formula` for a custom formula in `when` */
+  cond: AlertCond | "formula";
+  value?: AlertCondition["value"];
+  when?: string;
+  /** A formula's timeframe; D when absent */
+  tf?: Timeframe;
+  /** Ignored for the whole watchlist, which fires each symbol at most once per bar */
+  trigger: AlertTrigger;
+  /** 判断时机; absent for what an alert of its kind does by default */
+  check?: AlertCheck;
+  /** Empty for the generated name */
+  label?: string;
+  /** Undoing a delete puts a paused alert back paused */
+  enabled?: boolean;
+  /** False: shown on the overview, never pushed */
+  notify?: boolean;
+  /** Undoing a delete puts a draft back a draft, and an agent's alert back as the agent's; an agent's own save does not go by these */
+  draft?: boolean;
+  by?: "agent" | null;
+}
+
+/** Who is saving: the person on the page, or an agent through `/mcp`, which may not put an alert on the whole watchlist into effect (§2.5). */
+export type AlertOrigin = "page" | "agent";
+
+/** Set one field of a yaml map; a scalar is changed in place so the comment on its line stays. */
+function setField(doc: Document, map: YAMLMap, field: string, value: unknown): void {
+  const old = map.get(field, true);
+  if (isScalar(old) && (value === null || typeof value !== "object")) {
+    old.value = value;
+    return;
+  }
+  const node = flowNode(doc, value);
+  if (old && typeof old === "object" && "comment" in old) node.comment = old.comment;
+  map.set(field, node);
+}
+
+/**
+ * Create or edit an alert in the viewer's yaml; an edited alert starts over (TradingView restarts it
+ * too). One on the whole watchlist is judged right away (on the live bars, or the closed daily
+ * ones for `check: close`), so the overview shows where it holds without waiting for the next sync.
+ *
+ * From an agent the entry is marked `by: agent`, and one on the whole watchlist is written as a
+ * draft whatever it was before: it is judged only after the person confirms it on the page. An
+ * edit on the page leaves both marks as they are.
+ */
+export async function saveAlert({ dir, vault }: Viewer, input: AlertInput, origin: AlertOrigin = "page"): Promise<{ id: string; draft: boolean }> {
+  const saved = await serializeAlerts(() => {
+    const cfg = readConfig(dir);
+    // the old conditions' state follows them before the yaml moves them
+    adoptConditionState(vault, cfg);
+    const key = input.key == null ? null : resolveKey(str(input.key), cfg.aliases);
+    if (key !== null && !isValidKey(key)) throw new Error("无效的 key");
+    // written the way a person would: the alias when there is one
+    const entry: Record<string, unknown> = key ? { key: Object.entries(cfg.aliases).find(([, k]) => k === key)?.[0] ?? key } : {};
+    if (input.cond === "formula") {
+      const when = str(input.when);
+      if (!when) throw new Error("公式为空");
+      try {
+        // on the whole watchlist `bench` is each symbol's own, checked when it is judged
+        compile(when, { aliases: cfg.aliases, bench: key ? (findItem(cfg, key)?.bench ?? null) : undefined });
+      } catch (err) {
+        throw new Error(describeError(err));
+      }
+      entry.when = when;
+      if (isTimeframe(input.tf) && input.tf !== "D") entry.tf = input.tf;
+    } else {
+      entry.cond = input.cond;
+      entry.value = input.value;
+    }
+    if (key) entry.trigger = input.trigger === "bar" ? "bar" : "once";
+    // the default is left out, so alerts written before stay as they are
+    if ((input.check === "price" || input.check === "close") && input.check !== defaultCheck(key)) entry.check = input.check;
+    const label = str(input.label);
+    if (label) entry.label = label;
+    if (input.enabled === false) entry.enabled = false;
+    if (input.notify === false) entry.notify = false;
+    const marks: { by?: "agent"; draft?: true } = origin === "agent" ? { by: "agent", ...(key ? {} : { draft: true }) } : { ...(input.by === "agent" ? { by: "agent" } : {}), ...(input.draft ? { draft: true } : {}) };
+    let id: string;
+    try {
+      const parsed = parseAlert(entry, 0, cfg.aliases);
+      id = parsed.id;
+      // a channel is written low first, however it was typed
+      if (parsed.condition) entry.value = parsed.condition.value;
+    } catch (err) {
+      throw new Error(err instanceof Error ? err.message.replace(/^alerts\[0\]：/, "") : String(err));
+    }
+    let draft = marks.draft === true;
+    editAlerts(dir, (doc, seq) => {
+      if (!input.id) {
+        seq.add(flowNode(doc, { ...entry, ...marks }));
+        return;
+      }
+      const index = alertIndex(doc, input.id, cfg.aliases);
+      if (index < 0) throw new Error("这条警报已经不在 hebi8.yaml 里了");
+      // field by field on the entry as written, so what the dialog does not offer (an explicit id,
+      // anything else) and the comments on fields stay
+      const node = seq.items[index] as YAMLMap;
+      const written = node.get("key");
+      if (!key) node.delete("key");
+      else if (typeof written !== "string" || resolveKey(written, cfg.aliases) !== key) setField(doc, node, "key", entry.key);
+      for (const field of ["cond", "value", "when", "tf", "trigger", "check", "label", "enabled", "notify"]) {
+        if (field in entry) setField(doc, node, field, entry[field]);
+        else node.delete(field);
+      }
+      if (origin === "agent") {
+        setField(doc, node, "by", "agent");
+        if (marks.draft) setField(doc, node, "draft", true);
+        else node.delete("draft");
+      }
+      const parsed = parseAlert(node.toJSON(), index, cfg.aliases);
+      id = parsed.id;
+      draft = parsed.draft;
+    });
+    forgetAlerts(vault, input.id ? [input.id, id] : [id]);
+    return { id, draft, watchlist: key === null };
+  });
+  if (saved.watchlist && !saved.draft) await runAlerts({ id: vault, dir }, () => readConfig(dir), "watchlist", liveReader());
+  return { id: saved.id, draft: saved.draft };
+}
+
+export function deleteAlert({ dir, vault }: Viewer, id: string): Promise<void> {
+  return serializeAlerts(() => {
+    const cfg = readConfig(dir);
+    adoptConditionState(vault, cfg);
+    const aliases = cfg.aliases;
+    editAlerts(dir, (doc) => {
+      const index = alertIndex(doc, str(id), aliases);
+      if (index >= 0) doc.deleteIn(["alerts", index]);
+    });
+    forgetAlerts(vault, [str(id)]);
+  });
+}
+
+/**
+ * 暂停 / 恢复; a resumed alert starts over, and one on the whole watchlist is judged right away.
+ * An agent may pause anything but resume only an alert on one symbol.
+ */
+export async function setAlertEnabled({ dir, vault }: Viewer, id: string, enabled: boolean, origin: AlertOrigin = "page"): Promise<void> {
+  const target = str(id);
+  const on = Boolean(enabled);
+  await serializeAlerts(() => {
+    const cfg = readConfig(dir);
+    if (on && origin === "agent" && cfg.alerts.some((a) => a.id === target && !a.key)) throw new Error("对全部自选的警报只能由用户在页面上恢复");
+    adoptConditionState(vault, cfg);
+    setAlertsEnabled(dir, [target], on);
+    if (on) forgetAlerts(vault, [target]);
+  });
+  if (on && readConfig(dir).alerts.some((a) => a.id === target && !a.key)) await runAlerts({ id: vault, dir }, () => readConfig(dir), "watchlist", liveReader());
+}
+
+/**
+ * 确认 a draft, on the page only: it becomes an ordinary alert that is switched on and starts
+ * over, and one on the whole watchlist is judged right away like a new one.
+ */
+export async function confirmAlert({ dir, vault }: Viewer, id: string): Promise<void> {
+  const target = str(id);
+  await serializeAlerts(() => {
+    const cfg = readConfig(dir);
+    adoptConditionState(vault, cfg);
+    editAlerts(dir, (doc) => {
+      const index = alertIndex(doc, target, cfg.aliases);
+      if (index < 0) throw new Error("这条警报已经不在 hebi8.yaml 里了");
+      doc.deleteIn(["alerts", index, "draft"]);
+      doc.deleteIn(["alerts", index, "enabled"]);
+    });
+    forgetAlerts(vault, [target]);
+  });
+  if (readConfig(dir).alerts.some((a) => a.id === target && !a.key)) await runAlerts({ id: vault, dir }, () => readConfig(dir), "watchlist", liveReader());
+}
